@@ -137,15 +137,26 @@ powershell -ExecutionPolicy Bypass -File scripts\build\build.ps1
 
 `python -X utf8 scripts/test/no-secrets.py` は、Git が追跡しているファイルに、私有 IP アドレス、社内のホスト名、API キーらしき文字列、開発機のパス、鍵や証明書の中身が混ざっていないかを調べます（CI でも毎回流します）。`--history` を付けると、すべてのコミットのファイルとコミットのメッセージを調べます。パターンでは見分けられない接続先のホスト名やモデル名は、Git の管理外の `notes/secrets-denylist.txt`（1 行に 1 語）に書いておくと、それも照合します。
 
+## リリースと検証
+
+タグ `v*` を push すると、GitHub Actions（`.github/workflows/release.yml`）がそのタグのソースから MSI を組み、CycloneDX 1.6 の SBOM を作って、両方に証明（attestation）を付けてから GitHub Release に載せます。受け取った MSI は、次のコマンドで確かめられます。
+
+```
+gh attestation verify vsto-llm-pptcom-<版>.msi --repo kashihara-city/vsto-llm-pptcom
+gh attestation verify vsto-llm-pptcom-<版>.msi --repo kashihara-city/vsto-llm-pptcom --predicate-type https://cyclonedx.org/bom
+```
+
+1 つ目は「このリポジトリのワークフローが組んだ MSI であること」（来歴）、2 つ目は「Release にある SBOM（`vsto-llm-pptcom-<版>.cdx.json`）がこの MSI のものであること」を確かめます。SBOM は `scripts/build/sbom.py` が固定済みの記録だけから作り、`scripts/test/sbom.py` が公式のスキーマ（`deps/cyclonedx/`、ハッシュで固定）と記録に照らして確かめます。
+
 ## リポジトリの構成
 
 - `pptcom/` アドイン本体（C#、VSTO）
 - `pptcom/ComProxy/` pptcom スクリプトの解析と実行、使ってよいメンバーの検査
 - `pptcom/UI/` 作業ウィンドウ（`web/` が画面の HTML・CSS・JavaScript。DLL に埋め込み、WebView2 に渡す）
 - `pptcom/Documents/` 添付した資料の保持、docread、資料の画像
-- `deps/` 作業ウィンドウで使う PDF.js と anydoc の、公式の配布元から取ったもの（`web-sources.lock.json` に版・取得元・ハッシュ）
+- `deps/` 作業ウィンドウで使う PDF.js と anydoc の、公式の配布元から取ったもの（`web-sources.lock.json` に版・取得元・ハッシュ）と、SBOM を確かめる CycloneDX の公式スキーマ（`cyclonedx/`）
 - `scripts/deps/` `deps/` を更新するスクリプト
-- `scripts/build/` MSI のビルド（WiX）、anydoc に含まれる Rust ライブラリのライセンス一覧の生成
+- `scripts/build/` MSI のビルド（WiX）、SBOM の生成、anydoc に含まれる Rust ライブラリのライセンス一覧の生成
 - `scripts/test/` テストと実験用の道具（構文テスト、PowerPoint を外から動かすランナー、アドインを外から操作するスクリプトなど）
 - `licenses/` 同梱している第三者のコンポーネントとライセンス（`THIRD-PARTY-NOTICES.md`。MSI にも入れます）
 - `LICENSE` このリポジトリのライセンス（MIT）

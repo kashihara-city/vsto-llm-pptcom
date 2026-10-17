@@ -1,3 +1,6 @@
 # The pinned upstream archives (deps\web-sources.lock.json holds their SHA256): kept byte for byte.
 *.tar.gz binary
 *.zip binary
+# The official CycloneDX schemas (deps\cyclonedx\schema.lock.json holds their SHA256): kept byte for byte,
+# whatever core.autocrlf says (GitHub's Windows runners check out with CRLF otherwise).
+deps/cyclonedx/*.json -text

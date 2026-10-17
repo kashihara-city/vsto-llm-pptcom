@@ -37,6 +37,11 @@ ALLOWED = [
     re.compile(r"\bsigning\.local\.props\b|\bsigning\.local\b"),  # 署名の設定ファイルの名前（git 管理外）
     re.compile(r"Version[=>\"]\s*\d+(?:\.\d+){3}\b"),  # アセンブリの版（Version=10.0.0.0）
 ]
+# ファイルを限って許すもの。公式の CycloneDX スキーマ（deps/cyclonedx、SHA-256 を schema.lock.json で
+# 固定）にある、ハッシュ値の例示（definitions.hash-content.examples）。値ごとに限るので、同じファイルの別の値は見逃さない。
+ALLOWED_IN = {
+    "deps/cyclonedx/bom-1.6.schema.json": [re.compile(r'"examples": \["3942447fac867ae5cdb3229b658f4d48"\]')],
+}
 # 中身が秘密そのものではなく、形式上ハッシュを大量に含むもの。
 SKIP = {"deps/web-sources.lock.json", "scripts/test/no-secrets.py"}
 BINARY = {".tar", ".gz", ".zip", ".exe", ".dll", ".ico", ".png", ".jpg", ".pdf", ".docx", ".xlsx", ".pptx", ".msi", ".pfx", ".snk"}
@@ -49,13 +54,14 @@ def denylist():
     return [w for w in words if w and not w.startswith("#")]
 
 
-def findings(line, deny=()):
+def findings(line, deny=(), name=""):
     """What in one line looks like a secret, minus what an allowed value covers.
 
     The allow list is matched by position, not by line: a permitted example address or a dependency
-    hash on the same line as a real address does not hide the real one. Deny-list words are not
-    subject to the allow list."""
-    allowed = [match.span() for pattern in ALLOWED for match in pattern.finditer(line)]
+    hash on the same line as a real address does not hide the real one. A file may have values of its
+    own allowed (ALLOWED_IN). Deny-list words are not subject to the allow list."""
+    patterns = ALLOWED + ALLOWED_IN.get(name, [])
+    allowed = [match.span() for pattern in patterns for match in pattern.finditer(line)]
     found = []
     for reason, pattern in PATTERNS:
         for match in pattern.finditer(line):
@@ -86,6 +92,10 @@ def selftest():
     assert [r for r, _ in findings("Version=10.0.0.0 at 10.0.0.5")] == ["私有IPアドレス"]
     assert findings("pptcom/signing.local.props") == []
     assert [r for r, _ in findings("signing.local.props on build.local")] == ["社内ホスト名"]
+    example = '"examples": ["3942447fac867ae5cdb3229b658f4d48"],'
+    assert findings(example, (), "deps/cyclonedx/bom-1.6.schema.json") == []
+    assert [r for r, _ in findings(example)] == ["32桁の秘密らしき文字列"], "the schema's example is allowed in the schema only"
+    assert [r for r, _ in findings('"examples": ["' + "cd" * 16 + '"],', (), "deps/cyclonedx/bom-1.6.schema.json")] == ["32桁の秘密らしき文字列"]
     print("self-test: allowed values do not hide a neighbour")
 
 
@@ -94,9 +104,9 @@ def git(*args, binary=False):
     return out if binary else out.decode("utf-8", errors="replace")
 
 
-def scan_text(label, text, deny, problems):
+def scan_text(label, text, deny, problems, name=""):
     for number, line in enumerate(text.splitlines(), 1):
-        for reason, found in findings(line, deny):
+        for reason, found in findings(line, deny, name):
             problems.append("%s:%d %s: %s" % (label, number, reason, found))
 
 
@@ -109,7 +119,7 @@ def scan_files(deny):
         if not path.is_file():
             continue
         count += 1
-        scan_text(name, path.read_text(encoding="utf-8", errors="replace"), deny, problems)
+        scan_text(name, path.read_text(encoding="utf-8", errors="replace"), deny, problems, name)
     return problems, "tracked files: %d" % count
 
 
@@ -126,7 +136,7 @@ def scan_history(deny):
                 continue
             seen.add(sha)
             blobs += 1
-            scan_text("%s@%s" % (name, commit[:7]), git("cat-file", "blob", sha, binary=True).decode("utf-8", errors="replace"), deny, problems)
+            scan_text("%s@%s" % (name, commit[:7]), git("cat-file", "blob", sha, binary=True).decode("utf-8", errors="replace"), deny, problems, name)
     return problems, "commits: %d, distinct files: %d" % (len(git("rev-list", "--all").split()), blobs)
 
 

@@ -1,12 +1,14 @@
-# Pushing a tag v* builds the release MSI on a GitHub-hosted runner: the parser tests, then
-# scripts/build/build.ps1. Run by hand (workflow_dispatch) it does the same for the current commit.
-# Tests that need PowerPoint (ComScriptRunner against a real deck) are run on a development PC
-# before the tag; the runners have no Office.
+# Pushing a tag v* builds the release MSI on a GitHub-hosted runner from the tagged source - the
+# secrets check, the parser tests, then scripts/build/build.ps1 - makes its CycloneDX SBOM, attests
+# both (build provenance of the MSI, and the SBOM of the MSI) and publishes them in a GitHub Release.
+# Run by hand (workflow_dispatch) it does the same for the current commit, attestations included,
+# but publishes no Release. Tests that need PowerPoint (ComScriptRunner against a real deck, the
+# add-in driven by scripts/test/drive_addin.ps1) are run on a development PC before the tag; the
+# runners have no Office.
 #
-# Not here yet: attestation, an SBOM, publishing a GitHub Release, and a signing certificate the
-# organization trusts. Until then the VSTO manifests are signed with a certificate made on the
-# runner for that run only (the MSI trusts whatever key signed them), so no secret is needed and
-# the MSI is a test build.
+# Not here yet: a signing certificate the organization trusts. Until then the VSTO manifests are
+# signed with a certificate made on the runner for that run only (the MSI trusts whatever key
+# signed them), so no secret is needed.
 name: Release
 
 on:
@@ -24,13 +26,17 @@ permissions:
 
 jobs:
   release:
-    name: Build the MSI
+    name: Build, attest and publish the MSI
     # One image for every release: the PIAs and the VSTO tools come from the image's Visual Studio,
     # and they differ between images (windows-2022's Visual Studio 2022 and windows-2025's Visual
     # Studio 2026 ship differently signed copies of the same PIAs), so the MSI does too. The image
     # itself still updates weekly; the toolchain step records which one built it.
     runs-on: windows-2025
     timeout-minutes: 30
+    permissions:
+      contents: write       # the GitHub Release (tags only)
+      id-token: write       # the attestations' signing identity
+      attestations: write
 
     steps:
       - name: Check out the source
@@ -198,8 +204,80 @@ jobs:
           $hash = (Get-FileHash $msi.FullName).Hash.ToLowerInvariant()
           "{0}  {1:N0} bytes  SHA256={2}" -f $msi.Name, $msi.Length, $hash
           "$hash  $($msi.Name)" | Set-Content -LiteralPath "$($msi.FullName).sha256" -Encoding ascii
+          "msi=$($msi.FullName)" >> $env:GITHUB_OUTPUT
+          "msi_sha256=$hash" >> $env:GITHUB_OUTPUT
 
-      - name: Keep the MSI
+      - name: Make and check the SBOM
+        id: sbom
+        shell: pwsh
+        env:
+          MSI: ${{ steps.msi.outputs.msi }}
+        run: |
+          # CycloneDX 1.6, from the pinned records only (scripts/build/sbom.py), then checked: the same
+          # content when made again, valid against the pinned official schema, and matching the MSI,
+          # deps/web-sources.lock.json, NuGet's restore and the crates cargo built (scripts/test/sbom.py).
+          $ErrorActionPreference = "Stop"
+          $sbom = [IO.Path]::ChangeExtension($env:MSI, ".cdx.json")
+          python -X utf8 scripts/build/sbom.py --msi $env:MSI --out $sbom
+          if ($LASTEXITCODE -ne 0) { throw "sbom.py failed" }
+          python -X utf8 scripts/test/sbom.py --msi $env:MSI
+          if ($LASTEXITCODE -ne 0) { throw "scripts/test/sbom.py failed" }
+          "sbom=$sbom" >> $env:GITHUB_OUTPUT
+          "sbom_sha256=$((Get-FileHash $sbom).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Attest the build provenance of the MSI
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: ${{ steps.msi.outputs.msi }}
+
+      - name: Attest the SBOM of the MSI
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: ${{ steps.msi.outputs.msi }}
+          sbom-path: ${{ steps.sbom.outputs.sbom }}
+
+      - name: Publish the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          MSI: ${{ steps.msi.outputs.msi }}
+          MSI_SHA256: ${{ steps.msi.outputs.msi_sha256 }}
+          SBOM: ${{ steps.sbom.outputs.sbom }}
+          SBOM_SHA256: ${{ steps.sbom.outputs.sbom_sha256 }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          $tag = $env:TAG_NAME
+          $msiName = Split-Path $env:MSI -Leaf
+          $sbomName = Split-Path $env:SBOM -Leaf
+          gh release view $tag --json isDraft --repo $env:REPOSITORY 2> $null | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists. Published release assets are not replaced." }
+          # YAML strips the common indentation, so PowerShell gets a here-string at column 0.
+          $template = @'
+          GitHub Actions がこのタグのソースから組んだ MSI（ユーザーごとのインストール、管理者権限は不要）です。
+          来歴の確認: `gh attestation verify {0} --repo {1}`
+
+          SBOM（CycloneDX 1.6）は `{3}` です。
+          SBOM の確認: `gh attestation verify {0} --repo {1} --predicate-type https://cyclonedx.org/bom`
+
+          VSTO のマニフェストは、このビルドの中で作った使い捨ての証明書で署名しています。MSI がその公開鍵を VSTO の信頼済み一覧に書くので、インストール時に確認は出ません。
+
+          | ファイル | SHA256 |
+          | --- | --- |
+          | `{0}` | `{2}` |
+          | `{3}` | `{4}` |
+          '@
+          $notes = $template -f $msiName, $env:REPOSITORY, $env:MSI_SHA256, $sbomName, $env:SBOM_SHA256
+          $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8
+          gh release create $tag $env:MSI "$env:MSI.sha256" $env:SBOM `
+            --verify-tag --title "vsto-llm-pptcom $tag" --notes-file $notesPath --repo $env:REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw "Could not create Release $tag." }
+
+      - name: Keep the MSI and its SBOM
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -207,4 +285,5 @@ jobs:
           path: |
             release/*.msi
             release/*.msi.sha256
+            release/*.cdx.json
           if-no-files-found: warn
