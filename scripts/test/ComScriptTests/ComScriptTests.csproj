@@ -1,0 +1,45 @@
+<Project ToolsVersion="17.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{3B8E5C21-94D7-4F0B-A6E2-7C1D9F48B305}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ComScriptTests</RootNamespace>
+    <AssemblyName>ComScriptTests</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <DebugType>full</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+
+  <!-- The same Office PIAs as the add-in: EnumResolver reads the enum names from them.
+       No PowerPoint is started; the tests only parse and evaluate values. -->
+  <Import Project="..\..\..\pptcom\OfficePia.props" />
+
+  <!-- The add-in's own parser and engine sources, not copies. -->
+  <ItemGroup>
+    <Compile Include="..\..\..\pptcom\ComProxy\ComOp.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ComBatchResult.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ComErrorText.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\EnumResolver.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ComSecurityPolicy.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ComProxy.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ComScriptParser.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ComScriptScope.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\VbaOps.cs" />
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

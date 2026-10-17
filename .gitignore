@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# vsto-llm-pptcom リポジトリ用
+# 各項目の上に「なぜ除外するか」を書いている。除外をやめるときは理由も消すこと。
+# ---------------------------------------------------------------------------
+
+# 生成物: アドイン（途中経過を保存がオンのとき）とリグ（tools/tool_loop.py）が作るデッキ、スライドの
+# PNG、会話ログ、推論ログ。1回の実行で数 MB になり、社内の生成内容や推論がそのまま入る。今は
+# %LOCALAPPDATA%\KashiharaCity\pptcom\generated-pptx に書くのでリポジトリの中にはできないが、
+# 古い手順などで誤ってできたときのために名前で除外しておく。
+generated-pptx/
+
+# 手元の資料: 設計メモ（AGENT_DESIGN.md）、引き継ぎ用の作業ログ（HANDOVER.md）、セキュリティの審査記録と
+# 調査結果（security/: REVIEW.md、COM メンバーの一覧と使用状況の集計）。実行の計測記録やモデル名など
+# 開発環境の話や作業する人向けの話が多いので、リポジトリには入れない。リポジトリ向けの説明は README に書く。
+notes/
+
+# 過去の試作と旧方式の実験の置き場。今の製品とリグは参照していない。
+# python-pptx 用の .venv（移動したので動かない）や、opencode の LiteLLM ログ
+# （プロンプトや応答がそのまま入っている）も含む。
+old/
+
+# 配布用の MSI（release/vsto-llm-pptcom-<版>.msi）。installer/build.ps1 で作り直せる上、
+# 開発機の証明書で署名済みのバイナリと、その公開鍵を含むので入れない。
+release/
+
+# ビルドの出力。ソースから MSBuild で毎回作り直せる。
+bin/
+obj/
+
+# ClickOnce の署名用の自己署名証明書（開発専用）。秘密鍵を含むのでリポジトリに入れない。
+*.pfx
+
+# 署名の設定（SignManifests / ManifestKeyFile / ManifestCertificateThumbprint / ManifestPassword）。
+# 証明書の拇印とパスワードは開発機ごとに違うので、csproj には書かずにこのファイルに置き、
+# pptcom.csproj が存在するときだけ取り込む。無いとビルドは理由を表示して止まる。
+# クローンした環境では Visual Studio でテスト証明書を作り（プロジェクトのプロパティ → 署名）、
+# VS が csproj に書いた上の4つのプロパティを pptcom/signing.local.props に移す:
+#   <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+#     <PropertyGroup> …4つのプロパティ… </PropertyGroup>
+#   </Project>
+signing.local.props
+
+# 接続先・API キー・モデルはリポジトリに置かない。アドイン・ComScriptRunner・tool_loop.py は
+# 接続先とモデルをレジストリ（HKCU\Software\KashiharaCity\pptcom）から、API キーを Windows 資格情報
+# （汎用資格情報 "KashiharaCity/pptcom:api_key"）から読む。開発初期に使っていた settings.ini
+# （API キーが平文で入っていた）を誤ってコピーしたときのために、名前でも除外しておく。
+settings.ini
+
+# Visual Studio が作るユーザーごとの設定とキャッシュ。人によって中身が違う。
+.vs/
+*.user
+*.suo
+
+# Python が自動で作るキャッシュと仮想環境。実行環境ごとに作り直すもの。
+__pycache__/
+*.pyc
+.venv/
+
+# PowerPoint がファイルを開いている間だけ作る一時ファイル（~$ で始まる）。
+~$*
+
+# Windows のエクスプローラーが作る管理ファイル。
+Thumbs.db
+desktop.ini

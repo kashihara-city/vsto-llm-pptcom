@@ -1,0 +1,3 @@
+# The pinned upstream archives (deps\web-sources.lock.json holds their SHA256): kept byte for byte.
+*.tar.gz binary
+*.zip binary

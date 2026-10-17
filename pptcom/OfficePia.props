@@ -1,0 +1,50 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--
+    The Office primary interop assemblies (PIAs) the add-in, ComScriptRunner and ComScriptTests build
+    against: the Office 2013 (15.0) PIAs that Visual Studio's Office/SharePoint development workload
+    installs, signed by Microsoft - the PIAs Microsoft provides for Office 2013 and later. They replace
+    tlbimp COM references, which need Office on the build machine (a GitHub runner has none; the
+    runners do have these files).
+
+    EmbedInteropTypes=false: the engine names few of these types in source, and EnumResolver /
+    ComErrorText reflect over the *complete* assemblies (NoPIA embedding would keep only the types the
+    source names). Microsoft.Vbe.Interop is here because the PowerPoint PIA refers to it
+    (Presentation.VBProject); reflecting over every member needs it.
+
+    Copied next to the output only where OfficePiaCopyLocal is true (the default: ComScriptRunner and
+    ComScriptTests, which also run where Office is not installed). The add-in sets it to false and
+    does not ship them: the PIAs are not on Visual Studio's redistribution list, and Office installs
+    the same PIAs (15.0.0.0) in the GAC, where PowerPoint loads them from first anyway. The VSTO
+    manifest then lists them as prerequisites in the GAC.
+
+    Members and enum values added after Office 2013 are not in these assemblies. Calling such a member
+    still works - the engine calls members by name through IDispatch - but those enum names do not
+    resolve, and the error hints do not list those members.
+  -->
+  <PropertyGroup>
+    <OfficePiaDir Condition="'$(OfficePiaDir)' == ''">$(MSBuildProgramFiles32)\Microsoft Visual Studio\Shared\Visual Studio Tools for Office\PIA\Office15\</OfficePiaDir>
+    <OfficePiaCopyLocal Condition="'$(OfficePiaCopyLocal)' == ''">True</OfficePiaCopyLocal>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.Office.Interop.PowerPoint, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c">
+      <HintPath>$(OfficePiaDir)Microsoft.Office.Interop.PowerPoint.dll</HintPath>
+      <EmbedInteropTypes>False</EmbedInteropTypes>
+      <Private>$(OfficePiaCopyLocal)</Private>
+    </Reference>
+    <Reference Include="office, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c">
+      <HintPath>$(OfficePiaDir)Office.dll</HintPath>
+      <EmbedInteropTypes>False</EmbedInteropTypes>
+      <Private>$(OfficePiaCopyLocal)</Private>
+    </Reference>
+    <Reference Include="Microsoft.Vbe.Interop, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c">
+      <HintPath>$(OfficePiaDir)Microsoft.Vbe.Interop.dll</HintPath>
+      <EmbedInteropTypes>False</EmbedInteropTypes>
+      <Private>$(OfficePiaCopyLocal)</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="CheckOfficePia" BeforeTargets="ResolveAssemblyReferences" Condition="!Exists('$(OfficePiaDir)Microsoft.Office.Interop.PowerPoint.dll')">
+    <Error Text="The Office 2013 PIAs are not in $(OfficePiaDir). Install the 'Office/SharePoint development' workload of Visual Studio (it puts them there), or set OfficePiaDir." />
+  </Target>
+</Project>

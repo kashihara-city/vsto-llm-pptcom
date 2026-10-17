@@ -1,0 +1,48 @@
+1 + 2 * 3	Integer	7
+(1 + 2) * 3	Integer	9
+p - q - 1	Integer	4
+p / q	Double	3.5
+p \ q	Integer	3
+-p \ q	Integer	-3
+r \ q	Long	-4
+h \ 1	Long	2
+3.5 \ 1	Long	4
+p Mod q	Integer	1
+-p Mod q	Integer	-1
+r Mod q	Long	0
+p Mod -3	Integer	1
+2 ^ 3 ^ 2	Double	64
+q ^ -1	Double	0.5
+q ^ 0.5	Double	1.4142135623731
+p * -q	Integer	-14
+p - -q	Integer	9
+p * 1.5	Double	10.5
+10 / 3	Double	3.33333333333333
+r * 2	Double	-15
+z - p	Integer	-7
+p / 4	Double	1.75
+h * 2	Double	5
+(p + q) * (p - q)	Integer	45
+((p + 1) * 2 + 3) \ 2	Integer	9
+s + p	Double	17
+s + s	String	1010
+t + t	String	abab
+s & p	String	107
+t & u	String	abTrue
+u + 1	Integer	0
+u * p	Integer	-7
+"No." & p + 1	String	No.8
+p & q + 1	String	73
+(p & q) + 1	Double	73
+h & ""	String	2.5
+"(" & r & ")"	String	(-7.5)
+RGB(p, q, 255)	Long	16712199
+RGB(300, 0, 0)	Long	255
+RGB(p * 30, q * 100, 0)	Long	51410
+Chr(65 + q)	String	C
+"a" & Chr(p * 10 - 1) & "b"	String	aEb
+p / z	ERROR	11
+t * 2	ERROR	13
+t + 1	ERROR	13
+p \ z	ERROR	11
+p Mod z	ERROR	11

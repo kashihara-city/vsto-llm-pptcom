@@ -1,0 +1,41 @@
+{
+  "anydoc": {
+    "repository": "firecrawl/anydoc",
+    "version": "v0.2.4",
+    "commit": "42bf1c5ecdde9eb0d96d6bd75a9e6698cf93b14c",
+    "source_date": "2026-08-27T19:08:08Z",
+    "url": "https://codeload.github.com/firecrawl/anydoc/tar.gz/42bf1c5ecdde9eb0d96d6bd75a9e6698cf93b14c",
+    "archive": "anydoc.tar.gz",
+    "sha256": "e21c89d19c4b13b2fe68c61a94a5aa916f49b706a4c7ebee076c0fb375f1cbbd"
+  },
+  "pdfjs": {
+    "repository": "mozilla/pdf.js",
+    "version": "v6.4.299",
+    "published_at": "2026-10-03T16:40:51Z",
+    "url": "https://github.com/mozilla/pdf.js/releases/download/v6.4.299/pdfjs-6.4.299-dist.zip",
+    "archive": "pdfjs.zip",
+    "sha256": "f2245eb7ef3f674c872fe568a177bfec15874f5c034613e55d8e307f93ebd86d"
+  },
+  "wasm-bindgen": {
+    "repository": "wasm-bindgen/wasm-bindgen",
+    "version": "0.2.126",
+    "published_at": "2026-06-24T19:58:54Z",
+    "url": "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.126/wasm-bindgen-0.2.126-x86_64-pc-windows-msvc.tar.gz",
+    "sha256": "5a3773c7e69cfb2d865e235e9210de184c8c3af1787720646ec1a8bbe09c6179",
+    "source_type": "tool"
+  },
+  "binaryen": {
+    "repository": "WebAssembly/binaryen",
+    "version": "version_117",
+    "published_at": "2024-02-28T00:20:26Z",
+    "url": "https://github.com/WebAssembly/binaryen/releases/download/version_117/binaryen-version_117-x86_64-windows.tar.gz",
+    "sha256": "b09f260176483bd30194303ccb15ac81c2247e4e566894f9d931e4313cb36d58",
+    "source_type": "tool"
+  },
+  "rust": {
+    "toolchain": "1.99.0",
+    "target": "wasm32-unknown-unknown",
+    "source_date": "2026-09-28T00:00:00Z",
+    "source_type": "tool"
+  }
+}

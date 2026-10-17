@@ -1,0 +1,61 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--
+    pptcom.dll carries Newtonsoft.Json and the WebView2 SDK's managed DLLs (Core, WinForms) merged in
+    (ILRepack), so the add-in folder holds only what cannot be merged:
+      - Microsoft.Office.Tools.Common.v4.0.Utilities.dll: part of the VSTO runtime's contract, and
+        redistributable only unmodified;
+      - runtimes\win-x86|win-x64\native\WebView2Loader.dll: native, cannot be merged.
+    The Office PIAs are not merged either: VSTO hands the add-in Office objects typed by the PIAs in the
+    GAC, and a merged copy of those types would not be the same types. They are not shipped at all
+    (OfficePia.props).
+    Microsoft.Web.WebView2.Wpf.dll comes with the WebView2 package but is not used; it is left out.
+
+    The merged types keep their visibility (no /internalize): they now belong to the pptcom assembly, so
+    they cannot clash with another add-in's Newtonsoft.Json, and WebView2 calls back into its own types through
+    COM, which needs them visible.
+
+    The merge rewrites the compiled assembly in obj\ right after it is compiled, before it is copied to bin\
+    and before the VSTO (ClickOnce) manifest is generated, so the manifest describes the merged file and no
+    longer lists the merged DLLs. ILRepack runs only at build time and is not shipped.
+  -->
+  <ItemGroup>
+    <PackageReference Include="ILRepack" Version="2.0.48" PrivateAssets="all" ExcludeAssets="all" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <!-- The WebView2 package adds WebView2Loader.dll for x86, x64 and arm64. Office for Windows on Arm (arm64)
+       is not a target here, so its loader is not shipped; the add-in picks x86 or x64 by PowerPoint's
+       architecture (AiTaskPaneControl.LoaderRid). -->
+  <Target Name="LeaveOutArm64Loader" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <Content Remove="@(Content)" Condition="'%(Content.Link)' == 'runtimes\win-arm64\native\WebView2Loader.dll'" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Merged and unused DLLs (with their .xml / .pdb) are neither copied to bin\ nor listed in the VSTO manifest. -->
+  <Target Name="LeaveOutMergedReferences" AfterTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <ReferenceCopyLocalPaths Remove="@(ReferenceCopyLocalPaths)"
+          Condition="'%(Filename)' == 'Newtonsoft.Json' Or '%(Filename)' == 'Microsoft.Web.WebView2.Core' Or '%(Filename)' == 'Microsoft.Web.WebView2.WinForms' Or '%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+
+  <!-- IntermediateOutputPath is set after this file is imported; target attributes see its final value.
+       The stamp keeps an unchanged (already merged) assembly from being merged again. -->
+  <Target Name="MergeDependencies" AfterTargets="CoreCompile" Inputs="@(IntermediateAssembly)" Outputs="$(IntermediateOutputPath)merge.stamp"
+          Condition="'$(DesignTimeBuild)' != 'true' And '$(BuildingProject)' == 'true'">
+    <ItemGroup>
+      <_MergeFile Include="@(ReferencePath)"
+          Condition="'%(Filename)' == 'Newtonsoft.Json' Or '%(Filename)' == 'Microsoft.Web.WebView2.Core' Or '%(Filename)' == 'Microsoft.Web.WebView2.WinForms'" />
+      <_MergeLib Include="@(ReferencePath->'%(RootDir)%(Directory)'->Distinct())" />
+    </ItemGroup>
+    <PropertyGroup>
+      <_MergeOut>$(IntermediateOutputPath)merged\</_MergeOut>
+    </PropertyGroup>
+    <Error Condition="'@(_MergeFile->Count())' != '3'" Text="MergeDependencies: expected Newtonsoft.Json, Microsoft.Web.WebView2.Core and .WinForms among the references, found: @(_MergeFile->'%(Filename)')" />
+    <Error Condition="!Exists('$(PkgILRepack)\tools\ILRepack.exe')" Text="MergeDependencies: ILRepack.exe not found under $(PkgILRepack) (restore the NuGet packages)" />
+    <MakeDir Directories="$(_MergeOut)" />
+    <Exec Command="&quot;$(PkgILRepack)\tools\ILRepack.exe&quot; /out:&quot;$(_MergeOut)$(TargetFileName)&quot; @(_MergeLib->'/lib:&quot;%(Identity).&quot;', ' ') &quot;@(IntermediateAssembly->'%(FullPath)')&quot; @(_MergeFile->'&quot;%(FullPath)&quot;', ' ')" />
+    <Copy SourceFiles="$(_MergeOut)$(TargetFileName);$(_MergeOut)$(TargetName).pdb" DestinationFolder="$(IntermediateOutputPath)" />
+    <Touch Files="$(IntermediateOutputPath)merge.stamp" AlwaysCreate="true" />
+  </Target>
+</Project>

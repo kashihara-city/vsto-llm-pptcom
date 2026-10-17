@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  vsto-llm-pptcom per-user installer (no administrator rights needed).
+
+  - Installs the add-in files to %LOCALAPPDATA%\KashiharaCity\pptcom\app. The add-in keeps its own data
+    next to it (temp\, and the records when 途中経過を保存 is on); uninstall removes app\ only, and the
+    parent folders only when nothing else is left in them.
+  - Registers the add-in for PowerPoint under HKCU (LoadBehavior 3 = load at startup), the same keys
+    Visual Studio writes for development, pointing at the installed .vsto with |vstolocal.
+  - Adds the deployment manifest to the VSTO inclusion list (HKCU) with the signing certificate's
+    public key, so the "publisher cannot be verified" trust prompt does not appear. The key is not in
+    this file: build.ps1 reads it from the signed .vsto and writes obj\generated\Signing.wxi.
+  - Settings (HKCU\Software\KashiharaCity\pptcom values and the "KashiharaCity/pptcom:api_key" credential) are not
+    touched and survive uninstall.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <?include $(var.GeneratedDir)Signing.wxi ?>
+
+  <Package Name="vsto-llm-pptcom" Manufacturer="Kashihara City" Version="$(var.Version)" Scope="perUser"
+           UpgradeCode="79570C7A-CBF7-4EBF-9EBA-50A23AAC6154" Language="1033">
+    <SummaryInformation Description="vsto-llm-pptcom - an LLM edits the open PowerPoint presentation through pptcom" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of vsto-llm-pptcom is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="CompanyFolder" Name="KashiharaCity">
+        <Directory Id="ProductFolder" Name="pptcom">
+          <Directory Id="INSTALLFOLDER" Name="app">
+            <!-- WebView2Loader.dll for 32- and 64-bit PowerPoint; the add-in picks PowerPoint's (AiTaskPaneControl.LoaderRid).
+                 No arm64 one (pptcom\MergeDependencies.targets). -->
+            <Directory Id="RuntimesFolder" Name="runtimes">
+              <Directory Id="RuntimeX86" Name="win-x86"><Directory Id="RuntimeX86Native" Name="native" /></Directory>
+              <Directory Id="RuntimeX64" Name="win-x64"><Directory Id="RuntimeX64Native" Name="native" /></Directory>
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="vsto-llm-pptcom">
+      <ComponentGroupRef Id="AddinFiles" />
+      <ComponentRef Id="AddinRegistration" />
+      <ComponentRef Id="AddinTrust" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <!-- Per-user files in the profile need an HKCU key path and RemoveFolder entries (ICE38/ICE64). -->
+    <ComponentGroup Id="AddinFiles" Directory="INSTALLFOLDER">
+      <Component Id="AddinFiles" Guid="4C1C9E20-2C1B-4F8B-9D0B-5B1E7E0A1D01">
+        <File Id="pptcom.vsto" Source="$(var.BinDir)pptcom.vsto" />
+        <File Id="pptcom.dll.manifest" Source="$(var.BinDir)pptcom.dll.manifest" />
+        <!-- Newtonsoft.Json and the WebView2 SDK's managed DLLs are merged into pptcom.dll
+             (pptcom\MergeDependencies.targets); what follows cannot be merged. -->
+        <File Id="pptcom.dll" Source="$(var.BinDir)pptcom.dll" />
+        <File Id="Office.Tools.Utilities.dll" Source="$(var.BinDir)Microsoft.Office.Tools.Common.v4.0.Utilities.dll" />
+        <!-- The Office PIAs are not shipped: PowerPoint uses the ones Office installs in the GAC (OfficePia.props). -->
+        <!-- The licenses of what pptcom.dll and this folder carry (licenses\ in the repository) -->
+        <File Id="ThirdPartyNotices" Source="$(var.LicensesDir)THIRD-PARTY-NOTICES.md" />
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+        <!-- removed only if empty: the add-in's temp\ and records stay (and keep these folders) -->
+        <RemoveFolder Id="RemoveProductFolder" Directory="ProductFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveCompanyFolder" Directory="CompanyFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\KashiharaCity\pptcom\Installer" Name="Files" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="WebView2LoaderX86" Directory="RuntimeX86Native" Guid="47953D3F-C338-4FC0-9A52-F23E8389B6E2">
+        <File Id="WebView2Loader.x86.dll" Source="$(var.BinDir)runtimes\win-x86\native\WebView2Loader.dll" />
+        <RemoveFolder Id="RemoveRuntimeX86Native" Directory="RuntimeX86Native" On="uninstall" />
+        <RemoveFolder Id="RemoveRuntimeX86" Directory="RuntimeX86" On="uninstall" />
+        <RemoveFolder Id="RemoveRuntimesFolder" Directory="RuntimesFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\KashiharaCity\pptcom\Installer" Name="WebView2LoaderX86" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="WebView2LoaderX64" Directory="RuntimeX64Native" Guid="7C776D16-8C6B-4936-AAAE-224100D77EF1">
+        <File Id="WebView2Loader.x64.dll" Source="$(var.BinDir)runtimes\win-x64\native\WebView2Loader.dll" />
+        <RemoveFolder Id="RemoveRuntimeX64Native" Directory="RuntimeX64Native" On="uninstall" />
+        <RemoveFolder Id="RemoveRuntimeX64" Directory="RuntimeX64" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\KashiharaCity\pptcom\Installer" Name="WebView2LoaderX64" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Component Id="AddinRegistration" Directory="INSTALLFOLDER" Guid="4C1C9E20-2C1B-4F8B-9D0B-5B1E7E0A1D02">
+      <RegistryKey Root="HKCU" Key="Software\Microsoft\Office\PowerPoint\Addins\pptcom">
+        <RegistryValue Name="Description" Type="string" Value="An LLM edits the open presentation through pptcom" />
+        <RegistryValue Name="FriendlyName" Type="string" Value="vsto-llm-pptcom" />
+        <RegistryValue Name="LoadBehavior" Type="integer" Value="3" />
+        <RegistryValue Name="Manifest" Type="string" Value="file:///[INSTALLFOLDER]pptcom.vsto|vstolocal" KeyPath="yes" />
+      </RegistryKey>
+    </Component>
+
+    <Component Id="AddinTrust" Directory="INSTALLFOLDER" Guid="4C1C9E20-2C1B-4F8B-9D0B-5B1E7E0A1D03">
+      <RegistryKey Root="HKCU" Key="Software\Microsoft\VSTO\Security\Inclusion\9E192468-0F34-4BCE-9263-052B3358849B">
+        <RegistryValue Name="Url" Type="string" Value="file:///[INSTALLFOLDER]pptcom.vsto" KeyPath="yes" />
+        <RegistryValue Name="PublicKey" Type="string" Value="$(var.PublicKey)" />
+      </RegistryKey>
+    </Component>
+  </Fragment>
+</Wix>

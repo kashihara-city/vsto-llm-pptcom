@@ -1,0 +1,16 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <!-- Per-user MSI for the vsto-llm-pptcom VSTO add-in (pptcom). Build with scripts/build/build.ps1, which builds the
+       add-in (Release, signed), extracts the signing public key and passes the values below.
+       WiX v5 is used on purpose: v6+ adds a maintenance-fee EULA for commercial use. -->
+  <PropertyGroup>
+    <OutputName>vsto-llm-pptcom</OutputName>
+    <OutputType>Package</OutputType>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.1</ProductVersion>
+    <AddinBinDir Condition="'$(AddinBinDir)' == ''">$(MSBuildThisFileDirectory)..\..\pptcom\bin\Release\</AddinBinDir>
+    <GeneratedDir Condition="'$(GeneratedDir)' == ''">$(MSBuildThisFileDirectory)obj\generated\</GeneratedDir>
+    <LicensesDir>$(MSBuildThisFileDirectory)..\..\licenses\</LicensesDir>
+    <DefineConstants>Version=$(ProductVersion);BinDir=$(AddinBinDir);GeneratedDir=$(GeneratedDir);LicensesDir=$(LicensesDir)</DefineConstants>
+    <!-- ICE91 only notes that per-user files are not copied to other profiles; this package is per-user by design. -->
+    <SuppressIces>ICE91</SuppressIces>
+  </PropertyGroup>
+</Project>

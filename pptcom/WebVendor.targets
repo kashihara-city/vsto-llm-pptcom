@@ -1,0 +1,37 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--
+    The task pane's third-party files - PDF.js and anydoc's WebAssembly build - are embedded in pptcom.dll
+    next to the pane's own files (UI\web\), and the pane is served from them (AiTaskPaneControl:
+    https://pptcom.invalid/vendor/...). Nothing is installed as a separate file and npm is not used:
+    WebVendor.ps1 takes them from deps\ (pinned in deps\web-sources.lock.json, fetched by
+    scripts\deps\fetch-web.py), copying PDF.js out of Mozilla's release archive and building anydoc from its
+    source with Rust, into obj\webvendor\files\. It runs again only when the lock, the archives or the script
+    change; the first build of anydoc takes a few minutes.
+  -->
+  <PropertyGroup>
+    <WebVendorDir>$(MSBuildThisFileDirectory)obj\webvendor\</WebVendorDir>
+    <WebVendorDeps>$(MSBuildThisFileDirectory)..\deps\</WebVendorDeps>
+  </PropertyGroup>
+
+  <!-- cargo and the tools report progress on stderr: only the exit code counts (IgnoreStandardErrorWarningFormat). -->
+  <Target Name="FetchWebVendor"
+          Inputs="$(WebVendorDeps)web-sources.lock.json;$(WebVendorDeps)anydoc.tar.gz;$(WebVendorDeps)pdfjs.zip;$(MSBuildThisFileDirectory)WebVendor.ps1"
+          Outputs="$(WebVendorDir)fetch.stamp">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)WebVendor.ps1&quot; -Lock &quot;$(WebVendorDeps)web-sources.lock.json&quot; -OutDir &quot;$(WebVendorDir).&quot;"
+          IgnoreStandardErrorWarningFormat="true" />
+    <Touch Files="$(WebVendorDir)fetch.stamp" AlwaysCreate="true" />
+  </Target>
+
+  <!-- Before AssignTargetPaths: the resource targets sort EmbeddedResource items from there on. The names
+       follow the pane's own files (pptcom.csproj): pptcom.web/ and then the path with backslashes,
+       as %(RecursiveDir) gives it (AiTaskPaneControl.Serve looks them up that way). -->
+  <Target Name="EmbedWebVendor" BeforeTargets="AssignTargetPaths" DependsOnTargets="FetchWebVendor">
+    <ItemGroup>
+      <_WebVendorFile Include="$(WebVendorDir)files\**\*" />
+      <EmbeddedResource Include="@(_WebVendorFile)">
+        <LogicalName>pptcom.web/vendor\%(_WebVendorFile.RecursiveDir)%(_WebVendorFile.Filename)%(_WebVendorFile.Extension)</LogicalName>
+      </EmbeddedResource>
+    </ItemGroup>
+    <Error Condition="'@(_WebVendorFile)' == ''" Text="EmbedWebVendor: no files under $(WebVendorDir)files (WebVendor.ps1 did not run?)" />
+  </Target>
+</Project>

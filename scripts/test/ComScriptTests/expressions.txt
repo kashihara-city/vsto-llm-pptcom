@@ -1,0 +1,56 @@
+# Expressions checked against VBScript (same operators and conversions as VBA).
+# Variables: p = 7, q = 2, r = -7.5, h = 2.5, z = 0, s = "10", t = "ab", u = True
+# make_expected.vbs evaluates each line with VBScript and writes expected.tsv; ComScriptTests
+# evaluates it twice with pptcom - with the variables (run time, engine) and with their values
+# written in (folded by the parser) - and compares both with VBScript.
+# Not here: -q ^ 2. VBScript gives 4, but VBA puts ^ above unary minus (-4); Program.cs checks it
+# against VBA instead. Checked in PowerPoint's VBA on 2026-10-14: every other line gives the same
+# value (or an error) in VBA as in VBScript; only the error numbers differ (7 / 0: VBA 6, VBScript 11).
+1 + 2 * 3
+(1 + 2) * 3
+p - q - 1
+p / q
+p \ q
+-p \ q
+r \ q
+h \ 1
+3.5 \ 1
+p Mod q
+-p Mod q
+r Mod q
+p Mod -3
+2 ^ 3 ^ 2
+q ^ -1
+q ^ 0.5
+p * -q
+p - -q
+p * 1.5
+10 / 3
+r * 2
+z - p
+p / 4
+h * 2
+(p + q) * (p - q)
+((p + 1) * 2 + 3) \ 2
+s + p
+s + s
+t + t
+s & p
+t & u
+u + 1
+u * p
+"No." & p + 1
+p & q + 1
+(p & q) + 1
+h & ""
+"(" & r & ")"
+RGB(p, q, 255)
+RGB(300, 0, 0)
+RGB(p * 30, q * 100, 0)
+Chr(65 + q)
+"a" & Chr(p * 10 - 1) & "b"
+p / z
+t * 2
+t + 1
+p \ z
+p Mod z
