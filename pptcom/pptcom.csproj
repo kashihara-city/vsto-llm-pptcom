@@ -16,7 +16,7 @@
     <BootstrapperComponentsLocation>HomeSite</BootstrapperComponentsLocation>
     <!-- Version of the add-in (VSTO manifests). Keep in step with AssemblyInfo.cs and
          scripts/build/Package.wxs; the release is the MSI built by scripts/build/build.ps1. -->
-    <ApplicationVersion>0.0.1.0</ApplicationVersion>
+    <ApplicationVersion>0.0.2.0</ApplicationVersion>
   </PropertyGroup>
   <!-- ClickOnce manifest signing is machine-specific (certificate thumbprint, key file, password), so it lives in
        signing.local.props next to this file, which git ignores. See .gitignore for how to create one. -->

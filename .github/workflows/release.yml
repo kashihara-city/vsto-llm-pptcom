@@ -203,7 +203,9 @@ jobs:
           if (-not $msi) { throw "No MSI in release\" }
           $hash = (Get-FileHash $msi.FullName).Hash.ToLowerInvariant()
           "{0}  {1:N0} bytes  SHA256={2}" -f $msi.Name, $msi.Length, $hash
-          "$hash  $($msi.Name)" | Set-Content -LiteralPath "$($msi.FullName).sha256" -Encoding ascii
+          # The sha256sum format with a LF line end, so that `sha256sum -c` reads it anywhere
+          # (Set-Content would end the line with CRLF, and sha256sum then looks for "name\r").
+          [IO.File]::WriteAllText("$($msi.FullName).sha256", "$hash  $($msi.Name)`n", [Text.Encoding]::ASCII)
           "msi=$($msi.FullName)" >> $env:GITHUB_OUTPUT
           "msi_sha256=$hash" >> $env:GITHUB_OUTPUT
 
