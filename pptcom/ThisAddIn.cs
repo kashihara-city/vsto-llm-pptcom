@@ -22,6 +22,9 @@ namespace Pptcom
         // check them.
         private OpenAiCompatibleClient _llm;
         private CancellationTokenSource _cancel = new(); // replaced by a new one at each request
+        // Cancelled only when the request's window is gone (StopForGoneWindow): unlike 中止, it also ends the wait for
+        // an image being generated. Replaced at each request, as _cancel is.
+        private CancellationTokenSource _windowGone = new();
 
         // Endpoint and models live in HKCU\Software\KashiharaCity\pptcom, the API key in Windows Credential
         // Manager (AddinSettings);
@@ -657,6 +660,7 @@ namespace Pptcom
 
             run.WindowGone = true;
             LogToFile("!!! the window of the request was closed: the request stops");
+            _windowGone.Cancel();
             _cancel.Cancel();
         }
 
@@ -734,7 +738,7 @@ namespace Pptcom
             if (pane.Conversation is null)
             {
                 Conversation c = new(pane.Presentation, _llm, conversation =>
-                    new ComProxyEngine(this.Application, async (prompt, size) => await conversation.Llm.GenerateImageAsync(conversation.ImageModel, prompt, size).ConfigureAwait(true),
+                    new ComProxyEngine(this.Application, async (prompt, size) => await conversation.Llm.GenerateImageAsync(conversation.ImageModel, prompt, size, _windowGone.Token).ConfigureAwait(true),
                                        pane.Presentation));
                 Action<JObject> usage = ComProxyEngine.FileUsageSink("addin");
                 c.Engine.UsageSink = rec => { if (_saveProgress) { usage(rec); } };
@@ -1183,6 +1187,7 @@ namespace Pptcom
             _runPane = pane;
             ShowBusy(pane);
             _cancel = new CancellationTokenSource();
+            _windowGone = new CancellationTokenSource();
             try
             {
                 await HandleDeckEditRequestAsync(pane, userMessage).ConfigureAwait(true);

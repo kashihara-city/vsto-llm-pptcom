@@ -18,8 +18,9 @@ namespace ChatStreamTests
 {
     // How the add-in reads a chat reply's stream (OpenAiCompatibleClient.ChatAsync, StreamedReply): what counts
     // as a whole reply, how the parts of a tool call come together, which failures may be sent again (再試行),
-    // and that 中止 and the idle limit end a stream or an error body that stopped sending. A server on the loopback
-    // address answers each request as the test needs; no LLM is called.
+    // and that 中止 and the idle limit end a stream or an error body that stopped sending; for an image
+    // (GenerateImageAsync), that the end of the request ends the wait. A server on the loopback address answers each
+    // request as the test needs; no LLM is called.
     internal static class Program
     {
         // How a server that does not know mm_processor_kwargs answers.
@@ -34,6 +35,7 @@ namespace ChatStreamTests
             await StalledRepliesAsync().ConfigureAwait(true);
             await UnfinishedErrorsAsync().ConfigureAwait(true);
             await RejectedFieldAsync().ConfigureAwait(true);
+            await ImagesAsync().ConfigureAwait(true);
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -108,6 +110,37 @@ namespace ChatStreamTests
             Check("503 after the retry: 中止 ends the read", ex is OperationCanceledException, Describe(ex));
             ex = await StalledAsync(busyAfterRetry, cancel: false).ConfigureAwait(true);
             Check("503 after the retry: the idle limit ends the read (再試行)", ex is LlmServerException { StatusCode: 503 }, Describe(ex));
+        }
+
+        // An image is not stopped by 中止 (the engine waits for it); a request that ends altogether (its window is gone)
+        // ends the wait with its token, whether the headers or the body have not come.
+        private static async Task ImagesAsync()
+        {
+            Console.WriteLine("== an image");
+            using (FakeServer server = new(Http(200, "{\"data\":[{\"b64_json\":\"QUJD\"}]}"), stall: false))
+            {
+                OpenAiCompatibleClient client = new(server.Url, "", "test-model");
+                byte[] image = await client.GenerateImageAsync("image-model", "a cat", "1024x1024", CancellationToken.None).ConfigureAwait(true);
+                Check("an image that comes is returned", Encoding.ASCII.GetString(image) == "ABC", Encoding.ASCII.GetString(image));
+            }
+
+            Exception? ex = await ImageEndedAsync(Streaming(200, "{\"data\":")).ConfigureAwait(true);
+            Check("the end of the request stops the wait for its body", ex is OperationCanceledException, Describe(ex));
+            ex = await ImageEndedAsync("").ConfigureAwait(true);
+            Check("the end of the request stops the wait for its headers", ex is OperationCanceledException, Describe(ex));
+        }
+
+        // The server holds the image's response open; the request ends once the response (if any) is out.
+        private static async Task<Exception?> ImageEndedAsync(string response)
+        {
+            using FakeServer server = new(response, stall: true);
+            using CancellationTokenSource gone = new();
+            OpenAiCompatibleClient client = new(server.Url, "", "test-model");
+            Task<byte[]> image = client.GenerateImageAsync("image-model", "a cat", "1024x1024", gone.Token);
+            await server.Sent.ConfigureAwait(true);
+            await Task.Delay(200, CancellationToken.None).ConfigureAwait(true);
+            gone.Cancel();
+            return await EndingAsync(image, TimeSpan.FromSeconds(3)).ConfigureAwait(true);
         }
 
         // A server that does not know mm_processor_kwargs gets the request again without it.
@@ -304,7 +337,7 @@ namespace ChatStreamTests
         }
 
         // What ended the chat within `limit`: its exception, or a TimeoutException when it was still running.
-        private static async Task<Exception?> EndingAsync(Task<ChatReply> chat, TimeSpan limit)
+        private static async Task<Exception?> EndingAsync<T>(Task<T> chat, TimeSpan limit)
         {
             if (await Task.WhenAny(chat, Task.Delay(limit, CancellationToken.None)).ConfigureAwait(true) != chat)
             {

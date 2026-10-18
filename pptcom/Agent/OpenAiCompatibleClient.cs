@@ -460,7 +460,10 @@ namespace Pptcom.Agent
             return result;
         }
 
-        public async Task<byte[]> GenerateImageAsync(string imageModel, string prompt, string size = "1024x1024")
+        // Not stopped by 中止: the engine waits for the image (a script stops between its statements, not in one).
+        // `cancellationToken` is for a request that ends altogether (its window is gone, ThisAddIn.StopForGoneWindow):
+        // it ends the wait for the headers and for the body, as the chat's 中止 does; the server may still make the image.
+        public async Task<byte[]> GenerateImageAsync(string imageModel, string prompt, string size = "1024x1024", CancellationToken cancellationToken = default)
         {
             // The Z-Image Turbo server accepts only 512 / 768 / 1024 per side (anything else returned HTTP 422).
             JObject payload = new()
@@ -472,8 +475,20 @@ namespace Pptcom.Agent
             };
 
             using HttpRequestMessage request = Request(HttpMethod.Post, "/v1/images/generations", new StringContent(payload.ToString(), Encoding.UTF8, "application/json"));
-            using HttpResponseMessage resp = await Http.SendAsync(request, CancellationToken.None).ConfigureAwait(true); // not stopped by 中止: the engine waits for the image
-            string body = await resp.Content.ReadAsStringAsync().ConfigureAwait(true);
+            using HttpResponseMessage resp = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(true);
+            string body;
+            // .NET Framework reads a body without a token: closing the response ends the read.
+            using (cancellationToken.Register(resp.Dispose))
+            {
+                try
+                {
+                    body = await resp.Content.ReadAsStringAsync().ConfigureAwait(true);
+                }
+                catch (Exception ex) when (Guard.IsRecoverable(ex) && cancellationToken.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException("the image was not waited for: the request ended", ex, cancellationToken);
+                }
+            }
             if (!resp.IsSuccessStatusCode)
             {
                 throw new InvalidOperationException(Invariant($"Image generation failed: {(int)resp.StatusCode} {resp.ReasonPhrase}\n{body}"));

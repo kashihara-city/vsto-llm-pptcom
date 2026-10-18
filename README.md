@@ -146,7 +146,7 @@ VSTO のビルドは ClickOnce のマニフェストに署名するので、開�
 作業ウィンドウで使う PDF.js と anydoc は、公式の配布元から取ったものを `deps/` に置き、版とハッシュを `deps/web-sources.lock.json` で固定しています。npm は使いません。
 
 - PDF.js: Mozilla が GitHub のリリースで配布している `pdfjs-<版>-dist.zip` から、使うファイルだけを取り出します。
-- anydoc: タグのコミットのソース（`deps/anydoc.tar.gz`）から、anydoc 自身のリリースと同じ手順（cargo → wasm-bindgen → wasm-opt）で WebAssembly に組みます。wasm-bindgen と wasm-opt は公式のビルド済みを、lock のハッシュで確かめてから使います。最初のビルドは数分かかり、Rust のライブラリ（crates.io、Cargo.lock で固定）と 2 つの道具を取るためにネットワークが要ります。組んだ結果は `pptcom/obj/webvendor/` に残し、lock が変わるまで組み直しません。
+- anydoc: タグのコミットのソース（`deps/anydoc.tar.gz`）から、anydoc 自身のリリースと同じ手順（cargo → wasm-bindgen → wasm-opt）で WebAssembly に組みます。wasm-bindgen と wasm-opt は公式のビルド済みを、lock のハッシュで確かめてから使います。最初のビルドは数分かかり、Rust のライブラリ（crates.io、Cargo.lock で固定）と 2 つの道具を取るためにネットワークが要ります。組んだ結果は `temp/build/pptcom/obj/webvendor/` に残し、lock が変わるまで組み直しません。
 
 版を上げるときは `scripts/deps/fetch-web.py` の版を書き換えて実行します。公開から 7 日たっていない版は取りません。
 
@@ -156,7 +156,7 @@ C# のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.
 
 `scripts/test/ComScriptTests` は、PowerPoint なしで pptcom スクリプトの解析と実行を調べる構文テストです。式の値は VBScript で求めた値（`expected.tsv`、`make_expected.vbs` で作る）と照らし、VBA と VBScript で違うところは VBA の値で調べます。ほかに、受け付ける文と断る文、モデルに返す報告の文と、依頼の途中で利用者が別のプレゼンテーションに切り替えても、スライドの読み取りと `Application.ActivePresentation`（括弧を付けて書いても）が依頼の始まったプレゼンテーションを指すこと、Application からほかの開いているプレゼンテーションに届くメンバー（`Presentations`、`Windows`、`ActiveWindow` など）を断ることを調べます。MSBuild で組んで `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` を実行します（CI でも流します）。
 
-`scripts/test/ChatStreamTests` は、LLM の応答の読み取りを調べるテストです。ループバックのアドレスに立てた模擬サーバーが応答を返し、終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答やサーバー側の失敗（再試行の対象になるか）、送信の止まった応答やエラーの本文が中止と待ち時間の上限で終わること、`mm_processor_kwargs` を受け付けないサーバーにはそれを外して送り直すことを確かめます。実際の LLM には接続しません。組み方と実行のしかたは構文テストと同じです（CI でも流します）。
+`scripts/test/ChatStreamTests` は、LLM の応答の読み取りを調べるテストです。ループバックのアドレスに立てた模擬サーバーが応答を返し、終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答やサーバー側の失敗（再試行の対象になるか）、送信の止まった応答やエラーの本文が中止と待ち時間の上限で終わること、`mm_processor_kwargs` を受け付けないサーバーにはそれを外して送り直すこと、画像の要求が依頼の終わりで待ちを抜けることを確かめます。実際の LLM には接続しません。組み方と実行のしかたは構文テストと同じです（CI でも流します）。
 
 `python -X utf8 scripts/test/js-syntax.py` は、作業ウィンドウの自作の JavaScript（`pptcom/UI/web/*.js`）が構文として読めることを Node の `--check` で調べます（CI でも流します）。
 

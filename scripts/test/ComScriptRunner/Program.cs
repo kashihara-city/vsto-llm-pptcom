@@ -325,7 +325,8 @@ namespace ComScriptRunner
                 throw new InvalidOperationException("image generation needs endpoint and image_model in " + AddinSettings.Location);
             }
 
-            return client.GenerateImageAsync(Settings.ImageModel, prompt, size).GetAwaiter().GetResult();
+            // The runner has no 中止: an image is always waited for.
+            return client.GenerateImageAsync(Settings.ImageModel, prompt, size, System.Threading.CancellationToken.None).GetAwaiter().GetResult();
         }
 
         private static int Serve()
