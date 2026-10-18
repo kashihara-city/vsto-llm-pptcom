@@ -413,6 +413,12 @@ namespace ComScriptTests
             bound.TryGetHandle("p", out object? p);
             Report("deck: Application.ActivePresentation is that deck too", result.Success && Equals(p, "deck A"),
                    result.Success ? "p = " + p : result.Describe());
+            // With empty parentheses the parser makes it a call; PowerPoint runs it as the same get.
+            result = bound.ExecuteScriptAsync(ComScriptParser.Parse("q = Application.ActivePresentation()", priorKnownIds: null, 2000))
+                          .GetAwaiter().GetResult();
+            bound.TryGetHandle("q", out object? q);
+            Report("deck: Application.ActivePresentation() is that deck too", result.Success && Equals(q, "deck A"),
+                   result.Success ? "q = " + q : result.Describe());
             foreach (string member in new[] { "Presentations", "Windows", "ActiveWindow", "SlideShowWindows", "ProtectedViewWindows", "ActiveProtectedViewWindow" })
             {
                 Report("deck: Application." + member + " is refused", !ComSecurityPolicy.IsMemberAllowedOn("Application", member), "allowed");

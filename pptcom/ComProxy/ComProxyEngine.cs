@@ -685,13 +685,21 @@ namespace Pptcom.ComProxy
 
             // Application.ActivePresentation is the request's deck too, as the bare ActivePresentation is
             // (BindPresentation): asked of PowerPoint, it would be whichever deck the user has in front now.
-            object? resultValue = IsApplicationActivePresentation(action, member, targetObj)
+            object? resultValue = IsApplicationActivePresentation(op, action, member, targetObj)
                 ? Presentation ?? throw new InvalidOperationException("No presentation is open.")
                 : Invoke(op, action, member, targetObj);
             if (resultValue is not null && !ComSecurityPolicy.IsReturnValueAllowed(resultValue))
             {
                 throw new InvalidOperationException(
                     "result type not allowed outside the Office object model: " + resultValue.GetType().FullName);
+            }
+
+            // Whatever a script wrote to get there, a presentation it reaches must be the request's own. The routes
+            // known to lead elsewhere are refused before the call (ComSecurityPolicy); this holds for any other.
+            if (resultValue is not null && IsOtherPresentation(resultValue, Presentation))
+            {
+                throw new InvalidOperationException("result is another presentation: this request works on ActivePresentation only. " +
+                                                    "To use another presentation, ask the user to save it and attach it to the task pane, then read it with docread");
             }
 
             object? resultSlide = TrackSlides(action, target, resultValue);
@@ -705,11 +713,39 @@ namespace Pptcom.ComProxy
         }
 
         // The root Application is the only Application object a script can hold (ComSecurityPolicy refuses one as a
-        // result), so its ActivePresentation is the only one to answer from the binding.
-        private bool IsApplicationActivePresentation(string action, string? member, object targetObj)
+        // result), so its ActivePresentation is the only one to answer from the binding: written as a property
+        // (a get) or with empty parentheses (a call without arguments), which PowerPoint runs as the same get.
+        private bool IsApplicationActivePresentation(JObject op, string action, string? member, object targetObj)
         {
-            return action == ComOpAction.Get && ReferenceEquals(targetObj, _application) &&
-                   string.Equals(member, PresentationId, StringComparison.OrdinalIgnoreCase);
+            bool get = action == ComOpAction.Get || (action == ComOpAction.Call && (op["args"] as JArray ?? []).Count == 0);
+            return get && ReferenceEquals(targetObj, _application) && string.Equals(member, PresentationId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // `value` is a presentation, and not `bound` (the request's; none: every presentation is another). Told
+        // apart by FullName, which no two open presentations share and a script cannot change (SaveAs is blocked):
+        // in the add-in, the same presentation reached another way is not the same RCW. One whose name cannot be
+        // read counts as another.
+        internal static bool IsOtherPresentation(object value, object? bound)
+        {
+            if (ReferenceEquals(value, bound) || !System.Runtime.InteropServices.Marshal.IsComObject(value) ||
+                ComSecurityPolicy.TryGetTypeName(value) is not ("_Presentation" or "Presentation"))
+            {
+                return false;
+            }
+
+            if (bound is null)
+            {
+                return true;
+            }
+
+            try
+            {
+                return !string.Equals((string)((dynamic)value).FullName, (string)((dynamic)bound).FullName, StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                return true;
+            }
         }
 
         // `x = value` with no COM call: a plain value, or another variable under a second name.

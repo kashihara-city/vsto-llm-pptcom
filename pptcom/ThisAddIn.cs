@@ -252,8 +252,10 @@ namespace Pptcom
             }
 
             int request = ++_modelsRequest;
-            foreach (WindowPane p in PanesOrAll(asker))
+            List<WindowPane> shown = PanesOrAll(asker);
+            foreach (WindowPane p in shown)
             {
+                p.FetchShown = request;
                 p.Control.SetStatus("STATUS_FETCHING_MODELS", endpoint);
             }
             try
@@ -286,9 +288,12 @@ namespace Pptcom
             }
             finally
             {
-                if (request == _modelsRequest)
+                // Each fetch takes back the status it showed, unless another fetch showed its own since or the pane
+                // runs a request now (whose own status goes on).
+                foreach (WindowPane p in shown.Where(p => p.FetchShown == request))
                 {
-                    foreach (WindowPane p in PanesOrAll(asker))
+                    p.FetchShown = 0;
+                    if (!ReferenceEquals(p, _runPane))
                     {
                         p.Control.ClearStatus();
                     }
@@ -510,6 +515,8 @@ namespace Pptcom
             public readonly Dictionary<string, PendingAttachment> Converting = new(StringComparer.Ordinal);
             // The latest conversions that failed, for AddinAutomation.Documents: "name: reason".
             public readonly List<string> FailedAttachments = [];
+            // The model list fetch (RefreshModelsAsync) whose status the pane shows; 0: none.
+            public int FetchShown;
 
             // A document of the pane's conversation is still being read.
             public bool IsReadingDocuments => Conversation is not null && Converting.Values.Any(p => ReferenceEquals(p.Conversation, Conversation));
@@ -627,10 +634,30 @@ namespace Pptcom
                 return; // the windows could not be listed: nothing is removed on a guess
             }
 
-            foreach (WindowPane pane in _panes.Values.Where(p => !open.Contains(p.Hwnd) && !ReferenceEquals(p, _runPane)).ToList())
+            foreach (WindowPane pane in _panes.Values.Where(p => !open.Contains(p.Hwnd)).ToList())
             {
+                if (ReferenceEquals(pane, _runPane))
+                {
+                    StopForGoneWindow();
+                    continue;
+                }
+
                 RemovePane(pane);
             }
+        }
+
+        // The window of the running request is gone: nobody sees it any more, nor can press 再試行 or 中止, and every
+        // other pane waits for it. It stops (whatever it waits for: the model, 再試行); its pane goes when it has.
+        private void StopForGoneWindow()
+        {
+            if (_currentRun is not RunRecord run || run.WindowGone)
+            {
+                return;
+            }
+
+            run.WindowGone = true;
+            LogToFile("!!! the window of the request was closed: the request stops");
+            _cancel.Cancel();
         }
 
         private void RemovePane(WindowPane pane)
@@ -1195,6 +1222,9 @@ namespace Pptcom
                 Request = userMessage,
                 Started = DateTime.Now,
                 Pane = pane,
+                Endpoint = _llm.BaseUrl,
+                Model = _llm.Model,
+                ImageModel = _settings.ImageModel,
             };
             _currentRun = run;
             try
@@ -1207,7 +1237,7 @@ namespace Pptcom
             }
             catch (OperationCanceledException)
             {
-                run.Outcome = "cancelled";
+                run.Outcome = run.WindowGone ? "window_closed" : "cancelled";
                 throw;
             }
             catch (Exception ex)
@@ -1258,6 +1288,11 @@ namespace Pptcom
             public bool HitTurnLimit;
             public bool HitTokenLimit;
             public bool DeckClosed;
+            public bool WindowGone;            // its window was closed while it ran (StopForGoneWindow)
+            // The endpoint and models it was sent with (a model list may arrive meanwhile and change the settings).
+            public required string Endpoint;
+            public required string Model;
+            public required string ImageModel;
             public string? FinalReply;
             public Conversation? Conversation; // null until the request has one (it may fail before)
             public ComProxyEngine? Engine;
@@ -1457,7 +1492,7 @@ namespace Pptcom
         }
 
         // summary.json, and LastRunSummary for AddinAutomation.LastRun.
-        private JObject RunSummary(RunRecord run)
+        private static JObject RunSummary(RunRecord run)
         {
             return new JObject
             {
@@ -1478,9 +1513,9 @@ namespace Pptcom
                 // what the task pane showed: each tool call's first result line, and the model's reply
                 ["tools"] = new JArray(run.ToolLines),
                 ["reply"] = run.FinalReply,
-                ["model"] = _settings.ChatModel,
-                ["image_model"] = _settings.ImageModel,
-                ["endpoint"] = _settings.Endpoint,
+                ["model"] = run.Model,
+                ["image_model"] = run.ImageModel,
+                ["endpoint"] = run.Endpoint,
                 ["deck_defaults"] = run.DeckDefaults?.Summary(),
                 ["run_folder"] = null,
             };
