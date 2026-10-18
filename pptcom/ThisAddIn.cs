@@ -89,6 +89,7 @@ namespace Pptcom
             _paneControl.ChatModelSelected += (s, e) => OnChatModelSelected(e.Text);
             _paneControl.ImageModelSelected += (s, e) => OnImageModelSelected(e.Text);
             _paneControl.ApiKeyEntered += (s, e) => OnApiKeyEntered(e.Text);
+            _paneControl.DocumentStarted += (s, e) => OnDocumentStarted(e.Ticket, e.Name);
             _paneControl.DocumentConverted += (s, e) => OnDocumentConverted(e.Message);
             _paneControl.DocumentFailed += (s, e) => OnDocumentFailed(e.Ticket, e.Name, e.Reason, e.Detail);
             _paneControl.DocumentRemoved += (s, e) => OnDocumentRemoved(e.Text);
@@ -464,8 +465,16 @@ namespace Pptcom
         // The task pane converts a document (dropped, picked, or attached from outside) and hands it over
         // here; it belongs to the conversation of the active presentation and goes with it.
 
-        // Files attached from outside (AttachFromOutside) that the page is still converting: ticket -> name.
-        private readonly Dictionary<string, string> _pendingAttachments = new(StringComparer.Ordinal);
+        // Files the page is converting (dropped, picked, or attached from outside), by ticket: the file's name and the
+        // conversation it was attached in. One that comes back after that conversation ended (新しい会話) belongs to
+        // none and is not attached. A deck switched meanwhile does not move it: the next request does (CurrentConversation).
+        private readonly Dictionary<string, PendingAttachment> _converting = new(StringComparer.Ordinal);
+
+        private sealed class PendingAttachment
+        {
+            public required string Name;
+            public required Conversation Conversation;
+        }
         // The latest conversions that failed, for AddinAutomation.Documents: "name: reason".
         private readonly List<string> _failedAttachments = [];
         private int _attachTickets;
@@ -473,11 +482,31 @@ namespace Pptcom
         // The same limit as the page's (UI\web\docs.js).
         private const long MaxDocumentBytes = 50L * 1024 * 1024;
 
+        // A document of the current conversation is still being read.
+        internal bool IsReadingDocuments => _conversation is not null && _converting.Values.Any(p => ReferenceEquals(p.Conversation, _conversation));
+
+        private void OnDocumentStarted(string ticket, string name)
+        {
+            if (!_converting.ContainsKey(ticket))
+            {
+                _converting[ticket] = new PendingAttachment { Name = name, Conversation = CurrentConversation() };
+            }
+        }
+
         private void OnDocumentConverted(JObject m)
         {
             string ticket = (string?)m["ticket"] ?? "";
-            _pendingAttachments.Remove(ticket);
-            Conversation c = CurrentConversation();
+            // The conversation it was attached in (the one of now if the page did not say it started).
+            Conversation c = _converting.TryGetValue(ticket, out PendingAttachment pending) ? pending.Conversation : CurrentConversation();
+            _converting.Remove(ticket);
+            if (!ReferenceEquals(c, _conversation))
+            {
+                string name = (string?)m["name"] ?? "";
+                _paneControl.Log("DOC_DISCARDED", name);
+                LogToFile("(document not attached, its conversation ended while it was read: " + name + ")");
+                return;
+            }
+
             AttachedDocument doc = AttachedDocument.FromPage(m, Invariant($"d{++c.DocumentsAttached}"));
             // Each image becomes a variable (d1_img3) that pptcom's AddPicture accepts, like a zimage image.
             foreach (AttachedImage img in doc.Images)
@@ -502,7 +531,7 @@ namespace Pptcom
 
         private void OnDocumentFailed(string ticket, string name, string reason, string detail)
         {
-            _pendingAttachments.Remove(ticket);
+            _converting.Remove(ticket);
             _failedAttachments.Add(name + ": " + reason + (string.IsNullOrEmpty(detail) ? "" : " (" + detail + ")"));
             if (_failedAttachments.Count > 20)
             {
@@ -567,7 +596,7 @@ namespace Pptcom
             }
 
             string ticket = Invariant($"a{++_attachTickets}");
-            _pendingAttachments[ticket] = info.Name;
+            _converting[ticket] = new PendingAttachment { Name = info.Name, Conversation = CurrentConversation() };
             _paneControl.ConvertDocument(ticket, info.Name, File.ReadAllBytes(info.FullName));
         }
 
@@ -585,7 +614,7 @@ namespace Pptcom
                     ["lines"] = d.Lines.Length,
                     ["images"] = new JArray(d.Images.Select(static i => i.Name)),
                 })),
-                ["converting"] = new JArray(_pendingAttachments.Values),
+                ["converting"] = new JArray(_converting.Values.Select(static p => p.Name)),
                 ["failed"] = new JArray(_failedAttachments),
             };
         }
@@ -777,6 +806,11 @@ namespace Pptcom
                 return "stopped at the turn limit; " + lines + ".";
             }
 
+            if (run.Outcome == "max_tokens")
+            {
+                return "stopped because a reply reached the output token limit before it was done; " + lines + ".";
+            }
+
             return "ended with an error (" + ClipText(run.Outcome, 200) + "); " + lines + ".";
         }
 
@@ -792,6 +826,13 @@ namespace Pptcom
             if (!_settings.HasEndpoint || _settings.ChatModel.Length == 0)
             {
                 _paneControl.Log("NO_ENDPOINT_OR_MODEL", AddinSettings.Location);
+                return;
+            }
+            // A document still being read belongs to this conversation, and the request would go without it. The page
+            // keeps its send button off meanwhile and AddinAutomation.Send refuses; this is the last guard.
+            if (IsReadingDocuments)
+            {
+                _paneControl.Log("DOC_STILL_CONVERTING");
                 return;
             }
             _paneControl.SetBusy(busy: true);
@@ -839,8 +880,9 @@ namespace Pptcom
             {
                 RemoveUntouchedStarterSlide();
                 await RunAgentAsync(userMessage, run).ConfigureAwait(true);
-                // max_turns: the model was still calling tools when the turn limit stopped it.
-                run.Outcome = run.HitTurnLimit ? "max_turns" : "completed";
+                // max_turns: the model was still calling tools when the turn limit stopped it. max_tokens: a reply
+                // reached the output limit before it said anything to do (see RunAgentAsync).
+                run.Outcome = run.HitTurnLimit ? "max_turns" : run.HitTokenLimit ? "max_tokens" : "completed";
             }
             catch (OperationCanceledException)
             {
@@ -892,6 +934,7 @@ namespace Pptcom
             public int ScriptLines;
             public int ServerErrors;
             public bool HitTurnLimit;
+            public bool HitTokenLimit;
             public string? FinalReply;
             public Conversation? Conversation; // null until the request has one (it may fail before)
             public ComProxyEngine? Engine;
@@ -1242,15 +1285,24 @@ namespace Pptcom
 
                 if (reply.ToolCalls.Count == 0)
                 {
+                    // finish_reason "length": the reply reached max_tokens before it was done (a thinking model can
+                    // spend it all on reasoning). It is no answer, and sending it again would end the same way.
+                    bool cut = reply.FinishReason == "length";
                     string text = reply.Content.Trim();
                     run.FinalReply = text;
                     if (text.Length > 0)
                     {
                         _paneControl.Log("AI_REPLY", text);
                     }
-                    else
+                    else if (!cut)
                     {
                         _paneControl.Log("AI_DONE");
+                    }
+
+                    if (cut)
+                    {
+                        run.HitTokenLimit = true;
+                        _paneControl.Log("AI_REPLY_CUT", _llm.MaxTokens);
                     }
 
                     break;
@@ -1293,12 +1345,27 @@ namespace Pptcom
                 {
                     run.ServerErrors++;
                     LogToFile(Invariant($"!!! server error at turn {turn}: {ex.Message}"));
-                    _paneControl.Log("AI_SERVER_ERROR", ex.StatusCode is not null ? PaneText.Of("HTTP_STATUS", ex.StatusCode.Value) : PaneText.Of("CONNECTION_DROPPED"));
+                    _paneControl.Log("AI_SERVER_ERROR", ServerFailureText(ex));
                     _paneControl.SetStatus("STATUS_SERVER_ERROR", turn);
                     await WaitForRetryAsync(ct).ConfigureAwait(true); // throws OperationCanceledException on 中止
                     LogToFile(Invariant($"(retry requested by the user, turn {turn})"));
                 }
             }
+        }
+
+        private PaneText ServerFailureText(LlmServerException ex)
+        {
+            if (ex.StatusCode is not null)
+            {
+                return PaneText.Of("HTTP_STATUS", ex.StatusCode.Value);
+            }
+
+            return ex.Failure switch
+            {
+                LlmServerFailure.Stalled => PaneText.Of("STREAM_STALLED", (int)_llm.StreamIdleLimit.TotalMinutes),
+                LlmServerFailure.Incomplete => PaneText.Of("STREAM_INCOMPLETE"),
+                _ => PaneText.Of("CONNECTION_DROPPED"),
+            };
         }
 
         private void LogTurn(int turn, ChatReply reply)

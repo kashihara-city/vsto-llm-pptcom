@@ -60,6 +60,8 @@ namespace Pptcom.UI
         // The two switches in the settings (AddinSettings.ExternalControl / SaveProgress).
         public event EventHandler<SwitchEventArgs>? ExternalControlChanged;
         public event EventHandler<SwitchEventArgs>? SaveProgressChanged;
+        // The page started converting a document (UI\web\docs.js): its ticket and name.
+        public event EventHandler<DocumentStartedEventArgs>? DocumentStarted;
         // A document the page converted (UI\web\docs.js): {ticket, name, size, format, text, images}.
         public event EventHandler<DocumentConvertedEventArgs>? DocumentConverted;
         // One it could not convert: ticket, file name, reason (docworker.js), detail.
@@ -281,6 +283,9 @@ namespace Pptcom.UI
                     break;
                 case "saveProgress":
                     SaveProgressChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
+                    break;
+                case "attachStarted":
+                    DocumentStarted?.Invoke(this, new DocumentStartedEventArgs((string?)m["ticket"] ?? "", (string?)m["name"] ?? ""));
                     break;
                 case "attach":
                     DocumentConverted?.Invoke(this, new DocumentConvertedEventArgs(m));

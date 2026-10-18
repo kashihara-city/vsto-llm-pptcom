@@ -60,6 +60,7 @@
     <Compile Include="..\..\..\pptcom\Agent\ChatMessage.cs" />
     <Compile Include="..\..\..\pptcom\Agent\ChatReply.cs" />
     <Compile Include="..\..\..\pptcom\Agent\LlmServerException.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\LlmServerFailure.cs" />
     <Compile Include="..\..\..\pptcom\Agent\SlideImage.cs" />
     <Compile Include="..\..\..\pptcom\Agent\StreamProgress.cs" />
     <Compile Include="..\..\..\pptcom\Agent\StreamedReply.cs" />

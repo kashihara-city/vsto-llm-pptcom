@@ -9,6 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
+using Pptcom.ComProxy;
 using static System.FormattableString;
 
 namespace Pptcom.Agent
@@ -30,6 +31,12 @@ namespace Pptcom.Agent
         public double? Temperature { get; set; }
         public int MaxTokens { get; set; } = 32000;
         public int MinImagePixels { get; set; } = 3136; // 56 x 56
+
+        // How long a reply's stream may send nothing before it counts as a server failure (再試行). The thinking
+        // model streams its reasoning, so the gaps are short; the longest is the wait before the first token
+        // (the server reading the prompt): at most 47 s in 649 turns of the add-in's runs (2026-09/10), mostly
+        // under 10 s. HttpClient.Timeout does not cover the stream: it ends with the headers (ResponseHeadersRead).
+        public TimeSpan StreamIdleLimit { get; set; } = TimeSpan.FromMinutes(1);
         private bool _sendMmProcessorKwargs = true;
         public string Model { get; }
 
@@ -275,6 +282,9 @@ namespace Pptcom.Agent
             return first;
         }
 
+        // The reply, read as it streams. 中止 (the token) and a stream that sends nothing for StreamIdleLimit both
+        // close the response, which ends the read: .NET Framework's ReadLineAsync takes no token. A stream that
+        // ends with neither [DONE] nor a finish_reason was cut off on the way, and is not a reply.
         private async Task<ChatReply> ReadChatAsync(HttpRequestMessage request, Func<HttpRequestMessage> makeRequest, JObject payload,
             StreamedReply streamed, CancellationToken cancellationToken)
         {
@@ -294,10 +304,27 @@ namespace Pptcom.Agent
 
                 using Stream stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(true);
                 using StreamReader reader = new(stream, Encoding.UTF8);
+                using CancellationTokenSource idle = new();
+                using CancellationTokenRegistration onCancel = cancellationToken.Register(resp.Dispose);
+                using CancellationTokenRegistration onIdle = idle.Token.Register(resp.Dispose);
+                bool done = false;
                 while (true)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    string line = await reader.ReadLineAsync().ConfigureAwait(true);
+                    idle.CancelAfter(StreamIdleLimit);
+                    string? line;
+                    try
+                    {
+                        line = await reader.ReadLineAsync().ConfigureAwait(true);
+                    }
+                    // The response closed by 中止 or by the idle limit: whatever the read threw says only that.
+                    catch (Exception ex) when (Guard.IsRecoverable(ex) && (cancellationToken.IsCancellationRequested || idle.IsCancellationRequested))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        throw new LlmServerException(statusCode: null, Invariant($"LLM stream stalled: nothing arrived for {StreamIdleLimit.TotalMinutes} min"), ex,
+                                                     LlmServerFailure.Stalled);
+                    }
+
                     if (line is null)
                     {
                         break;
@@ -311,6 +338,7 @@ namespace Pptcom.Agent
                     string data = line.Substring(5).Trim();
                     if (data == "[DONE]")
                     {
+                        done = true;
                         break;
                     }
 
@@ -325,6 +353,12 @@ namespace Pptcom.Agent
                     }
 
                     streamed.Add(chunk);
+                }
+
+                if (!done && !streamed.HasFinishReason)
+                {
+                    throw new LlmServerException(statusCode: null, "LLM stream ended before the reply was complete (no finish_reason, no [DONE])",
+                                                 failure: LlmServerFailure.Incomplete);
                 }
             }
 

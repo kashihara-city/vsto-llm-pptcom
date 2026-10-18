@@ -5,7 +5,8 @@
 // list; this page shows what it says (the chips above the input) and asks it to remove one. It also draws
 // PDF pages for docread page; the add-in sends the PDF along each time, so this page keeps no documents.
 //
-//   page -> add-in: {type: "attach", ticket, name, size, format, text, pages, images: [{index, mediaType, data (base64)}],
+//   page -> add-in: {type: "attachStarted", ticket, name}                   converting starts (the add-in ties it to the conversation)
+//                   {type: "attach", ticket, name, size, format, text, pages, images: [{index, mediaType, data (base64)}],
 //                    source (the PDF itself, base64; PDFs only)}
 //                   {type: "attachFailed", ticket, name, reason, detail}
 //                   {type: "detach", id}
@@ -33,6 +34,7 @@ picker.accept = Accept.join(",");
 
 let queue = Promise.resolve();
 function enqueue(ticket, name, bytes) {
+  host.postMessage({ type: "attachStarted", ticket, name });
   converting++;
   updateState();
   queue = queue.then(() => convert(ticket, name, bytes)).finally(() => { converting--; updateState(); });
@@ -166,6 +168,8 @@ function updateState() {
   attachButton.disabled = busy;
   for (const b of chips.querySelectorAll(".chip-remove")) b.disabled = busy;
   $("converting").textContent = converting > 0 ? i18n.t("DOC_CONVERTING") : "";
+  // taskpane.js keeps the send and new-chat buttons off meanwhile: the request would go without the document.
+  document.body.classList.toggle("converting", converting > 0);
   area.classList.toggle("show", chips.children.length > 0 || converting > 0);
 }
 

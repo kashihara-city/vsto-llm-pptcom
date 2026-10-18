@@ -220,6 +220,7 @@ input[type=text]:focus, select:focus, textarea:focus { outline: 2px solid var(--
 }
 #new-chat:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
 #new-chat:disabled { opacity: .4; cursor: default; }
+body.converting #new-chat { opacity: .4; cursor: default; }
 .spacer { flex: 1; }
 #hint { color: var(--faint); font-size: 11px; white-space: nowrap; }
 .divider { display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 11px; }
@@ -235,6 +236,7 @@ input[type=text]:focus, select:focus, textarea:focus { outline: 2px solid var(--
   cursor: pointer;
 }
 #action:disabled { opacity: .4; cursor: default; }
+body.converting:not(.busy) #action { opacity: .4; cursor: default; }
 #action .stop { display: none; }
 body.busy #action .send { display: none; }
 body.busy #action .stop { display: block; }

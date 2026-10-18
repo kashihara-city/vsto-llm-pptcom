@@ -162,6 +162,7 @@
     <Compile Include="UI\SwitchEventArgs.cs" />
     <Compile Include="UI\DocumentConvertedEventArgs.cs" />
     <Compile Include="UI\DocumentFailedEventArgs.cs" />
+    <Compile Include="UI\DocumentStartedEventArgs.cs" />
     <Compile Include="UI\Texts.cs" />
     <!-- The task pane's page (HTML, CSS, scripts, the language files in locales\), inside the DLL rather than as
          files next to it: AiTaskPaneControl serves them to the WebView2 at https://pptcom.invalid/<path under UI\web\>,
@@ -173,6 +174,7 @@
     <Compile Include="Agent\ChatMessage.cs" />
     <Compile Include="Agent\ChatReply.cs" />
     <Compile Include="Agent\LlmServerException.cs" />
+    <Compile Include="Agent\LlmServerFailure.cs" />
     <Compile Include="Agent\SlideImage.cs" />
     <Compile Include="Agent\StreamProgress.cs" />
     <Compile Include="Agent\StreamedReply.cs" />

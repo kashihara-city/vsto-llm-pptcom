@@ -76,6 +76,9 @@ namespace Pptcom.Agent
             }
         }
 
+        // Whether the server said why the reply ended ("stop", "tool_calls", "length"): the reply is complete.
+        public bool HasFinishReason => _reply.FinishReason is not null;
+
         // The reply once the stream has ended.
         public ChatReply Finish()
         {

@@ -69,7 +69,9 @@ function finishWork(state, footer) {
 const logKinds = {
   USER_REQUEST: "user", TOOL_RESULT: "tool", TURN_SIZE: "turn", REQUEST_DONE: "done",
   AI_REPLY: "reply", AI_DONE: "reply",
-  AI_ERROR: "stopped", AI_CANCELLED: "stopped", AI_SERVER_ERROR: "error", AI_TURN_LIMIT: "error",
+  AI_ERROR: "stopped", AI_CANCELLED: "stopped", AI_SERVER_ERROR: "error", AI_TURN_LIMIT: "error", AI_REPLY_CUT: "error",
+  // a request refused before it started: its block ends with the reason
+  NO_ENDPOINT_OR_MODEL: "stopped", DOC_STILL_CONVERTING: "stopped",
   HAND_EDITS: "handEdits", NEW_CONVERSATION: "reset", NEW_CONVERSATION_OTHER_DECK: "divider",
   READY: "plain", NO_ENDPOINT_HELP: "plain",
 };
@@ -136,8 +138,11 @@ function onLog(m) {
 
 // ---- input, buttons -----------------------------------------------------------------------------
 
+// A document still being read (body.converting, docs.js) would not go with the request: wait for it.
+const converting = () => document.body.classList.contains("converting");
+
 function submit() {
-  if (busy) return;
+  if (busy || converting()) return;
   const text = input.value.trim();
   if (!text) return;
   input.value = "";
@@ -154,7 +159,7 @@ action.addEventListener("click", () => {
   post({ type: "cancel" });
 });
 $("retry").addEventListener("click", () => post({ type: "retry" }));
-$("new-chat").addEventListener("click", () => { if (!busy) post({ type: "newChat" }); });
+$("new-chat").addEventListener("click", () => { if (!busy && !converting()) post({ type: "newChat" }); });
 
 const endpoint = $("endpoint"), chatModel = $("chat-model"), imageModel = $("image-model");
 const submitEndpoint = () => post({ type: "endpoint", value: endpoint.value.trim() });

@@ -38,6 +38,11 @@ namespace Pptcom
                 throw new InvalidOperationException("実行中の依頼があります。IsBusy が False になってから送ってください。");
             }
 
+            if (_addin.IsReadingDocuments)
+            {
+                throw new InvalidOperationException("資料を読み取っています。Documents の converting が空になってから送ってください。");
+            }
+
             _addin.SendFromOutside(request.Trim());
         }
 

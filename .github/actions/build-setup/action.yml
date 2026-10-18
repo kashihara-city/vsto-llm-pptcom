@@ -1,0 +1,104 @@
+name: Prepare the build
+description: >-
+  What building the add-in needs on the windows-2025 image, for release.yml and check.yml: MSBuild (found and
+  written to MSBUILD), the Rust toolchain that builds anydoc, the VSTO runtime, the Office PIAs (checked) and a
+  throwaway signing certificate for the ClickOnce manifests. Run it after checking out the source.
+runs:
+  using: composite
+  steps:
+    - name: Report the toolchain
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        "Image: $env:ImageOS $env:ImageVersion"
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        & $vswhere -latest -products * -property displayName
+        & $vswhere -latest -products * -property installationVersion
+        $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+        if (-not $msbuild) { throw "MSBuild not found" }
+        "MSBuild: $msbuild"
+        & $msbuild -version -nologo
+        "MSBUILD=$msbuild" >> $env:GITHUB_ENV
+        dotnet --version
+
+    - name: Install the Rust toolchain that builds anydoc
+      shell: pwsh
+      run: |
+        # The add-in build turns anydoc's pinned source (deps\anydoc.tar.gz) into WebAssembly with this
+        # toolchain (pptcom\WebVendor.ps1); deps\web-sources.lock.json names it.
+        $ErrorActionPreference = "Stop"
+        $rust = (Get-Content -LiteralPath "deps/web-sources.lock.json" -Raw | ConvertFrom-Json).rust
+        rustup toolchain install $rust.toolchain --profile minimal --target $rust.target
+        if ($LASTEXITCODE -ne 0) { throw "rustup failed" }
+        rustup run $rust.toolchain rustc --version
+
+    - name: Install the VSTO runtime when the image lacks it
+      shell: pwsh
+      run: |
+        # The VSTO build tasks (VerifyClickOnceSigningSettings) load
+        # Microsoft.VisualStudio.Tools.Applications.Hosting from the GAC, where the VSTO runtime puts it.
+        # windows-2025 (Visual Studio 2026) has no VSTO runtime; windows-2022 had one.
+        $ErrorActionPreference = "Stop"
+        $gac = "$env:windir\Microsoft.NET\assembly\GAC_MSIL\Microsoft.VisualStudio.Tools.Applications.Hosting"
+        if (Test-Path $gac) { "The VSTO runtime is already there"; exit 0 }
+        $setup = "$env:RUNNER_TEMP\vstor_redist.exe"
+        # The link Visual Studio's ClickOnce bootstrapper uses for the VSTO runtime (Packages\VSTOR40).
+        Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?LinkId=158918" -OutFile $setup -UseBasicParsing
+        $hash = (Get-FileHash $setup).Hash.ToUpperInvariant()
+        $version = (Get-Item $setup).VersionInfo.ProductVersion
+        "vstor_redist.exe {0:N1} MB, version {1}, SHA256 {2}" -f ((Get-Item $setup).Length / 1MB), $version, $hash
+        $signature = Get-AuthenticodeSignature -FilePath $setup
+        if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "CN=Microsoft Corporation,") {
+          throw "vstor_redist.exe signature: $($signature.Status), signer $($signature.SignerCertificate.Subject)"
+        }
+        "signature valid, signer $($signature.SignerCertificate.Subject)"
+        # Pinned by hash. When the link has moved to a newer installer, the signature above says whether
+        # it is genuine; then its version is looked at and the hash here changed on purpose.
+        $pinned = "CFE1A40BBE4A50022DB2164ABDB0154984E2CECB761A23CDC81CB5754F6E0A18"  # 10.0.60917
+        if ($hash -ne $pinned) { throw "vstor_redist.exe is not the pinned installer: SHA256 $hash (version $version), pinned $pinned" }
+        $p = Start-Process -FilePath $setup -ArgumentList "/q", "/norestart" -Wait -PassThru
+        "vstor_redist.exe exit $($p.ExitCode)"
+        if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "vstor_redist.exe failed" }
+        if (-not (Test-Path $gac)) { throw "The VSTO runtime was installed but Hosting is not in the GAC" }
+
+    - name: Check the Office PIAs the build compiles against
+      shell: pwsh
+      run: |
+        # OfficePia.props takes them from Visual Studio's Office workload. The add-in compiles against them
+        # but does not ship them (Office has the same ones in the GAC); the parser tests and ComScriptRunner
+        # copy them next to themselves.
+        $ErrorActionPreference = "Stop"
+        $dir = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Shared\Visual Studio Tools for Office\PIA\Office15"
+        foreach ($name in "Microsoft.Office.Interop.PowerPoint.dll", "Office.dll", "Microsoft.Vbe.Interop.dll") {
+          $f = Join-Path $dir $name
+          if (-not (Test-Path $f)) { throw "Missing: $f" }
+          $signature = Get-AuthenticodeSignature -FilePath $f
+          if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "CN=Microsoft Corporation,") {
+            throw "$name signature: $($signature.Status), signer $($signature.SignerCertificate.Subject)"
+          }
+          "{0}  {1}  SHA256={2}" -f $name, ([Reflection.AssemblyName]::GetAssemblyName($f).Version), (Get-FileHash $f).Hash
+        }
+
+    - name: Make a throwaway signing certificate
+      shell: pwsh
+      run: |
+        # VSTO signs its ClickOnce manifests; the build stops without pptcom\signing.local.props.
+        $ErrorActionPreference = "Stop"
+        $cert = New-SelfSignedCertificate -Subject "CN=pptcom CI test build" -Type CodeSigningCert `
+          -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(7)
+        $password = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(24))
+        "::add-mask::$password"
+        $pfx = Join-Path $env:GITHUB_WORKSPACE "pptcom\ci-signing.pfx"
+        Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString $password -AsPlainText -Force) | Out-Null
+        $props = @"
+        <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+          <PropertyGroup>
+            <SignManifests>true</SignManifests>
+            <ManifestKeyFile>ci-signing.pfx</ManifestKeyFile>
+            <ManifestCertificateThumbprint>$($cert.Thumbprint)</ManifestCertificateThumbprint>
+            <ManifestPassword>$password</ManifestPassword>
+          </PropertyGroup>
+        </Project>
+        "@
+        Set-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE "pptcom\signing.local.props") -Value $props -Encoding utf8
+        "thumbprint $($cert.Thumbprint)"
