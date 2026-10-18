@@ -1,6 +1,7 @@
 // How the task pane's page (pptcom/UI/web/taskpane.js) sends a request and shows how it ends: one request at a
-// time, also before the add-in's busy state arrives; a refused send does not leave the page waiting; a request that
-// stops (the deck was closed, 中止, an error) closes its block as stopped, one that finishes as done. taskpane.js runs
+// time, also before the add-in's busy state arrives and while another window's pane runs one; a refused send does
+// not leave the page waiting; a request that stops (the deck was closed, 中止, an error) closes its block as stopped,
+// one that finishes as done. taskpane.js runs
 // as it is, in a stand-in for the browser and WebView2 made of plain objects; messages from the add-in arrive as
 // WebView2 delivers them. No packages.
 //
@@ -61,6 +62,7 @@ function page() {
     host: data => onMessage({ data }),
     log: (code, ...args) => onMessage({ data: { type: "log", code, args } }),
     work: () => run("work"),
+    element: id => run("document.getElementById(" + JSON.stringify(id) + ")"),
     lastBlock: () => { const children = run("log.children"); return children.filter(e => e.className.startsWith("work")).pop(); },
   };
 }
@@ -76,6 +78,20 @@ function oneAtATime() {
   p.host({ type: "busy", value: false });
   p.submit("fourth");
   check("the next one goes once it has ended", p.sends().join(",") === "first,fourth", p.sends().join(","));
+}
+
+function elsewhere() {
+  const p = page();
+  p.host({ type: "busy", value: true, elsewhere: true });
+  p.submit("first");
+  const action = p.element("action"), status = p.element("status");
+  check("while another window's pane runs a request, nothing is sent and there is nothing to stop",
+        p.sends().length === 0 && action.disabled === true && status.textContent === "STATUS_BUSY_ELSEWHERE",
+        "sends=" + p.sends().length + " disabled=" + action.disabled + " status=" + status.textContent);
+  p.host({ type: "busy", value: false });
+  p.submit("second");
+  check("once it has ended, this pane sends again", p.sends().join(",") === "second" && action.disabled === false && status.textContent === "",
+        p.sends().join(",") + " disabled=" + action.disabled + " status=" + status.textContent);
 }
 
 function refused() {
@@ -104,6 +120,7 @@ function ends(name, steps, state) {
 }
 
 oneAtATime();
+elsewhere();
 refused();
 ends("a request whose deck was closed ends as stopped", p => p.log("AI_DECK_CLOSED"), "stopped");
 ends("a request stopped by 中止 ends as stopped", p => p.log("AI_CANCELLED"), "stopped");

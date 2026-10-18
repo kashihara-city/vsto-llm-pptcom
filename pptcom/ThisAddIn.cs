@@ -17,10 +17,9 @@ namespace Pptcom
 {
     public partial class ThisAddIn
     {
-        // _paneControl, _pane, _llm and _settings are set in ThisAddIn_Startup, before anything uses them. The
-        // constructor is VSTO's (ThisAddIn.Designer.cs, generated code), so the compiler does not check them.
-        private AiTaskPaneControl _paneControl;
-        private Microsoft.Office.Tools.CustomTaskPane _pane;
+        // _llm and _settings are set in ThisAddIn_Startup, before anything uses them (the task panes come after it,
+        // see PaneFor). The constructor is VSTO's (ThisAddIn.Designer.cs, generated code), so the compiler does not
+        // check them.
         private OpenAiCompatibleClient _llm;
         private CancellationTokenSource _cancel = new(); // replaced by a new one at each request
 
@@ -77,38 +76,77 @@ namespace Pptcom
             _settings = AddinSettings.Load();
             _saveProgress = _settings.SaveProgress;
             _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
+            _chatModels = Only(_settings.ChatModel);
+            _imageModels = Only(_settings.ImageModel);
+            _started = true;
 
-            _paneControl = new AiTaskPaneControl();
-            _paneControl.SendRequested += (s, e) => _ = SendAsync(e.Text, fromOutside: false);
-            _paneControl.CancelRequested += (s, e) => _cancel.Cancel();
-            _paneControl.RetryRequested += (s, e) => _retryWait?.TrySetResult(true);
-            _paneControl.NewConversationRequested += (s, e) => OnNewConversationRequested();
-            _paneControl.ExternalControlChanged += (s, e) => OnExternalControlChanged(e.On);
-            _paneControl.SaveProgressChanged += (s, e) => OnSaveProgressChanged(e.On);
-            _paneControl.EndpointSubmitted += (s, e) => OnEndpointSubmitted(e.Text);
-            _paneControl.ChatModelSelected += (s, e) => OnChatModelSelected(e.Text);
-            _paneControl.ImageModelSelected += (s, e) => OnImageModelSelected(e.Text);
-            _paneControl.ApiKeyEntered += (s, e) => OnApiKeyEntered(e.Text);
-            _paneControl.DocumentStarted += (s, e) => OnDocumentStarted(e.Ticket, e.Name);
-            _paneControl.DocumentConverted += (s, e) => OnDocumentConverted(e.Message);
-            _paneControl.DocumentFailed += (s, e) => OnDocumentFailed(e.Ticket, e.Name, e.Reason, e.Detail);
-            _paneControl.DocumentRemoved += (s, e) => OnDocumentRemoved(e.Text);
-            _paneControl.SetEndpoint(_settings.Endpoint);
-            _paneControl.SetApiKeyState(_settings.HasApiKey);
-            _paneControl.SetOptions(_settings.ExternalControl, _settings.SaveProgress);
-
-            _pane = this.CustomTaskPanes.Add(_paneControl, Texts.Get("PANE_TITLE"));
-            _pane.Width = 320;
-            _pane.Visible = true;
+            // A pane for each window: those open already (PowerPoint started with a file), and each one that comes to
+            // the front later. A pane whose window is gone is removed.
+            this.Application.WindowActivate += (_, window) => OnWindowActivate(window);
+            this.Application.PresentationCloseFinal += _ => PrunePanes();
+            try
+            {
+                foreach (Microsoft.Office.Interop.PowerPoint.DocumentWindow window in this.Application.Windows)
+                {
+                    PaneFor(window);
+                }
+            }
+            catch (COMException ex)
+            {
+                LogToFile("(the open windows could not be listed: " + ex.Message + ")");
+            }
 
             if (_settings.HasEndpoint)
             {
-                _paneControl.Log("READY");
-                _ = RefreshModelsAsync(_settings.Endpoint, isStartup: true);
+                _ = RefreshModelsAsync(_settings.Endpoint, asker: null);
             }
-            else
+        }
+
+        // Startup has run: the ribbon may ask for the pane's state before it.
+        private bool _started;
+
+        private PaneRibbon? _ribbon;
+
+        // The ribbon's button (PaneRibbon). Asked for once, before Startup.
+        protected override Microsoft.Office.Core.IRibbonExtensibility CreateRibbonExtensibilityObject()
+        {
+            Texts.UseLanguage(OfficeUiLanguage());
+            _ribbon ??= new PaneRibbon(IsPaneShown, ShowPane);
+            return _ribbon;
+        }
+
+        private bool IsPaneShown()
+        {
+            if (!_started)
             {
-                _paneControl.Log("NO_ENDPOINT_HELP");
+                return false;
+            }
+
+            try
+            {
+                WindowPane? pane = ActivePane();
+                return pane is not null && pane.Pane.Visible;
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                return false;
+            }
+        }
+
+        private void ShowPane(bool show)
+        {
+            if (!_started)
+            {
+                return;
+            }
+
+            try
+            {
+                ActivePane()?.Pane.Visible = show;
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                LogToFile("(the task pane could not be shown or hidden: " + ex.Message + ")");
             }
         }
 
@@ -128,20 +166,67 @@ namespace Pptcom
 
         // ---- endpoint / model selection (task pane settings area) --------------------------------
 
+        // The settings are the same in every pane: a change made in one is shown in all of them, and its message in
+        // the one it was made in (in all of them for the model list fetched at startup).
+
         // The key from the masked dialog goes straight to Windows Credential Manager; it is never logged or shown.
-        private void OnApiKeyEntered(string apiKey)
+        private void OnApiKeyEntered(WindowPane pane, string apiKey)
         {
             if (!_settings.SaveApiKey(apiKey))
             {
-                _paneControl.Log("API_KEY_SAVE_FAILED");
+                pane.Control.Log("API_KEY_SAVE_FAILED");
                 return;
             }
             _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
-            _paneControl.SetApiKeyState(isSet: true);
-            _paneControl.Log("API_KEY_SAVED");
+            foreach (WindowPane p in _panes.Values)
+            {
+                p.Control.SetApiKeyState(isSet: true);
+            }
+
+            pane.Control.Log("API_KEY_SAVED");
             if (_settings.HasEndpoint)
             {
-                _ = RefreshModelsAsync(_settings.Endpoint);
+                _ = RefreshModelsAsync(_settings.Endpoint, pane);
+            }
+        }
+
+        // The models the endpoint offered last (or the saved ones, before any list came), for the drop-downs of
+        // every pane, also one made later.
+        private List<string> _chatModels = [];
+        private List<string> _imageModels = [];
+
+        private static List<string> Only(string model)
+        {
+            return model.Length > 0 ? [model] : [];
+        }
+
+        // `one`, or every pane when it is null.
+        private List<WindowPane> PanesOrAll(WindowPane? one)
+        {
+            return one is not null ? [one] : [.. _panes.Values];
+        }
+
+        private void Tell(WindowPane? to, PaneText text)
+        {
+            foreach (WindowPane p in PanesOrAll(to))
+            {
+                p.Control.LogText(text);
+            }
+        }
+
+        private void ShowModels(WindowPane? except = null)
+        {
+            foreach (WindowPane p in _panes.Values.Where(p => !ReferenceEquals(p, except)))
+            {
+                p.Control.SetModelChoices(_chatModels, _settings.ChatModel, _imageModels, _settings.ImageModel);
+            }
+        }
+
+        private void ShowEndpoint()
+        {
+            foreach (WindowPane p in _panes.Values)
+            {
+                p.Control.SetEndpoint(_settings.Endpoint);
             }
         }
 
@@ -152,7 +237,8 @@ namespace Pptcom
         // becomes the active one (saved); on failure the previous endpoint stays active. Never fails:
         // the callers start it and let it run. Only the latest call does any of this: lists are asked for
         // at startup, on a new endpoint and after a new API key, and may answer in another order.
-        private async Task RefreshModelsAsync(string endpoint, bool isStartup = false)
+        // `asker`: the pane it was asked from, which gets its messages; null at startup (every pane).
+        private async Task RefreshModelsAsync(string endpoint, WindowPane? asker)
         {
             endpoint = (endpoint ?? "").Trim().TrimEnd('/');
             if (endpoint.Length == 0)
@@ -166,78 +252,32 @@ namespace Pptcom
             }
 
             int request = ++_modelsRequest;
-            _paneControl.SetStatus("STATUS_FETCHING_MODELS", endpoint);
+            foreach (WindowPane p in PanesOrAll(asker))
+            {
+                p.Control.SetStatus("STATUS_FETCHING_MODELS", endpoint);
+            }
             try
             {
                 OpenAiCompatibleClient probe = new(endpoint, _settings.ApiKey, _settings.ChatModel);
                 List<KeyValuePair<string, string?>> models = await probe.ListModelsAsync(CancellationToken.None).ConfigureAwait(true); // not the request's 中止
-                if (request != _modelsRequest)
+                if (request == _modelsRequest)
                 {
-                    return;
-                }
-
-                bool modesKnown = models.Exists(static m => m.Value is not null);
-                List<string> chat = [.. models.Where(m => !modesKnown || m.Value == "chat").Select(static m => m.Key)];
-                List<string> image = [.. models.Where(m => !modesKnown || m.Value == "image_generation").Select(static m => m.Key)];
-
-                if (endpoint != _settings.Endpoint)
-                {
-                    _settings.Endpoint = endpoint;
-                    _settings.Save();
-                    _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
-                }
-                // No model chosen yet (fresh install): take the first one the endpoint lists.
-                bool changed = false;
-                if (_settings.ChatModel.Length == 0 && chat.Count > 0)
-                {
-                    _settings.ChatModel = chat[0];
-                    changed = true;
-                }
-                if (_settings.ImageModel.Length == 0 && image.Count > 0)
-                {
-                    _settings.ImageModel = image[0];
-                    changed = true;
-                }
-                if (changed)
-                {
-                    _settings.Save();
-                    _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
-                }
-                _paneControl.SetEndpoint(endpoint);
-                _paneControl.SetModelChoices(chat, _settings.ChatModel, image, _settings.ImageModel);
-                if (!isStartup || changed)
-                {
-                    _paneControl.Log("MODELS_LISTED", endpoint, chat.Count, image.Count);
-                }
-
-                if (isStartup && changed)
-                {
-                    _paneControl.Log("READY");
-                }
-
-                if (_settings.ChatModel.Length > 0 && !chat.Contains(_settings.ChatModel))
-                {
-                    _paneControl.Log("MODEL_NOT_LISTED", _settings.ChatModel);
+                    UseModelList(endpoint, asker, models);
                 }
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex) && request == _modelsRequest)
             {
-                _paneControl.SetEndpoint(_settings.Endpoint);
-
-                static List<string> only(string m)
-                {
-                    return m.Length > 0 ? [m] : [];
-                }
-
-                _paneControl.SetModelChoices(only(_settings.ChatModel), _settings.ChatModel,
-                                             only(_settings.ImageModel), _settings.ImageModel);
+                _chatModels = Only(_settings.ChatModel);
+                _imageModels = Only(_settings.ImageModel);
+                ShowEndpoint();
+                ShowModels();
                 if (endpoint != _settings.Endpoint)
                 {
-                    _paneControl.Log("MODELS_FAILED_KEPT", endpoint, MessagesOf(ex), _settings.Endpoint);
+                    Tell(asker, PaneText.Of("MODELS_FAILED_KEPT", endpoint, MessagesOf(ex), _settings.Endpoint));
                 }
                 else
                 {
-                    _paneControl.Log("MODELS_FAILED", endpoint, MessagesOf(ex));
+                    Tell(asker, PaneText.Of("MODELS_FAILED", endpoint, MessagesOf(ex)));
                 }
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
@@ -248,7 +288,10 @@ namespace Pptcom
             {
                 if (request == _modelsRequest)
                 {
-                    _paneControl.ClearStatus();
+                    foreach (WindowPane p in PanesOrAll(asker))
+                    {
+                        p.Control.ClearStatus();
+                    }
                 }
             }
         }
@@ -280,12 +323,57 @@ namespace Pptcom
             return text;
         }
 
-        private void OnEndpointSubmitted(string endpoint)
+        // The endpoint answered with its models: it becomes the active one (saved), and the drop-downs show them.
+        private void UseModelList(string endpoint, WindowPane? asker, List<KeyValuePair<string, string?>> models)
         {
-            _ = RefreshModelsAsync(endpoint);
+            bool modesKnown = models.Exists(static m => m.Value is not null);
+            List<string> chat = [.. models.Where(m => !modesKnown || m.Value == "chat").Select(static m => m.Key)];
+            List<string> image = [.. models.Where(m => !modesKnown || m.Value == "image_generation").Select(static m => m.Key)];
+
+            if (endpoint != _settings.Endpoint)
+            {
+                _settings.Endpoint = endpoint;
+                _settings.Save();
+                _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
+            }
+            // No model chosen yet (fresh install): take the first one the endpoint lists.
+            bool changed = false;
+            if (_settings.ChatModel.Length == 0 && chat.Count > 0)
+            {
+                _settings.ChatModel = chat[0];
+                changed = true;
+            }
+            if (_settings.ImageModel.Length == 0 && image.Count > 0)
+            {
+                _settings.ImageModel = image[0];
+                changed = true;
+            }
+            if (changed)
+            {
+                _settings.Save();
+                _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
+            }
+            _chatModels = chat;
+            _imageModels = image;
+            ShowEndpoint();
+            ShowModels();
+            if (asker is not null || changed)
+            {
+                Tell(asker, PaneText.Of("MODELS_LISTED", endpoint, chat.Count, image.Count));
+            }
+
+            if (asker is null && changed)
+            {
+                Tell(to: null, PaneText.Of("READY"));
+            }
+
+            if (_settings.ChatModel.Length > 0 && !chat.Contains(_settings.ChatModel))
+            {
+                Tell(asker, PaneText.Of("MODEL_NOT_LISTED", _settings.ChatModel));
+            }
         }
 
-        private void OnChatModelSelected(string model)
+        private void OnChatModelSelected(WindowPane pane, string model)
         {
             if (string.IsNullOrEmpty(model) || model == _settings.ChatModel)
             {
@@ -295,10 +383,11 @@ namespace Pptcom
             _settings.ChatModel = model;
             _settings.Save();
             _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
-            _paneControl.Log("CHAT_MODEL_SET", model);
+            ShowModels(except: pane);
+            pane.Control.Log("CHAT_MODEL_SET", model);
         }
 
-        private void OnImageModelSelected(string model)
+        private void OnImageModelSelected(WindowPane pane, string model)
         {
             if (string.IsNullOrEmpty(model) || model == _settings.ImageModel)
             {
@@ -307,7 +396,8 @@ namespace Pptcom
 
             _settings.ImageModel = model;
             _settings.Save();
-            _paneControl.Log("IMAGE_MODEL_SET", model);
+            ShowModels(except: pane);
+            pane.Control.Log("IMAGE_MODEL_SET", model);
         }
 
         // While PowerPoint closes, the task pane may already be gone: nothing is shown any more.
@@ -316,7 +406,10 @@ namespace Pptcom
         private void ThisAddIn_Shutdown(object sender, System.EventArgs e)
         {
             _shuttingDown = true;
-            EndConversation();
+            foreach (WindowPane pane in _panes.Values)
+            {
+                EndConversation(pane);
+            }
         }
 
         // ---- driven from another program (AddinAutomation; off unless 外部からの操作を許可 is on) ----
@@ -336,9 +429,15 @@ namespace Pptcom
         // True from send until the request ends (the task pane's busy state).
         internal bool IsBusy { get; private set; }
 
+        // AddinAutomation works on the window in front, as the user would; it checks HasWindow first.
+        internal bool HasWindow => ActivePane() is not null;
+
         internal void SendFromOutside(string request)
         {
-            _ = SendAsync(request, fromOutside: true);
+            if (ActivePane() is WindowPane pane)
+            {
+                _ = SendAsync(pane, request, fromOutside: true);
+            }
         }
 
         internal void CancelFromOutside()
@@ -348,58 +447,237 @@ namespace Pptcom
                 return;
             }
 
-            _paneControl.SetStatus("STATUS_CANCELLING");
+            _runPane?.Control.SetStatus("STATUS_CANCELLING");
             _cancel.Cancel();
         }
 
         internal void NewConversationFromOutside()
         {
-            OnNewConversationRequested();
+            if (ActivePane() is WindowPane pane)
+            {
+                OnNewConversationRequested(pane);
+            }
         }
 
-        private void OnExternalControlChanged(bool on)
+        private void ShowOptions(WindowPane except)
+        {
+            foreach (WindowPane p in _panes.Values.Where(p => !ReferenceEquals(p, except)))
+            {
+                p.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress);
+            }
+        }
+
+        private void OnExternalControlChanged(WindowPane pane, bool on)
         {
             _settings.ExternalControl = on;
             _settings.Save();
-            _paneControl.Log(on ? "EXTERNAL_CONTROL_ON" : "EXTERNAL_CONTROL_OFF");
+            ShowOptions(except: pane);
+            pane.Control.Log(on ? "EXTERNAL_CONTROL_ON" : "EXTERNAL_CONTROL_OFF");
         }
 
-        private void OnSaveProgressChanged(bool on)
+        private void OnSaveProgressChanged(WindowPane pane, bool on)
         {
             _settings.SaveProgress = on;
             _settings.Save();
             _saveProgress = on;
+            ShowOptions(except: pane);
             if (on)
             {
-                _paneControl.Log("SAVE_PROGRESS_ON", AddinSettings.DataFolder);
+                pane.Control.Log("SAVE_PROGRESS_ON", AddinSettings.DataFolder);
             }
             else
             {
-                _paneControl.Log("SAVE_PROGRESS_OFF");
+                pane.Control.Log("SAVE_PROGRESS_OFF");
             }
         }
 
-        // ---- one conversation per presentation -----------------------------------------------------
-        // The requests sent while the same deck is active form one conversation. They share the pptcom
+        // ---- one task pane per window ----------------------------------------------------------------------
+        // PowerPoint shows a custom task pane in one document window only, so each window gets its own, made when the
+        // window first comes to the front (or at startup) and removed when the window is gone. Each pane has the
+        // conversation of its window's presentation and the documents it is reading. A request runs in one pane at a
+        // time; meanwhile the others wait (SetBusy elsewhere). Windows are told apart by their HWND: in the add-in, the
+        // same window reached another way is not the same RCW.
+        private sealed class WindowPane
+        {
+            public required int Hwnd;
+            public required object Presentation;   // the window's: its conversation's deck
+            public required AiTaskPaneControl Control;
+            public required Microsoft.Office.Tools.CustomTaskPane Pane;
+            public Conversation? Conversation;     // made at its first request or attachment, dropped by 新しい会話
+            // Files the page is converting (dropped, picked, or attached from outside), by ticket: the file's name and
+            // the conversation it was attached in. One that comes back after that conversation ended (新しい会話)
+            // belongs to none and is not attached.
+            public readonly Dictionary<string, PendingAttachment> Converting = new(StringComparer.Ordinal);
+            // The latest conversions that failed, for AddinAutomation.Documents: "name: reason".
+            public readonly List<string> FailedAttachments = [];
+
+            // A document of the pane's conversation is still being read.
+            public bool IsReadingDocuments => Conversation is not null && Converting.Values.Any(p => ReferenceEquals(p.Conversation, Conversation));
+        }
+
+        private readonly Dictionary<int, WindowPane> _panes = [];
+
+        // The pane of the request that runs; it stays while the request runs, even if its window is gone.
+        private WindowPane? _runPane;
+
+        private void OnWindowActivate(Microsoft.Office.Interop.PowerPoint.DocumentWindow window)
+        {
+            try
+            {
+                PrunePanes();
+                PaneFor(window);
+                _ribbon?.Refresh();
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                LogToFile("(no task pane for the window: " + ex.Message + ")");
+            }
+        }
+
+        // The window's pane, made the first time.
+        private WindowPane? PaneFor(Microsoft.Office.Interop.PowerPoint.DocumentWindow window)
+        {
+            int hwnd;
+            try
+            {
+                hwnd = window.HWND;
+            }
+            catch (COMException)
+            {
+                return null;
+            }
+
+            // A handle the system gave again to a new window: the old pane's deck is closed.
+            if (_panes.TryGetValue(hwnd, out WindowPane? found))
+            {
+                if (!WasClosed(found.Presentation) || ReferenceEquals(found, _runPane))
+                {
+                    return found;
+                }
+
+                RemovePane(found);
+            }
+
+            AiTaskPaneControl control = new(hwnd.ToString(CultureInfo.InvariantCulture));
+            WindowPane pane = new()
+            {
+                Hwnd = hwnd,
+                Presentation = window.Presentation,
+                Control = control,
+                Pane = this.CustomTaskPanes.Add(control, Texts.Get("PANE_TITLE"), window),
+            };
+            control.SendRequested += (s, e) => _ = SendAsync(pane, e.Text, fromOutside: false);
+            control.CancelRequested += (s, e) => _cancel.Cancel();
+            control.RetryRequested += (s, e) => _retryWait?.TrySetResult(true);
+            control.NewConversationRequested += (s, e) => OnNewConversationRequested(pane);
+            control.ExternalControlChanged += (s, e) => OnExternalControlChanged(pane, e.On);
+            control.SaveProgressChanged += (s, e) => OnSaveProgressChanged(pane, e.On);
+            control.EndpointSubmitted += (s, e) => _ = RefreshModelsAsync(e.Text, pane);
+            control.ChatModelSelected += (s, e) => OnChatModelSelected(pane, e.Text);
+            control.ImageModelSelected += (s, e) => OnImageModelSelected(pane, e.Text);
+            control.ApiKeyEntered += (s, e) => OnApiKeyEntered(pane, e.Text);
+            control.DocumentStarted += (s, e) => OnDocumentStarted(pane, e.Ticket, e.Name);
+            control.DocumentConverted += (s, e) => OnDocumentConverted(pane, e.Message);
+            control.DocumentFailed += (s, e) => OnDocumentFailed(pane, e.Ticket, e.Name, e.Reason, e.Detail);
+            control.DocumentRemoved += (s, e) => OnDocumentRemoved(pane, e.Text);
+            control.SetEndpoint(_settings.Endpoint);
+            control.SetApiKeyState(_settings.HasApiKey);
+            control.SetOptions(_settings.ExternalControl, _settings.SaveProgress);
+            control.SetModelChoices(_chatModels, _settings.ChatModel, _imageModels, _settings.ImageModel);
+            control.Log(_settings.HasEndpoint ? "READY" : "NO_ENDPOINT_HELP");
+            if (IsBusy)
+            {
+                control.SetBusy(busy: true, elsewhere: true);
+            }
+
+            pane.Pane.Width = 320;
+            pane.Pane.Visible = true;
+            pane.Pane.VisibleChanged += (s, e) => _ribbon?.Refresh();
+            _panes[hwnd] = pane;
+            return pane;
+        }
+
+        // The pane of the window in front; null when no window is open.
+        private WindowPane? ActivePane()
+        {
+            try
+            {
+                return this.Application.Windows.Count > 0 ? PaneFor(this.Application.ActiveWindow) : null;
+            }
+            catch (COMException)
+            {
+                return null;
+            }
+        }
+
+        // Panes whose window is gone (its presentation closed, or one of its windows): their conversation ends and
+        // the pane goes. The pane of a request still running stays until the request ends (SendAsync).
+        private void PrunePanes()
+        {
+            HashSet<int> open = [];
+            try
+            {
+                foreach (Microsoft.Office.Interop.PowerPoint.DocumentWindow window in this.Application.Windows)
+                {
+                    open.Add(window.HWND);
+                }
+            }
+            catch (COMException)
+            {
+                return; // the windows could not be listed: nothing is removed on a guess
+            }
+
+            foreach (WindowPane pane in _panes.Values.Where(p => !open.Contains(p.Hwnd) && !ReferenceEquals(p, _runPane)).ToList())
+            {
+                RemovePane(pane);
+            }
+        }
+
+        private void RemovePane(WindowPane pane)
+        {
+            _panes.Remove(pane.Hwnd);
+            EndConversation(pane);
+            try
+            {
+                this.CustomTaskPanes.Remove(pane.Pane);
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                LogToFile("(a task pane could not be removed: " + ex.Message + ")");
+            }
+
+            pane.Control.Dispose();
+        }
+
+        // The request's pane shows its stop button, the others that a request runs elsewhere; null: none runs.
+        private void ShowBusy(WindowPane? running)
+        {
+            foreach (WindowPane pane in _panes.Values)
+            {
+                pane.Control.SetBusy(busy: running is not null, elsewhere: running is not null && !ReferenceEquals(pane, running));
+            }
+        }
+
+        // ---- one conversation per window -------------------------------------------------------------
+        // The requests sent in a window's pane form one conversation, on the window's presentation. They share the pptcom
         // engine (variables, generated images), and each request is sent after a shortened copy of the
         // earlier ones (ShortenForLater): the user's requests, the tool calls with the scripts and image
         // prompts left out, the first line of each result (OK / Defined / Changed, or how many lines
         // failed) and the model's replies - no renderings, no reasoning. The deck itself is not resent:
         // the model looks at it with pptread, and is told which slides the user changed by hand since
         // the last request (DeckReader.Fingerprint / Compare). The conversation ends with 新しい会話,
-        // when another presentation is active at the next request, or when PowerPoint closes. Kept in
-        // memory only.
+        // when its window is gone, or when PowerPoint closes. Kept in memory only.
         private sealed class Conversation
         {
             // `makeEngine` gets the conversation, whose Llm and ImageModel the engine's image generator reads.
-            public Conversation(object? presentation, OpenAiCompatibleClient llm, Func<Conversation, ComProxyEngine> makeEngine)
+            public Conversation(object presentation, OpenAiCompatibleClient llm, Func<Conversation, ComProxyEngine> makeEngine)
             {
                 Presentation = presentation;
                 Llm = llm;
                 Engine = makeEngine(this);
             }
 
-            public readonly object? Presentation; // the deck it belongs to (the same COM object, so the same RCW); null: none was open
+            public readonly object Presentation; // the deck it belongs to: its window's
             public readonly ComProxyEngine Engine;
             public readonly List<string> KnownIds = [];
             // The earlier requests, shortened; sent between the system prompt and the new request.
@@ -423,104 +701,84 @@ namespace Pptcom
             public readonly List<string> TempFiles = [];
         }
 
-        private Conversation? _conversation;
-
-        private Conversation CurrentConversation()
+        // The pane's conversation, made the first time. Its engine binds the window's presentation as ActivePresentation.
+        private Conversation ConversationOf(WindowPane pane)
         {
-            object? pres = null;
-            try
+            if (pane.Conversation is null)
             {
-                pres = this.Application.ActivePresentation;
-            }
-            catch (COMException)
-            {
-                // no presentation open
-            }
-            if (_conversation is not null && !ReferenceEquals(_conversation.Presentation, pres))
-            {
-                EndConversation();
-                _paneControl.Log("NEW_CONVERSATION_OTHER_DECK");
-            }
-            if (_conversation is null)
-            {
-                Conversation c = new(pres, _llm, conversation =>
-                    new ComProxyEngine(this.Application, async (prompt, size) => await conversation.Llm.GenerateImageAsync(conversation.ImageModel, prompt, size).ConfigureAwait(true)));
+                Conversation c = new(pane.Presentation, _llm, conversation =>
+                    new ComProxyEngine(this.Application, async (prompt, size) => await conversation.Llm.GenerateImageAsync(conversation.ImageModel, prompt, size).ConfigureAwait(true),
+                                       pane.Presentation));
                 Action<JObject> usage = ComProxyEngine.FileUsageSink("addin");
                 c.Engine.UsageSink = rec => { if (_saveProgress) { usage(rec); } };
-                _conversation = c;
+                pane.Conversation = c;
             }
-            return _conversation;
+            return pane.Conversation;
         }
 
-        private void EndConversation()
+        private void EndConversation(WindowPane pane)
         {
-            if (_conversation is null)
+            Conversation? c = pane.Conversation;
+            if (c is null)
             {
                 return;
             }
 
-            foreach (string f in _conversation.Engine.GeneratedFiles.Concat(_conversation.TempFiles))
+            foreach (string f in c.Engine.GeneratedFiles.Concat(c.TempFiles))
             {
                 TryDelete(f);
             }
 
-            bool hadDocuments = _conversation.Documents.Count > 0;
-            _conversation = null;
+            bool hadDocuments = c.Documents.Count > 0;
+            pane.Conversation = null;
             if (hadDocuments)
             {
-                ShowAttachments();
+                ShowAttachments(pane);
             }
         }
 
-        private void OnNewConversationRequested()
+        private void OnNewConversationRequested(WindowPane pane)
         {
-            EndConversation();
-            _paneControl.Log("NEW_CONVERSATION");
+            EndConversation(pane);
+            pane.Control.Log("NEW_CONVERSATION");
             LogToFile("=== new conversation (by the user)");
         }
 
         // ---- attached documents ----------------------------------------------------------------------
-        // The task pane converts a document (dropped, picked, or attached from outside) and hands it over
-        // here; it belongs to the conversation of the active presentation and goes with it.
-
-        // Files the page is converting (dropped, picked, or attached from outside), by ticket: the file's name and the
-        // conversation it was attached in. One that comes back after that conversation ended (新しい会話) belongs to
-        // none and is not attached. A deck switched meanwhile does not move it: the next request does (CurrentConversation).
-        private readonly Dictionary<string, PendingAttachment> _converting = new(StringComparer.Ordinal);
+        // A window's pane converts a document (dropped, picked, or attached from outside) and hands it over
+        // here; it belongs to the conversation of that window and goes with it.
 
         private sealed class PendingAttachment
         {
             public required string Name;
             public required Conversation Conversation;
         }
-        // The latest conversions that failed, for AddinAutomation.Documents: "name: reason".
-        private readonly List<string> _failedAttachments = [];
         private int _attachTickets;
 
         // The same limit as the page's (UI\web\docs.js).
         private const long MaxDocumentBytes = 50L * 1024 * 1024;
 
-        // A document of the current conversation is still being read.
-        internal bool IsReadingDocuments => _conversation is not null && _converting.Values.Any(p => ReferenceEquals(p.Conversation, _conversation));
+        // A document of the conversation in front is still being read (for AddinAutomation.Send).
+        internal bool IsReadingDocuments => ActivePane()?.IsReadingDocuments == true;
 
-        private void OnDocumentStarted(string ticket, string name)
+        private void OnDocumentStarted(WindowPane pane, string ticket, string name)
         {
-            if (!_converting.ContainsKey(ticket))
+            if (!pane.Converting.ContainsKey(ticket))
             {
-                _converting[ticket] = new PendingAttachment { Name = name, Conversation = CurrentConversation() };
+                pane.Converting[ticket] = new PendingAttachment { Name = name, Conversation = ConversationOf(pane) };
             }
         }
 
-        private void OnDocumentConverted(JObject m)
+        private void OnDocumentConverted(WindowPane pane, JObject m)
         {
             string ticket = (string?)m["ticket"] ?? "";
             // The conversation it was attached in (the one of now if the page did not say it started).
-            Conversation c = _converting.TryGetValue(ticket, out PendingAttachment pending) ? pending.Conversation : CurrentConversation();
-            _converting.Remove(ticket);
-            if (!ReferenceEquals(c, _conversation))
+            Conversation c = pane.Converting.TryGetValue(ticket, out PendingAttachment pending) ? pending.Conversation : ConversationOf(pane);
+            pane.Converting.Remove(ticket);
+            if (!ReferenceEquals(c, pane.Conversation))
             {
                 string name = (string?)m["name"] ?? "";
-                _paneControl.Log("DOC_DISCARDED", name);
+                pane.Control.Log("DOC_DISCARDED", name);
                 LogToFile("(document not attached, its conversation ended while it was read: " + name + ")");
                 return;
             }
@@ -542,27 +800,27 @@ namespace Pptcom
                 }
             }
             c.Documents.Add(doc);
-            ShowAttachments();
-            _paneControl.Log("DOC_ATTACHED", doc.Id, doc.Name, doc.Detail());
+            ShowAttachments(pane);
+            pane.Control.Log("DOC_ATTACHED", doc.Id, doc.Name, doc.Detail());
             LogToFile("(document attached: " + doc.Describe() + ")");
         }
 
-        private void OnDocumentFailed(string ticket, string name, string reason, string detail)
+        private static void OnDocumentFailed(WindowPane pane, string ticket, string name, string reason, string detail)
         {
-            _converting.Remove(ticket);
-            _failedAttachments.Add(name + ": " + reason + (string.IsNullOrEmpty(detail) ? "" : " (" + detail + ")"));
-            if (_failedAttachments.Count > 20)
+            pane.Converting.Remove(ticket);
+            pane.FailedAttachments.Add(name + ": " + reason + (string.IsNullOrEmpty(detail) ? "" : " (" + detail + ")"));
+            if (pane.FailedAttachments.Count > 20)
             {
-                _failedAttachments.RemoveAt(0);
+                pane.FailedAttachments.RemoveAt(0);
             }
 
-            _paneControl.Log("DOC_NOT_ATTACHED", name, AttachedDocument.Failure(reason, detail));
+            pane.Control.Log("DOC_NOT_ATTACHED", name, AttachedDocument.Failure(reason, detail));
             LogToFile("(document not attached: " + name + " - " + reason + " " + detail + ")");
         }
 
-        private void OnDocumentRemoved(string id)
+        private void OnDocumentRemoved(WindowPane pane, string id)
         {
-            Conversation? c = _conversation;
+            Conversation? c = pane.Conversation;
             AttachedDocument? doc = c?.Documents.Find(d => d.Id == id);
             if (c is null || doc is null)
             {
@@ -570,20 +828,20 @@ namespace Pptcom
             }
 
             c.Documents.Remove(doc);
-            ShowAttachments();
-            _paneControl.Log("DOC_REMOVED", doc.Id, doc.Name);
+            ShowAttachments(pane);
+            pane.Control.Log("DOC_REMOVED", doc.Id, doc.Name);
             LogToFile("(document removed by the user: " + doc.Id + " " + doc.Name + ")");
         }
 
-        private void ShowAttachments()
+        private void ShowAttachments(WindowPane pane)
         {
             if (_shuttingDown)
             {
                 return;
             }
 
-            List<AttachedDocument> docs = _conversation is not null ? _conversation.Documents : [];
-            _paneControl?.SetAttachments(docs.Select(static d => Tuple.Create(d.Id, d.Name, d.Detail())));
+            List<AttachedDocument> docs = pane.Conversation is not null ? pane.Conversation.Documents : [];
+            pane.Control.SetAttachments(docs.Select(static d => Tuple.Create(d.Id, d.Name, d.Detail())));
         }
 
         // For the request: which documents the model can read (before the request text).
@@ -602,6 +860,11 @@ namespace Pptcom
 
         internal void AttachFromOutside(string path)
         {
+            if (ActivePane() is not WindowPane pane)
+            {
+                return; // AddinAutomation checks HasWindow first
+            }
+
             FileInfo info = new(path);
             if (!info.Exists)
             {
@@ -619,20 +882,22 @@ namespace Pptcom
             try
             {
                 byte[] bytes = File.ReadAllBytes(info.FullName);
-                _converting[ticket] = new PendingAttachment { Name = info.Name, Conversation = CurrentConversation() };
-                _paneControl.ConvertDocument(ticket, info.Name, bytes);
+                pane.Converting[ticket] = new PendingAttachment { Name = info.Name, Conversation = ConversationOf(pane) };
+                pane.Control.ConvertDocument(ticket, info.Name, bytes);
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
-                OnDocumentFailed(ticket, info.Name, "error", ex.Message);
+                OnDocumentFailed(pane, ticket, info.Name, "error", ex.Message);
                 throw;
             }
         }
 
-        // AddinAutomation.Documents: the attached documents, the conversions still running and the latest failures.
+        // AddinAutomation.Documents: the attached documents of the window in front, the conversions still running
+        // and the latest failures.
         internal JObject DocumentsState()
         {
-            List<AttachedDocument> docs = _conversation is not null ? _conversation.Documents : [];
+            WindowPane? pane = ActivePane();
+            List<AttachedDocument> docs = pane?.Conversation is not null ? pane.Conversation.Documents : [];
             return new JObject
             {
                 ["documents"] = new JArray(docs.Select(static d => new JObject
@@ -643,8 +908,8 @@ namespace Pptcom
                     ["lines"] = d.Lines.Length,
                     ["images"] = new JArray(d.Images.Select(static i => i.Name)),
                 })),
-                ["converting"] = new JArray(_converting.Values.Select(static p => p.Name)),
-                ["failed"] = new JArray(_failedAttachments),
+                ["converting"] = new JArray(pane is not null ? pane.Converting.Values.Select(static p => p.Name) : []),
+                ["failed"] = new JArray(pane is not null ? pane.FailedAttachments : []),
             };
         }
 
@@ -653,7 +918,7 @@ namespace Pptcom
         // the deck since, and a pointer to pptread. English, like the rest of the prompt. The hand edits
         // also go into run.HandEdits, so the shortened copy of this request keeps them (a request
         // stopped right away would otherwise lose them for the next one).
-        private string ContextBeforeRequest(Conversation c, RunRecord run)
+        private static string ContextBeforeRequest(Conversation c, RunRecord run)
         {
             string documents = DocumentsContext(c);
             if (c.Earlier.Count == 0)
@@ -678,7 +943,7 @@ namespace Pptcom
                         run.HandEdits = "Since your previous request the deck was changed outside this conversation (by the user):\n" +
                                         string.Concat(changes.Lines.Select(static line => "- " + line + "\n"));
                         sb.Append(run.HandEdits).Append("Look at those slides with pptread before you change them.\n\n");
-                        _paneControl.Log("HAND_EDITS", HandEditsText(changes));
+                        run.Pane.Control.Log("HAND_EDITS", HandEditsText(changes));
                         LogToFile("(deck changed by the user since the last request:\n" + string.Join("\n", changes.Lines) + ")");
                     }
                 }
@@ -853,56 +1118,65 @@ namespace Pptcom
         // Every request starts here, from the page or from AddinAutomation, one at a time: a send that comes while
         // one runs (the page sent it before its busy state arrived) is dropped before anything shows it, and the
         // busy state is taken before the first await. AddinAutomation.Send refuses one with an exception first.
-        private async Task SendAsync(string userMessage, bool fromOutside)
+        // A request runs in the pane it was sent from, on that window's conversation; the other panes wait meanwhile.
+        private async Task SendAsync(WindowPane pane, string userMessage, bool fromOutside)
         {
             if (IsBusy)
             {
                 LogToFile("(a request came while one runs; dropped: " + userMessage + ")");
+                if (!ReferenceEquals(pane, _runPane))
+                {
+                    pane.Control.SetBusy(busy: true, elsewhere: true); // its page waits for an answer to its send
+                }
+
                 return;
             }
 
-            _paneControl.Log("USER_REQUEST", userMessage);
+            pane.Control.Log("USER_REQUEST", userMessage);
             if (fromOutside)
             {
-                _paneControl.Log("SENT_FROM_OUTSIDE");
+                pane.Control.Log("SENT_FROM_OUTSIDE");
                 LogToFile("(the next request comes from another program, through the automation object)");
             }
             if (!_settings.HasEndpoint || _settings.ChatModel.Length == 0)
             {
-                _paneControl.Log("NO_ENDPOINT_OR_MODEL", AddinSettings.Location);
-                _paneControl.SetBusy(busy: false); // the page waits for an answer to its send
+                pane.Control.Log("NO_ENDPOINT_OR_MODEL", AddinSettings.Location);
+                pane.Control.SetBusy(busy: false); // the page waits for an answer to its send
                 return;
             }
             // A document still being read belongs to this conversation, and the request would go without it. The page
             // keeps its send button off meanwhile and AddinAutomation.Send refuses; this is the last guard.
-            if (IsReadingDocuments)
+            if (pane.IsReadingDocuments)
             {
-                _paneControl.Log("DOC_STILL_CONVERTING");
-                _paneControl.SetBusy(busy: false);
+                pane.Control.Log("DOC_STILL_CONVERTING");
+                pane.Control.SetBusy(busy: false);
                 return;
             }
-            _paneControl.SetBusy(busy: true);
             IsBusy = true;
+            _runPane = pane;
+            ShowBusy(pane);
             _cancel = new CancellationTokenSource();
             try
             {
-                await HandleDeckEditRequestAsync(userMessage).ConfigureAwait(true);
+                await HandleDeckEditRequestAsync(pane, userMessage).ConfigureAwait(true);
             }
             catch (OperationCanceledException)
             {
-                _paneControl.Log("AI_CANCELLED");
+                pane.Control.Log("AI_CANCELLED");
                 LogToFile("!!! cancelled by user");
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
                 string detail = MessagesOf(ex);
-                _paneControl.Log("AI_ERROR", detail);
+                pane.Control.Log("AI_ERROR", detail);
                 LogToFile("!!! " + detail);
             }
             finally
             {
                 IsBusy = false;
-                _paneControl.SetBusy(busy: false);
+                _runPane = null;
+                ShowBusy(running: null);
+                PrunePanes(); // its window may have gone meanwhile
             }
         }
 
@@ -914,17 +1188,18 @@ namespace Pptcom
         // deck, slide PNGs, this request's session log, summary.json, the generated images and the
         // slide renderings the model saw. Written even when the request fails or is cancelled.
         // Temp PNGs (ComProxyEngine.TempPath) are deleted afterwards.
-        private async Task HandleDeckEditRequestAsync(string userMessage)
+        private async Task HandleDeckEditRequestAsync(WindowPane pane, string userMessage)
         {
             RunRecord run = new()
             {
                 Request = userMessage,
                 Started = DateTime.Now,
+                Pane = pane,
             };
             _currentRun = run;
             try
             {
-                RemoveUntouchedStarterSlide();
+                RemoveUntouchedStarterSlide(run);
                 await RunAgentAsync(userMessage, run).ConfigureAwait(true);
                 // max_turns: the model was still calling tools when the turn limit stopped it. max_tokens: a reply
                 // reached the output limit before it said anything to do (see RunAgentAsync).
@@ -973,6 +1248,7 @@ namespace Pptcom
         private sealed class RunRecord
         {
             public required string Request;
+            public required WindowPane Pane;   // where it was sent from: its messages go there
             public DateTime Started;
             public string Outcome = "unknown";
             public int Turns;
@@ -1012,11 +1288,11 @@ namespace Pptcom
         // empty placeholders); one created via COM starts with none. The model otherwise has to
         // discover and delete it (carrot run, generated-pptx/addin_20261004_223624). Removed
         // only when it is the deck's single slide and holds nothing but empty placeholders.
-        private void RemoveUntouchedStarterSlide()
+        private static void RemoveUntouchedStarterSlide(RunRecord run)
         {
             try
             {
-                dynamic pres = this.Application.ActivePresentation;
+                dynamic pres = run.Pane.Presentation;
                 if ((int)pres.Slides.Count != 1)
                 {
                     return;
@@ -1039,7 +1315,7 @@ namespace Pptcom
                 }
                 slide.Delete();
                 LogToFile(Invariant($"(removed the untouched starter slide: 1 slide with {shapeCount} empty placeholder(s))"));
-                _paneControl.Log("STARTER_SLIDE_REMOVED");
+                run.Pane.Control.Log("STARTER_SLIDE_REMOVED");
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
@@ -1078,11 +1354,11 @@ namespace Pptcom
                 File.WriteAllText(Path.Combine(dir, "summary.json"), summary.ToString());
 
                 SaveImagesAndRenderings(run, dir);
-                _paneControl.Log("RUN_SAVED", dir);
+                run.Pane.Control.Log("RUN_SAVED", dir);
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
-                _paneControl.Log("RUN_SAVE_FAILED", ex.Message);
+                run.Pane.Control.Log("RUN_SAVE_FAILED", ex.Message);
             }
             LastRunSummary = summary;
         }
@@ -1214,22 +1490,14 @@ namespace Pptcom
         internal JObject? LastRunSummary { get; private set; }
 
         // The cheat sheet's deck-dependent numbers (%SLIDE_W% ... in SystemPrompt), measured on a copy
-        // of the active deck by DeckProbe. Re-measured only when the deck, its size or its design
+        // of the request's deck by DeckProbe. Re-measured only when the deck, its size or its design
         // changes, so the system prompt stays byte-identical (prefix cache) while you work on one deck.
         private static string? _deckKey;
         private static DeckDefaults? _deckDefaults;
 
         private DeckDefaults CurrentDeckDefaults(RunRecord run)
         {
-            object? pres = null;
-            try
-            {
-                pres = this.Application.ActivePresentation;
-            }
-            catch (COMException)
-            {
-                // no presentation open
-            }
+            object? pres = run.Engine?.Presentation;
             if (pres is null)
             {
                 return _deckDefaults ?? new DeckDefaults();
@@ -1245,7 +1513,7 @@ namespace Pptcom
             }
             if (_deckDefaults is null || key is null || key != _deckKey)
             {
-                _paneControl.SetStatus("STATUS_MEASURING_DECK");
+                run.Pane.Control.SetStatus("STATUS_MEASURING_DECK");
                 _deckDefaults = DeckProbe.Measure(this.Application, pres);
                 _deckKey = key;
                 LogToFile("(deck defaults measured: " + _deckDefaults.Summary() + ")");
@@ -1271,20 +1539,20 @@ namespace Pptcom
         // Completed by the task pane's 再試行 button; cancelled by 中止 (the request's token).
         private TaskCompletionSource<bool>? _retryWait; // set while a request waits for 再試行
 
-        private async Task WaitForRetryAsync(CancellationToken ct)
+        private async Task WaitForRetryAsync(RunRecord run, CancellationToken ct)
         {
             TaskCompletionSource<bool> wait = new();
             _retryWait = wait;
             using (ct.Register(() => wait.TrySetCanceled(ct)))
             {
-                _paneControl.ShowRetry(show: true);
+                run.Pane.Control.ShowRetry(show: true);
                 try
                 {
                     await wait.Task.ConfigureAwait(true);
                 }
                 finally
                 {
-                    _paneControl.ShowRetry(show: false);
+                    run.Pane.Control.ShowRetry(show: false);
                     _retryWait = null;
                 }
             }
@@ -1294,7 +1562,7 @@ namespace Pptcom
         {
             // The engine (variables, generated images) and the names the parser knows carry over from
             // the earlier requests on this deck, and so does their conversation, shortened (see Conversation).
-            Conversation conversation = CurrentConversation();
+            Conversation conversation = ConversationOf(run.Pane);
             conversation.ImageModel = _settings.ImageModel; // fixed for this request
             conversation.Llm = _llm;
             ComProxyEngine engine = conversation.Engine;
@@ -1325,10 +1593,10 @@ namespace Pptcom
                 run.ReasoningChars = totalReasoningChars;
                 run.ScriptLines = totalLines;
                 messages.Add(reply.AsMessage());
-                LogTurn(turn, reply);
+                LogTurn(run, turn, reply);
                 if (reply.PromptTokens > ScriptElisionPromptTokens)
                 {
-                    ShortenConversation(messages, reply);
+                    ShortenConversation(run, messages, reply);
                 }
 
                 if (reply.ToolCalls.Count == 0)
@@ -1340,17 +1608,17 @@ namespace Pptcom
                     run.FinalReply = text;
                     if (text.Length > 0)
                     {
-                        _paneControl.Log("AI_REPLY", text);
+                        run.Pane.Control.Log("AI_REPLY", text);
                     }
                     else if (!cut)
                     {
-                        _paneControl.Log("AI_DONE");
+                        run.Pane.Control.Log("AI_DONE");
                     }
 
                     if (cut)
                     {
                         run.HitTokenLimit = true;
-                        _paneControl.Log("AI_REPLY_CUT", conversation.Llm.MaxTokens);
+                        run.Pane.Control.Log("AI_REPLY_CUT", conversation.Llm.MaxTokens);
                     }
 
                     break;
@@ -1361,7 +1629,7 @@ namespace Pptcom
                 if (WasClosed(engine.Presentation))
                 {
                     run.DeckClosed = true;
-                    _paneControl.Log("AI_DECK_CLOSED");
+                    run.Pane.Control.Log("AI_DECK_CLOSED");
                     LogToFile("!!! the presentation this request works on was closed");
                     return;
                 }
@@ -1376,13 +1644,13 @@ namespace Pptcom
                 if (turn == MaxTurns)
                 {
                     run.HitTurnLimit = true;
-                    _paneControl.Log("AI_TURN_LIMIT", MaxTurns);
+                    run.Pane.Control.Log("AI_TURN_LIMIT", MaxTurns);
                 }
             }
 
             run.ScriptLines = totalLines;
             TimeSpan elapsed = DateTime.Now - requestStart;
-            _paneControl.Log("REQUEST_DONE", elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture), Chars(totalReasoningChars), totalLines);
+            run.Pane.Control.Log("REQUEST_DONE", elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture), Chars(totalReasoningChars), totalLines);
         }
 
         // The presentation was closed: its object then answers every call with an error (0x80048010). It is not
@@ -1416,7 +1684,7 @@ namespace Pptcom
                 try
                 {
                     return await conversation.Llm.ChatAsync(messages, ToolsFor(conversation.Documents.Count > 0), p =>
-                        _paneControl.SetStatus("STATUS_TURN", turn, Chars(p.ReasoningChars), Chars(p.ContentChars + p.ToolArgChars),
+                        run.Pane.Control.SetStatus("STATUS_TURN", turn, Chars(p.ReasoningChars), Chars(p.ContentChars + p.ToolArgChars),
                                                p.Elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture)),
                         ct).ConfigureAwait(true);
                 }
@@ -1424,9 +1692,9 @@ namespace Pptcom
                 {
                     run.ServerErrors++;
                     LogToFile(Invariant($"!!! server error at turn {turn}: {ex.Message}"));
-                    _paneControl.Log("AI_SERVER_ERROR", ServerFailureText(ex, conversation.Llm));
-                    _paneControl.SetStatus("STATUS_SERVER_ERROR", turn);
-                    await WaitForRetryAsync(ct).ConfigureAwait(true); // throws OperationCanceledException on 中止
+                    run.Pane.Control.Log("AI_SERVER_ERROR", ServerFailureText(ex, conversation.Llm));
+                    run.Pane.Control.SetStatus("STATUS_SERVER_ERROR", turn);
+                    await WaitForRetryAsync(run, ct).ConfigureAwait(true); // throws OperationCanceledException on 中止
                     LogToFile(Invariant($"(retry requested by the user, turn {turn})"));
                 }
             }
@@ -1447,34 +1715,34 @@ namespace Pptcom
             };
         }
 
-        private void LogTurn(int turn, ChatReply reply)
+        private static void LogTurn(RunRecord run, int turn, ChatReply reply)
         {
             LogToFile(Invariant($"--- turn {turn} ({reply.Elapsed.TotalSeconds:F0} s, reasoning {reply.Reasoning.Length} chars, finish {reply.FinishReason}") +
                       Invariant($", first token {Secs(reply.FirstToken)} s, first output {Secs(reply.FirstOutput)} s, prompt {reply.PromptTokens} tok") +
                       Invariant($", completion {reply.CompletionTokens} tok)") +
                       "\nreasoning:\n" + reply.Reasoning + "\ncontent:\n" + reply.Content);
-            LogTurnSize(turn, reply);
+            LogTurnSize(run, turn, reply);
         }
 
         // The prompt passed ScriptElisionPromptTokens: older scripts and docread results leave the conversation.
-        private void ShortenConversation(List<ChatMessage> messages, ChatReply reply)
+        private static void ShortenConversation(RunRecord run, List<ChatMessage> messages, ChatReply reply)
         {
             int elided = ElideOldScripts(messages, KeepRecentScripts);
             if (elided > 0)
             {
-                _paneControl.Log("SCRIPTS_ELIDED", elided);
+                run.Pane.Control.Log("SCRIPTS_ELIDED", elided);
                 LogToFile(Invariant($"(prompt {reply.PromptTokens} tok > {ScriptElisionPromptTokens}: {elided} older pptcom scripts replaced by a comment)"));
             }
             int docReads = ElideOldDocReads(messages, KeepRecentScripts);
             if (docReads > 0)
             {
-                _paneControl.Log("DOC_READS_ELIDED", docReads);
+                run.Pane.Control.Log("DOC_READS_ELIDED", docReads);
                 LogToFile(Invariant($"(prompt {reply.PromptTokens} tok > {ScriptElisionPromptTokens}: {docReads} older docread results cut to their first line)"));
             }
         }
 
         // The turn's tool calls and their results; the renderings they made follow on a user message.
-        private async Task RunToolCallsAsync(ComProxyEngine engine, List<string> knownIds, ChatReply reply, int turn, RunRecord run,
+        private static async Task RunToolCallsAsync(ComProxyEngine engine, List<string> knownIds, ChatReply reply, int turn, RunRecord run,
                                              List<ChatMessage> messages, Action<int> countLines, CancellationToken ct)
         {
             List<SlideImage> renderings = [];
@@ -1483,9 +1751,9 @@ namespace Pptcom
                 // Checked between tool calls only: a pptcom script in flight runs to its
                 // end (or first error) so the deck is never left mid-statement.
                 ct.ThrowIfCancellationRequested();
-                _paneControl.SetStatus("STATUS_TOOL_RUNNING", turn, call.Name);
+                run.Pane.Control.SetStatus("STATUS_TOOL_RUNNING", turn, call.Name);
                 // run.ScriptLines kept current: a cancelled request's summary says whether anything ran.
-                ToolOutcome outcome = await RunToolAsync(engine, knownIds, call, countLines).ConfigureAwait(true);
+                ToolOutcome outcome = await RunToolAsync(run, engine, knownIds, call, countLines).ConfigureAwait(true);
                 System.Text.StringBuilder inventoryLog = new();
                 foreach (KeyValuePair<string, string> r in outcome.Renders)
                 {
@@ -1511,7 +1779,7 @@ namespace Pptcom
                 }
                 messages.Add(ChatMessage.ToolResult(call.Id, outcome.Text));
                 string firstLine = outcome.Text.Split('\n')[0];
-                _paneControl.Log("TOOL_RESULT", turn, call.Name, firstLine);
+                run.Pane.Control.Log("TOOL_RESULT", turn, call.Name, firstLine);
                 run.ToolLines.Add(Invariant($"[{turn}] {call.Name} -> {firstLine}"));
                 LogToFile("--- tool " + call.Name + " args:\n" + call.Arguments + "\nresult:\n" + outcome.Text +
                           (inventoryLog.Length > 0 ? "\n(shape lists sent with the renderings:)" + inventoryLog : ""));
@@ -1644,7 +1912,7 @@ namespace Pptcom
             }
         }
 
-        private async Task<ToolOutcome> RunToolAsync(ComProxyEngine engine, List<string> knownIds, ToolCall call, Action<int> countLines)
+        private static async Task<ToolOutcome> RunToolAsync(RunRecord run, ComProxyEngine engine, List<string> knownIds, ToolCall call, Action<int> countLines)
         {
             JObject args;
             try
@@ -1659,7 +1927,7 @@ namespace Pptcom
             return call.Name switch
             {
                 "pptread" => ReadSlidesTool(engine, args),
-                "docread" => await ReadDocumentToolAsync(args).ConfigureAwait(true),
+                "docread" => await ReadDocumentToolAsync(run, args).ConfigureAwait(true),
                 "zimage" => await ImageToolAsync(engine, knownIds, args).ConfigureAwait(true),
                 "pptcom" => await ScriptToolAsync(engine, knownIds, args, countLines).ConfigureAwait(true),
                 _ => new ToolOutcome("Unknown tool: " + call.Name),
@@ -1690,14 +1958,15 @@ namespace Pptcom
         }
 
         // docread: a part of an attached document, its images, or pages of a PDF as they appear.
-        private async Task<ToolOutcome> ReadDocumentToolAsync(JObject args)
+        private static async Task<ToolOutcome> ReadDocumentToolAsync(RunRecord run, JObject args)
         {
-            List<AttachedDocument> docs = _conversation is not null ? _conversation.Documents : [];
+            Conversation? c = run.Conversation;
+            List<AttachedDocument> docs = c is not null ? c.Documents : [];
             ToolOutcome o = new("");
             string pageSpec = ((string?)args["page"] ?? "").Trim();
             if (pageSpec.Length > 0)
             {
-                o.Text = await ReadPdfPagesAsync(docs, (string?)args["doc"] ?? "", pageSpec, o.Renders).ConfigureAwait(true);
+                o.Text = await ReadPdfPagesAsync(run.Pane.Control, docs, (string?)args["doc"] ?? "", pageSpec, o.Renders).ConfigureAwait(true);
             }
             else
             {
@@ -1706,9 +1975,9 @@ namespace Pptcom
             // the previews stay for later looks and go with the conversation
             foreach (KeyValuePair<string, string> r in o.Renders)
             {
-                if (_conversation is not null && !_conversation.TempFiles.Contains(r.Value))
+                if (c is not null && !c.TempFiles.Contains(r.Value))
                 {
-                    _conversation.TempFiles.Add(r.Value);
+                    c.TempFiles.Add(r.Value);
                 }
             }
 
@@ -1802,7 +2071,7 @@ namespace Pptcom
         // slide renderings - for scans, charts and text that did not extract cleanly.
         private const int PdfPageMaxSide = 1600;
 
-        private async Task<string> ReadPdfPagesAsync(IList<AttachedDocument> docs, string id, string spec, List<KeyValuePair<string, string>> renders)
+        private static async Task<string> ReadPdfPagesAsync(AiTaskPaneControl ui, IList<AttachedDocument> docs, string id, string spec, List<KeyValuePair<string, string>> renders)
         {
             AttachedDocument? doc = docs.FirstOrDefault(d => string.Equals(d.Id, id.Trim(), StringComparison.OrdinalIgnoreCase));
             if (doc is null)
@@ -1825,7 +2094,7 @@ namespace Pptcom
             Dictionary<int, byte[]> drawn;
             try
             {
-                drawn = await _paneControl.RenderPdfPagesAsync(doc.Source, pages, PdfPageMaxSide, errors).ConfigureAwait(true);
+                drawn = await ui.RenderPdfPagesAsync(doc.Source, pages, PdfPageMaxSide, errors).ConfigureAwait(true);
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
@@ -1942,10 +2211,10 @@ namespace Pptcom
         // One line per turn in the pane: how big the request was and what came back, e.g.
         // "ターン3: 入力 5,632 tok / 出力 9,410 tok = 推論 26.6k字 + 本文 3.1k字 / 91秒" in Japanese.
         // Token counts come from the server's usage; "-" when it did not report them.
-        private void LogTurnSize(int turn, ChatReply reply)
+        private static void LogTurnSize(RunRecord run, int turn, ChatReply reply)
         {
             int written = reply.Content.Length + reply.ToolCalls.Sum(static c => (c.Arguments ?? "").Length);
-            _paneControl.Log("TURN_SIZE", turn, Tokens(reply.PromptTokens), Tokens(reply.CompletionTokens),
+            run.Pane.Control.Log("TURN_SIZE", turn, Tokens(reply.PromptTokens), Tokens(reply.CompletionTokens),
                              Chars(reply.Reasoning.Length), Chars(written), reply.Elapsed.TotalSeconds.ToString("F0", CultureInfo.InvariantCulture));
         }
 

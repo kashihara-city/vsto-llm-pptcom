@@ -74,7 +74,7 @@ const logKinds = {
   AI_DECK_CLOSED: "stopped",
   // a request refused before it started: its block ends with the reason
   NO_ENDPOINT_OR_MODEL: "stopped", DOC_STILL_CONVERTING: "stopped",
-  HAND_EDITS: "handEdits", NEW_CONVERSATION: "reset", NEW_CONVERSATION_OTHER_DECK: "divider",
+  HAND_EDITS: "handEdits", NEW_CONVERSATION: "reset",
   READY: "plain", NO_ENDPOINT_HELP: "plain",
 };
 
@@ -124,10 +124,6 @@ function onLog(m) {
       work = null;
       log.textContent = "";
       add(div("divider", i18n.t("NEW_CHAT")));
-      return;
-    case "divider":   // the conversation ended because another presentation is active
-      if (work) finishWork("stopped");
-      add(div("divider", text));
       return;
     case "plain":
       add(div("note", text));
@@ -194,22 +190,26 @@ function fill(select, items, selected) {
 
 // ---- messages from the add-in -------------------------------------------------------------------
 
-function setBusy(on) {
+// `elsewhere`: the request runs in another window's pane (each window has its own). This one waits meanwhile: nothing
+// to send or stop here.
+function setBusy(on, elsewhere) {
   busy = on;
   sending = false;
   cancelling = false;
+  const waiting = on && !!elsewhere;
   document.body.classList.toggle("busy", on);
-  action.disabled = false;
-  action.title = i18n.t(on ? "STOP" : "SEND_TITLE");
-  action.setAttribute("aria-label", i18n.t(on ? "STOP" : "SEND"));
+  action.disabled = waiting;
+  action.title = i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND_TITLE");
+  action.setAttribute("aria-label", i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND"));
   for (const el of [endpoint, $("fetch"), chatModel, imageModel, $("apikey"), $("new-chat"), $("save-progress"), $("external-control")]) el.disabled = on;
+  if (waiting) $("status").textContent = i18n.t("STATUS_BUSY_ELSEWHERE");
   if (!on) { $("status").textContent = ""; $("retry-bar").classList.remove("show"); if (work) finishWork("done"); }
 }
 
 const handlers = {
   log: m => onLog(m),
   status: m => { $("status").textContent = m.code ? i18n.t(m) : ""; },
-  busy: m => setBusy(!!m.value),
+  busy: m => setBusy(!!m.value, !!m.elsewhere),
   retry: m => $("retry-bar").classList.toggle("show", !!m.value),
   // The settings stay folded once an endpoint is set; with none, they open so it can be entered.
   endpoint: m => { endpoint.value = m.value || ""; $("settings").open = !endpoint.value; updateSummary(); },

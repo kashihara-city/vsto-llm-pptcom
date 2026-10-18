@@ -186,12 +186,21 @@ namespace Pptcom.ComProxy
 
         private readonly object _application;
 
-        public ComProxyEngine(object rootApplication, Func<string, string, Task<byte[]>>? imageGenerator = null)
+        // `presentation`: the deck the scripts' ActivePresentation is (the add-in gives its window's); without one,
+        // the application's active deck (BindPresentation).
+        public ComProxyEngine(object rootApplication, Func<string, string, Task<byte[]>>? imageGenerator = null, object? presentation = null)
         {
             _application = rootApplication;
             _handles[ApplicationId] = rootApplication;
             _imageGenerator = imageGenerator;
-            BindPresentation();
+            if (presentation is not null)
+            {
+                _handles[PresentationId] = presentation;
+            }
+            else
+            {
+                BindPresentation();
+            }
         }
 
         // The two predefined variables, named as in PowerPoint VBA. ActivePresentation is bound once

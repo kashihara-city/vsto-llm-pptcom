@@ -1,5 +1,8 @@
 {
   "PANE_TITLE": "AI Assistant",
+  "RIBBON_GROUP": "AI Assistant",
+  "RIBBON_PANE": "工作窗格",
+  "RIBBON_PANE_TIP": "顯示或隱藏此視窗的 AI Assistant 工作窗格。",
   "NOTE": "({0})",
   "LIST_SEPARATOR": "、",
   "DETAIL_SEPARATOR": "，",
@@ -64,7 +67,6 @@
   "USER_REQUEST": "{0}",
   "SENT_FROM_OUTSIDE": "由其他程式傳送",
   "NEW_CONVERSATION": "已開始新對話",
-  "NEW_CONVERSATION_OTHER_DECK": "新對話：這是另一份簡報，因此不沿用先前的要求",
   "HAND_EDITS": "自上次要求之後，{0}",
   "HAND_EDITS_SLIDES": "投影片 {0} 已被手動變更",
   "HAND_EDITS_REMOVED": "已刪除 {0} 張投影片",
@@ -80,6 +82,7 @@
   "STATUS_TURN": "第 {0} 回合：推理 {1} / 內文 {2} / {3}",
   "STATUS_TOOL_RUNNING": "第 {0} 回合：正在執行 {1}...",
   "STATUS_SERVER_ERROR": "第 {0} 回合：伺服器錯誤。等待重試",
+  "STATUS_BUSY_ELSEWHERE": "另一個視窗正在執行要求",
   "STATUS_CANCELLING": "正在停止...",
   "STATUS_RESENDING": "正在重新傳送相同的內容...",
 

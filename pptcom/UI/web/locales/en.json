@@ -1,5 +1,8 @@
 {
   "PANE_TITLE": "AI Assistant",
+  "RIBBON_GROUP": "AI Assistant",
+  "RIBBON_PANE": "Task Pane",
+  "RIBBON_PANE_TIP": "Show or hide the AI Assistant task pane of this window.",
   "NOTE": "({0})",
   "LIST_SEPARATOR": ", ",
   "DETAIL_SEPARATOR": ", ",
@@ -64,7 +67,6 @@
   "USER_REQUEST": "{0}",
   "SENT_FROM_OUTSIDE": "Sent from another program",
   "NEW_CONVERSATION": "Started a new chat",
-  "NEW_CONVERSATION_OTHER_DECK": "New chat: this is another presentation, so the earlier requests are not carried over",
   "HAND_EDITS": "Since the previous request, {0}",
   "HAND_EDITS_SLIDES": "slide(s) {0} were changed by hand",
   "HAND_EDITS_REMOVED": "{0} slide(s) were deleted",
@@ -80,6 +82,7 @@
   "STATUS_TURN": "Turn {0}: reasoning {1} / text {2} / {3}",
   "STATUS_TOOL_RUNNING": "Turn {0}: running {1}...",
   "STATUS_SERVER_ERROR": "Turn {0}: server error. Waiting for Retry",
+  "STATUS_BUSY_ELSEWHERE": "A request is running in another window",
   "STATUS_CANCELLING": "Stopping...",
   "STATUS_RESENDING": "Sending the same request again...",
 

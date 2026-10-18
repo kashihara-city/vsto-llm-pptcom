@@ -14,7 +14,8 @@ namespace Pptcom
     // Every call is refused unless the user turned on 外部からの操作を許可 in the task pane
     // (AddinSettings.ExternalControl, off by default): with it on, any program running as this user
     // could send requests with the stored API key and change the open decks. A request sent this way
-    // shows in the task pane like a typed one, marked as coming from another program.
+    // shows in the task pane like a typed one, marked as coming from another program. Each window has its own
+    // pane and conversation: Send, NewConversation, Attach and Documents work on the window in front.
     [ComVisible(true)]
     [Guid("5D551056-7DCE-47CA-9023-BA48697065BC")]
     [InterfaceType(ComInterfaceType.InterfaceIsDual)]

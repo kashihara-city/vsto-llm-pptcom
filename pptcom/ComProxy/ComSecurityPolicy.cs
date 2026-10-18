@@ -81,7 +81,8 @@ namespace Pptcom.ComProxy
 
         // Application's routes to the user's other open presentations and their windows. A request works on its
         // own deck only: ActivePresentation, and Application.ActivePresentation, which ComProxyEngine answers with
-        // that deck. (Windows, SlideShowWindow... of ActivePresentation itself stay open.)
+        // that deck. (Windows, SlideShowWindow... of ActivePresentation itself stay open.) Another deck reaches the
+        // model as a document: the user saves it and attaches it to the task pane (docread).
         private static readonly HashSet<string> OtherDeckMembers = new(StringComparer.OrdinalIgnoreCase)
         {
             "Presentations", "Windows", "ActiveWindow", "SlideShowWindows", "ProtectedViewWindows", "ActiveProtectedViewWindow",
@@ -152,7 +153,8 @@ namespace Pptcom.ComProxy
             if (BlockedMembersByType.TryGetValue(typeName, out HashSet<string> blocked) && blocked.Contains(member))
             {
                 return ReferenceEquals(blocked, OtherDeckMembers)
-                    ? "Application." + member + " (it reaches the user's other open presentations; this request works on ActivePresentation only)"
+                    ? "Application." + member + " (it reaches the user's other open presentations; this request works on ActivePresentation only. " +
+                      "To use another presentation, ask the user to save it and attach it to the task pane, then read it with docread)"
                     : typeName + "." + member;
             }
 

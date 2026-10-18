@@ -164,6 +164,7 @@
     <Compile Include="UI\DocumentFailedEventArgs.cs" />
     <Compile Include="UI\DocumentStartedEventArgs.cs" />
     <Compile Include="UI\Texts.cs" />
+    <Compile Include="UI\PaneRibbon.cs" />
     <!-- The task pane's page (HTML, CSS, scripts, the language files in locales\), inside the DLL rather than as
          files next to it: AiTaskPaneControl serves them to the WebView2 at https://pptcom.invalid/<path under UI\web\>,
          and Texts reads the language files for the text the add-in draws itself. -->

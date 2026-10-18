@@ -1,5 +1,8 @@
 {
   "PANE_TITLE": "AI Assistant",
+  "RIBBON_GROUP": "AI Assistant",
+  "RIBBON_PANE": "作業ウィンドウ",
+  "RIBBON_PANE_TIP": "このウィンドウの AI Assistant の作業ウィンドウを表示または非表示にします。",
   "NOTE": "({0})",
   "LIST_SEPARATOR": "・",
   "DETAIL_SEPARATOR": "、",
@@ -64,7 +67,6 @@
   "USER_REQUEST": "{0}",
   "SENT_FROM_OUTSIDE": "外部のプログラムから送信されました",
   "NEW_CONVERSATION": "新しい会話を始めました",
-  "NEW_CONVERSATION_OTHER_DECK": "新しい会話: 別のプレゼンテーションなので、前の依頼は引き継ぎません",
   "HAND_EDITS": "前回の依頼のあとに、{0}",
   "HAND_EDITS_SLIDES": "スライド {0} が手で変更されています",
   "HAND_EDITS_REMOVED": "スライドが {0} 枚削除されています",
@@ -80,6 +82,7 @@
   "STATUS_TURN": "ターン{0}: 推論 {1} / 本文 {2} / {3}",
   "STATUS_TOOL_RUNNING": "ターン{0}: {1} 実行中...",
   "STATUS_SERVER_ERROR": "ターン{0}: サーバエラー。再試行を待っています",
+  "STATUS_BUSY_ELSEWHERE": "別のウィンドウで依頼を実行しています",
   "STATUS_CANCELLING": "中止しています...",
   "STATUS_RESENDING": "同じ内容を送り直しています...",
 

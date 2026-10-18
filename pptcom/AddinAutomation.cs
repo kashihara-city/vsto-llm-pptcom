@@ -33,6 +33,11 @@ namespace Pptcom
                 throw new ArgumentException("request is empty", nameof(request));
             }
 
+            if (!_addin.HasWindow)
+            {
+                throw new InvalidOperationException("プレゼンテーションのウィンドウがありません。プレゼンテーションを開いてから使ってください。");
+            }
+
             if (_addin.IsBusy)
             {
                 throw new InvalidOperationException("実行中の依頼があります。IsBusy が False になってから送ってください。");
@@ -55,6 +60,11 @@ namespace Pptcom
         public void NewConversation()
         {
             RequireEnabled();
+            if (!_addin.HasWindow)
+            {
+                throw new InvalidOperationException("プレゼンテーションのウィンドウがありません。プレゼンテーションを開いてから使ってください。");
+            }
+
             if (_addin.IsBusy)
             {
                 throw new InvalidOperationException("実行中は新しい会話を始められません。");
@@ -78,6 +88,11 @@ namespace Pptcom
             if (string.IsNullOrWhiteSpace(path))
             {
                 throw new ArgumentException("path is empty", nameof(path));
+            }
+
+            if (!_addin.HasWindow)
+            {
+                throw new InvalidOperationException("プレゼンテーションのウィンドウがありません。プレゼンテーションを開いてから使ってください。");
             }
 
             if (_addin.IsBusy)

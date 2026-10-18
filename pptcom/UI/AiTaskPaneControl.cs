@@ -27,8 +27,9 @@ namespace Pptcom.UI
     internal sealed class AiTaskPaneControl : UserControl
     {
         private const string Origin = "https://pptcom.invalid/";
-        // The page shows its text in the add-in's language (Texts.Language), from locales/<language>.json.
-        private static string StartPage => Origin + "index.html?lang=" + Uri.EscapeDataString(Texts.Language);
+        // The page shows its text in the add-in's language (Texts.Language), from locales/<language>.json. `pane` is
+        // the window's (ThisAddIn.WindowPane.Hwnd), which the page does not use: it tells the panes apart in DevTools.
+        private readonly string _startPage;
         private const string ResourcePrefix = "pptcom.web/";
         private static readonly char[] QueryOrFragment = ['?', '#'];
         // 'wasm-unsafe-eval' lets the page compile WebAssembly (anydoc, PDF.js's image decoders); it does
@@ -69,8 +70,9 @@ namespace Pptcom.UI
         // The user removed an attached document (its id).
         public event EventHandler<TextEventArgs>? DocumentRemoved;
 
-        public AiTaskPaneControl()
+        public AiTaskPaneControl(string paneId)
         {
+            _startPage = Origin + "index.html?lang=" + Uri.EscapeDataString(Texts.Language) + "&pane=" + Uri.EscapeDataString(paneId);
             Dock = DockStyle.Fill;
             _web = new WebView2 { Dock = DockStyle.Fill };
             Controls.Add(_web);
@@ -131,7 +133,7 @@ namespace Pptcom.UI
                 core.NavigationStarting += (s, e) =>
                 {
                     // Only the page itself (the first navigation).
-                    if (_navigated || e.Uri != StartPage)
+                    if (_navigated || e.Uri != _startPage)
                     {
                         e.Cancel = true;
                     }
@@ -142,7 +144,7 @@ namespace Pptcom.UI
                 core.AddWebResourceRequestedFilter(Origin + "*", CoreWebView2WebResourceContext.All, CoreWebView2WebResourceRequestSourceKinds.All);
                 core.WebResourceRequested += (s, e) => e.Response = Serve(env, e.Request.Uri);
                 core.WebMessageReceived += OnWebMessage;
-                core.Navigate(StartPage);
+                core.Navigate(_startPage);
             }
             // No WebView2 Runtime, a profile folder that cannot be written, ...: the pane says so instead.
             catch (Exception ex) when (Guard.IsRecoverable(ex))
@@ -499,7 +501,12 @@ namespace Pptcom.UI
         // reply, a divider, or a note.
         public void Log(string code, params object[] args)
         {
-            JObject message = PaneText.Of(code, args).ToJson();
+            LogText(PaneText.Of(code, args));
+        }
+
+        public void LogText(PaneText text)
+        {
+            JObject message = text.ToJson();
             message["type"] = "log";
             Post(message);
         }
@@ -523,10 +530,11 @@ namespace Pptcom.UI
         }
 
         // While busy the send button turns into the stop button and the settings are locked
-        // (no switching endpoint/model in the middle of a request).
-        public void SetBusy(bool busy)
+        // (no switching endpoint/model in the middle of a request). `elsewhere`: the request runs in another
+        // window's pane; this one only waits (no stop button, nothing to send meanwhile).
+        public void SetBusy(bool busy, bool elsewhere = false)
         {
-            Post(new JObject { ["type"] = "busy", ["value"] = busy });
+            Post(new JObject { ["type"] = "busy", ["value"] = busy, ["elsewhere"] = elsewhere });
         }
     }
 }

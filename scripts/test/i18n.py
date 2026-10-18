@@ -31,7 +31,7 @@ JS_CALLS = re.compile(r'\bi18n\.(?:t|fill)\(')
 # range may be written with).
 ALLOWED = {
     'pptcom/AddinAutomation.cs': ['外部からの操作は無効です', '実行中の依頼があります', '実行中は新しい会話を始められません', '実行中は資料を添付できません',
-                                  '資料を読み取っています'],
+                                  '資料を読み取っています', 'プレゼンテーションのウィンドウがありません'],
     'pptcom/ThisAddIn.cs': ['ファイルが見つかりません: ', '50MB を超えるファイルは添付できません: '],
     'pptcom/ComProxy/DeckReader.cs': ['〜'],
 }
