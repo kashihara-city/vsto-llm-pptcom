@@ -156,7 +156,7 @@ C# のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.
 
 ### 自動テスト
 
-どれも PowerPoint と LLM なしで動き、GitHub Actions の `check.yml`（手で流す）と、リリースの前の `release.yml` でも流します。C# の 2 つは MSBuild で組んでから実行します。ほかに Python 3 と Node.js が要ります。
+どれも PowerPoint と LLM なしで動き、GitHub Actions の `ci.yml` の check ジョブでも流します（手で流したときと、タグを push したとき）。C# の 2 つは MSBuild で組んでから実行します。ほかに Python 3 と Node.js が要ります。
 
 | 実行するもの | 調べること |
 |---|---|
@@ -184,7 +184,7 @@ SBOM の検査（`scripts/test/sbom.py`）は「リリースと検証」を見�
 
 ## リリースと検証
 
-タグ `v*` を push すると、GitHub Actions（`.github/workflows/release.yml`）がそのタグのソースから MSI を組み、CycloneDX 1.6 の SBOM を作って、両方に証明（attestation）を付けてから GitHub Release に載せます。手で流すと（workflow_dispatch）、そのときのコミットで同じことをして、Release には載せません。受け取った MSI は、次のコマンドで確かめられます。
+タグ `v*` を push すると、GitHub Actions（`.github/workflows/ci.yml`）が検査（check ジョブ）のあと、そのタグのソースから MSI を組み、CycloneDX 1.6 の SBOM を作って、両方に証明（attestation）を付けてから GitHub Release に載せます（release ジョブ）。手で流すとき `msi` を選ぶと（`gh workflow run ci.yml -f msi=true`）、そのときのコミットで同じことをして、Release には載せません。受け取った MSI は、次のコマンドで確かめられます。
 
 ```
 gh attestation verify vsto-llm-pptcom-<版>.msi --repo kashihara-city/vsto-llm-pptcom

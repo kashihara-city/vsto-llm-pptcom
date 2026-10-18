@@ -1,6 +1,6 @@
 name: Prepare the build
 description: >-
-  What building the add-in needs on the windows-2025 image, for release.yml and check.yml: MSBuild (found and
+  What building the add-in needs on the windows-2025 image, for both jobs of ci.yml: MSBuild (found and
   written to MSBUILD), the Rust toolchain that builds anydoc, the VSTO runtime, the Office PIAs (checked) and a
   throwaway signing certificate for the ClickOnce manifests. Run it after checking out the source.
 runs:

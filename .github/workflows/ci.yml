@@ -1,42 +1,45 @@
-# Pushing a tag v* builds the release MSI on a GitHub-hosted runner from the tagged source - the
-# secrets check, the parser tests, then scripts/build/build.ps1 - makes its CycloneDX SBOM, attests
-# both (build provenance of the MSI, and the SBOM of the MSI) and publishes them in a GitHub Release.
-# Run by hand (workflow_dispatch) it does the same for the current commit, attestations included,
-# but publishes no Release. Tests that need PowerPoint (ComScriptRunner against a real deck, the
-# add-in driven by scripts/test/drive_addin.ps1) are run on a development PC before the tag; the
-# runners have no Office.
+# Checks and builds the source, and makes the release from a tag. Two jobs:
+#   check    the checks, the tests and the builds (Debug), with a read-only token. Run by hand
+#            (gh workflow run ci.yml --ref <branch>) it checks that branch; nothing else starts it on its own (not a
+#            push, and pull requests are not taken).
+#   release  after the check job, with the write permissions: scripts/build/build.ps1 builds the MSI (Release), then
+#            its CycloneDX SBOM, the attestations of both (build provenance of the MSI, and the SBOM of the MSI), and
+#            for a tag v* the GitHub Release. Run by hand with `msi` on (gh workflow run ci.yml --ref <branch> -f msi=true)
+#            it does the same for that commit, attestations included, but publishes no Release.
+# A tag v* runs both. Tests that need PowerPoint (ComScriptRunner against a real deck, the add-in driven by
+# scripts/test/drive_addin.ps1) are run on a development PC before the tag; the runners have no Office.
 #
-# Not here yet: a signing certificate the organization trusts. Until then the VSTO manifests are
-# signed with a certificate made on the runner for that run only (the MSI trusts whatever key
-# signed them), so no secret is needed.
-name: Release
+# Not here yet: a signing certificate the organization trusts. Until then the VSTO manifests are signed with a
+# certificate made on the runner for that run only (the MSI trusts whatever key signed them), so no secret is needed.
+name: CI
 
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      msi:
+        description: "Also build the MSI and its SBOM, and attest them (no Release)"
+        type: boolean
+        default: false
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  release:
-    name: Build, attest and publish the MSI
-    # One image for every release: the PIAs and the VSTO tools come from the image's Visual Studio,
-    # and they differ between images (windows-2022's Visual Studio 2022 and windows-2025's Visual
-    # Studio 2026 ship differently signed copies of the same PIAs), so the MSI does too. The image
-    # itself still updates weekly; the toolchain step records which one built it.
+  check:
+    name: Check, build and test
+    # One image for every run: the PIAs and the VSTO tools come from the image's Visual Studio, and they differ
+    # between images (windows-2022's Visual Studio 2022 and windows-2025's Visual Studio 2026 ship differently signed
+    # copies of the same PIAs), so the MSI does too. The image itself still updates weekly; the toolchain step records
+    # which one built it.
     runs-on: windows-2025
     timeout-minutes: 30
-    permissions:
-      contents: write       # the GitHub Release (tags only)
-      id-token: write       # the attestations' signing identity
-      attestations: write
 
     steps:
       - name: Check out the source
@@ -98,27 +101,6 @@ jobs:
         # MSBuild, Rust, the VSTO runtime, the PIAs and a throwaway signing certificate: .github/actions/build-setup.
         uses: ./.github/actions/build-setup
 
-      - name: Verify the tag matches the committed versions
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
-        env:
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $tagMatch = [regex]::Match($env:TAG_NAME, '^v(?<version>\d+\.\d+\.\d+)$')
-          if (-not $tagMatch.Success) { throw "Tag '$($env:TAG_NAME)' must have the form v1.2.3." }
-          $version = $tagMatch.Groups["version"].Value
-          [xml]$proj = Get-Content -LiteralPath "pptcom/pptcom.csproj" -Raw
-          $appVersion = ($proj.Project.PropertyGroup | ForEach-Object { $_.ApplicationVersion } | Where-Object { $_ } | Select-Object -First 1)
-          $info = Get-Content -LiteralPath "pptcom/Properties/AssemblyInfo.cs" -Raw
-          $asmVersion = [regex]::Match($info, 'AssemblyVersion\("(?<v>[^"]+)"\)').Groups["v"].Value
-          $fileVersion = [regex]::Match($info, 'AssemblyFileVersion\("(?<v>[^"]+)"\)').Groups["v"].Value
-          $expected = "$version.0"
-          if ($appVersion -ne $expected -or $asmVersion -ne $expected -or $fileVersion -ne $expected) {
-            throw "Tag does not match committed versions (tag=$version, ApplicationVersion=$appVersion, AssemblyVersion=$asmVersion, AssemblyFileVersion=$fileVersion)."
-          }
-          "Version $version"
-
       - name: Build and run the parser tests
         shell: pwsh
         run: |
@@ -153,14 +135,69 @@ jobs:
           & $env:MSBUILD scripts\test\ComScriptRunner\ComScriptRunner.csproj -restore -p:Configuration=Debug -p:Platform=AnyCPU -nologo -v:minimal "-flp:logfile=$env:RUNNER_TEMP\runner.log;warningsonly"
           if ($LASTEXITCODE -ne 0) { throw "ComScriptRunner build failed" }
 
+      - name: Build the add-in
+        shell: pwsh
+        run: |
+          # Debug, as a developer builds it (build.ps1 builds Release for the MSI in the release job).
+          & $env:MSBUILD pptcom\pptcom.csproj -restore -p:Configuration=Debug -p:Platform=AnyCPU -nologo -v:minimal "-flp:logfile=$env:RUNNER_TEMP\addin.log;warningsonly"
+          if ($LASTEXITCODE -ne 0) { throw "add-in build failed" }
+
+      - name: Check the build warnings
+        shell: pwsh
+        run: |
+          # Warnings are errors, except CS8032 (an analyzer that cannot be created) for the one known analyzer:
+          # another one would be an analyzer whose rules silently stopped running.
+          python -X utf8 scripts/test/build-warnings.py "$env:RUNNER_TEMP\tests.log" "$env:RUNNER_TEMP\stream.log" "$env:RUNNER_TEMP\runner.log" "$env:RUNNER_TEMP\addin.log"
+          if ($LASTEXITCODE -ne 0) { throw "a build had a warning other than the known CS8032" }
+
+  release:
+    name: Build, attest and publish the MSI
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.msi)
+    runs-on: windows-2025   # the same image as the check job (see there)
+    timeout-minutes: 30
+    permissions:
+      contents: write       # the GitHub Release (tags only)
+      id-token: write       # the attestations' signing identity
+      attestations: write
+
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Prepare the build
+        # MSBuild, Rust, the VSTO runtime, the PIAs and a throwaway signing certificate: .github/actions/build-setup.
+        uses: ./.github/actions/build-setup
+
+      - name: Verify the tag matches the committed versions
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tagMatch = [regex]::Match($env:TAG_NAME, '^v(?<version>\d+\.\d+\.\d+)$')
+          if (-not $tagMatch.Success) { throw "Tag '$($env:TAG_NAME)' must have the form v1.2.3." }
+          $version = $tagMatch.Groups["version"].Value
+          [xml]$proj = Get-Content -LiteralPath "pptcom/pptcom.csproj" -Raw
+          $appVersion = ($proj.Project.PropertyGroup | ForEach-Object { $_.ApplicationVersion } | Where-Object { $_ } | Select-Object -First 1)
+          $info = Get-Content -LiteralPath "pptcom/Properties/AssemblyInfo.cs" -Raw
+          $asmVersion = [regex]::Match($info, 'AssemblyVersion\("(?<v>[^"]+)"\)').Groups["v"].Value
+          $fileVersion = [regex]::Match($info, 'AssemblyFileVersion\("(?<v>[^"]+)"\)').Groups["v"].Value
+          $expected = "$version.0"
+          if ($appVersion -ne $expected -or $asmVersion -ne $expected -or $fileVersion -ne $expected) {
+            throw "Tag does not match committed versions (tag=$version, ApplicationVersion=$appVersion, AssemblyVersion=$asmVersion, AssemblyFileVersion=$fileVersion)."
+          }
+          "Version $version"
+
       - name: Build the MSI
         id: msi
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          # build.ps1 builds the add-in (Release) itself; restore its NuGet packages first.
-          & $env:MSBUILD pptcom\pptcom.csproj -t:Restore -p:Configuration=Release -p:Platform=AnyCPU -nologo -v:minimal
-          if ($LASTEXITCODE -ne 0) { throw "restore failed" }
+          # build.ps1 restores and builds the add-in (Release) itself.
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build\build.ps1 -WarningsLog "$env:RUNNER_TEMP\addin.log"
           if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed" }
           Get-ChildItem temp\build\pptcom\bin\Release -File | ForEach-Object { "{0,-55} {1,10:N0}" -f $_.Name, $_.Length }
@@ -177,11 +214,11 @@ jobs:
       - name: Check the build warnings
         shell: pwsh
         run: |
-          # As in check.yml, before anything is attested or published: warnings are errors, except CS8032 (an
-          # analyzer that cannot be created) for the one known analyzer; another one would be an analyzer whose
-          # rules silently stopped running.
-          python -X utf8 scripts/test/build-warnings.py "$env:RUNNER_TEMP\tests.log" "$env:RUNNER_TEMP\stream.log" "$env:RUNNER_TEMP\runner.log" "$env:RUNNER_TEMP\addin.log"
-          if ($LASTEXITCODE -ne 0) { throw "a build had a warning other than the known CS8032" }
+          # As in the check job, before anything is attested or published: the warnings of the Release build of the
+          # add-in are only the known CS8032 (an analyzer that cannot be created); another one would be an analyzer
+          # whose rules silently stopped running.
+          python -X utf8 scripts/test/build-warnings.py "$env:RUNNER_TEMP\addin.log"
+          if ($LASTEXITCODE -ne 0) { throw "the build had a warning other than the known CS8032" }
 
       - name: Make and check the SBOM
         id: sbom
