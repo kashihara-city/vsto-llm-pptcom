@@ -6,7 +6,6 @@ PowerPoint で開いているプレゼンテーションを、LLM が作った�
 主要依存ライブラリのバージョンは以下の通りです。npm への依存はありません。
 - PDF.js 6.4.299
 - anydoc 0.2.4
-- Newtonsoft.Json 13.0.3
 
 ## 動作環境
 
@@ -57,49 +56,45 @@ PowerPoint で開いているプレゼンテーションを、LLM が作った�
 
 ### レジストリ
 
-アドインの設定は以下のレジストリに保存します。
+```
+HKEY_CURRENT_USER\Software\
+├─ KashiharaCity\pptcom\                作業ウィンドウの設定（アドインが書く）
+│  ├─ endpoint, chat_model, image_model 接続先とモデル（文字列）
+│  ├─ save_progress, external_control   2 つのスイッチ（0/1）
+│  └─ Installer\                        インストーラーが自分の部品の有無を見る目印（MSI が書く）
+│     └─ Files, WebView2LoaderX86, WebView2LoaderX64
+└─ Microsoft\                           ここから下は Office と VSTO が場所を決めているもの
+   ├─ Office\PowerPoint\Addins\pptcom\  起動時にアドインを読み込む登録（MSI が書く）
+   │  └─ Description, FriendlyName, LoadBehavior (3), Manifest (file:///.../pptcom.vsto|vstolocal)
+   ├─ VSTO\Security\Inclusion\{9E192468-0F34-4BCE-9263-052B3358849B}\
+   │  └─ Url, PublicKey                 VSTO の信頼済み一覧（MSI が書く）
+   ├─ VSTO\SolutionMetadata\            読み込んだ .vsto ごとの情報（VSTO が書く）
+   └─ Office\16.0\PowerPoint\AddInLoadTimes\
+      └─ pptcom                         読み込みにかかった時間（Office が書く）
+```
 
-| キー（`HKEY_CURRENT_USER\Software\…`） | 値 | 内容 | 書くもの |
-|---|---|---|---|
-| `KashiharaCity\pptcom` | `endpoint`、`chat_model`、`image_model`（文字列）、`save_progress`、`external_control`（0/1） | 作業ウィンドウの設定（接続先、モデル、2 つのスイッチ） | アドイン（設定を変えたとき） |
-| `KashiharaCity\pptcom\Installer` | `Files`、`WebView2LoaderX86`、`WebView2LoaderX64` | インストーラーが自分の部品の有無を判定するための目印 | MSI |
-
-次のキーは、Office と VSTO が場所を決めているものです。
-
-| キー（`HKEY_CURRENT_USER\Software\…`） | 値 | 内容 | 書くもの |
-|---|---|---|---|
-| `Microsoft\Office\PowerPoint\Addins\pptcom` | `Description`、`FriendlyName`、`LoadBehavior`（3）、`Manifest`（`file:///…/pptcom.vsto\|vstolocal`） | PowerPoint の起動時にアドインを読み込む登録。PowerPoint はこの場所でアドインを探す | MSI |
-| `Microsoft\VSTO\Security\Inclusion\{9E192468-0F34-4BCE-9263-052B3358849B}` | `Url`（上の .vsto）、`PublicKey`（.vsto に署名した証明書の公開鍵） | VSTO の信頼済み一覧。この .vsto をこの鍵の署名で確認なしに読み込ませる（証明書をストアに入れる必要はない） | MSI |
-| `Microsoft\VSTO\SolutionMetadata` | 読み込んだ .vsto の URL ごとの情報 | VSTO ランタイムが自分で記録する | VSTO |
-| `Microsoft\Office\16.0\PowerPoint\AddInLoadTimes` | `pptcom` | アドインの読み込みにかかった時間 | Office |
-
+信頼済み一覧は、`Url` の .vsto を、`PublicKey`（.vsto に署名した証明書の公開鍵）の署名なら確認なしに読み込ませます。証明書をストアに入れる必要はありません。
 
 ### `%LOCALAPPDATA%\KashiharaCity\pptcom\`
 
-`app\`（MSI が置く。アンインストールで消える）:
+```
+%LOCALAPPDATA%\KashiharaCity\pptcom\
+├─ app\                          アドインのファイル（MSI が置き、アンインストールで消える）
+│  ├─ pptcom.vsto, pptcom.dll.manifest   VSTO が読み込むための署名付きの設定
+│  ├─ pptcom.dll                 アドイン本体（Newtonsoft.Json、WebView2 SDK、作業ウィンドウの画面、anydoc、PDF.js を含む）
+│  ├─ Microsoft.Office.Tools.Common.v4.0.Utilities.dll   VSTO の部品
+│  ├─ runtimes\win-x86\native\WebView2Loader.dll
+│  ├─ runtimes\win-x64\native\WebView2Loader.dll         WebView2 の読み込み用（PowerPoint のビット数に合うほう）
+│  └─ THIRD-PARTY-NOTICES.md     同梱している第三者のライセンス
+├─ temp\                         アドインが書く一時ファイル（PowerPoint を閉じていれば、いつ消してもよい）
+│  ├─ WebView2\                  作業ウィンドウの閲覧データ
+│  └─ work\                      スライドの描画、生成した画像、資料の画像、デッキの既定値を測るためのコピー
+├─ session.log                ＊ 依頼、モデルの推論と応答、ツールの実行結果
+├─ com_usage.jsonl            ＊ 実行した PowerPoint の操作
+└─ generated-pptx\addin_<日時>\ ＊ 依頼ごとのデッキのコピー、スライドの画像、記録、添付した資料から読み取った文字
+```
 
-| ファイル | 内容 |
-|---|---|
-| `pptcom.vsto`、`pptcom.dll.manifest` | VSTO がアドインを読み込むための署名付きの設定ファイル |
-| `pptcom.dll` | アドイン本体（Newtonsoft.Json と WebView2 SDK、作業ウィンドウの画面、資料の読み取りに使う anydoc と PDF.js を含む） |
-| `Microsoft.Office.Tools.Common.v4.0.Utilities.dll` | VSTO の部品 |
-| `runtimes\win-x86\native\WebView2Loader.dll`、`runtimes\win-x64\native\WebView2Loader.dll` | WebView2 の読み込み用（PowerPoint のビット数に合うほうを使う） |
-| `THIRD-PARTY-NOTICES.md` | 同梱している第三者のコンポーネントとライセンス |
-
-`temp\`（アドインが書く。PowerPoint を閉じているときなら、いつ消してもかまわない）:
-
-| ファイル | 内容 |
-|---|---|
-| `WebView2\` | 作業ウィンドウ（WebView2）の閲覧データ。作業ウィンドウを開くと作られる |
-| `work\` | 作業中の一時ファイル（スライドの描画、生成した画像、添付した資料の画像と PDF のページの画像、デッキの既定値を測るためのコピー）。描画と測定用のコピーは使い終わると消し、生成した画像と資料の画像は会話が終わる（新しい会話、別のプレゼンテーション、PowerPoint の終了）と消す |
-
-記録（アドインが書く。「途中経過を保存する」がオンのときだけ）:
-
-| ファイル | 内容 |
-|---|---|
-| `session.log` | 依頼、モデルの推論と応答、ツールの実行結果 |
-| `com_usage.jsonl` | 実行した PowerPoint の操作の記録 |
-| `generated-pptx\addin_<日時>\` | 依頼ごとのデッキのコピー、スライドの画像、記録、添付した資料から読み取った文字 |
+＊ は「途中経過を保存する」がオンのときだけ書きます。`work\` のうち、描画と測るためのコピーは使い終わると消し、生成した画像と資料の画像は会話が終わる（新しい会話、そのウィンドウを閉じる、PowerPoint を終える）と消します。
 
 ## pptcom.dllの構造
 
@@ -111,6 +106,8 @@ PowerPoint
 └─ pptcom.dll
    ├─ C# のコード
    │   ├─ ThisAddIn             ウィンドウごとの作業ウィンドウと会話（添付資料も会話に属す）、エージェントのループ
+   │   ├─ AddinSettings         設定（レジストリ）と API キー（資格情報マネージャー、CredentialStore）
+   │   ├─ AddinAutomation       外部からの操作（テスト用。「外部からの操作を許可」がオンのときだけ）
    │   ├─ Agent                 LLM との通信（OpenAI 互換の API、ストリーミング）
    │   ├─ ComProxy              pptcom（資料の画像も d1_img3 などの変数として貼れる）
    │   ├─ Documents             添付資料の保持、docread、画像の変換
@@ -135,6 +132,7 @@ PowerPoint
 
 - Visual Studio Build Tools 2026 の 18.9 以降（「Office/SharePoint ビルド ツール」に、オプションの「Visual Studio Tools for Office (VSTO) ビルド ツール」と「.NET Framework 4.8 開発ツール」を足したもの）。C# 14 と静的解析（「テスト」を参照）のために、このコンパイラが要ります
 - Rust 1.99.0 と wasm32-unknown-unknown ターゲット（`rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown`）
+- .NET SDK 6 以降（MSI を組む WiX v5 を `dotnet build` で動かすため）
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\build\new-signing.ps1   # 初めてビルドする PC で 1 回だけ
@@ -146,35 +144,47 @@ VSTO のビルドは ClickOnce のマニフェストに署名するので、開�
 作業ウィンドウで使う PDF.js と anydoc は、公式の配布元から取ったものを `deps/` に置き、版とハッシュを `deps/web-sources.lock.json` で固定しています。npm は使いません。
 
 - PDF.js: Mozilla が GitHub のリリースで配布している `pdfjs-<版>-dist.zip` から、使うファイルだけを取り出します。
-- anydoc: タグのコミットのソース（`deps/anydoc.tar.gz`）から、anydoc 自身のリリースと同じ手順（cargo → wasm-bindgen → wasm-opt）で WebAssembly に組みます。wasm-bindgen と wasm-opt は公式のビルド済みを、lock のハッシュで確かめてから使います。最初のビルドは数分かかり、Rust のライブラリ（crates.io、Cargo.lock で固定）と 2 つの道具を取るためにネットワークが要ります。組んだ結果は `temp/build/pptcom/obj/webvendor/` に残し、lock が変わるまで組み直しません。
+- anydoc: タグのコミットのソース（`deps/anydoc.tar.gz`）から、anydoc 自身のリリースと同じ手順（cargo → wasm-bindgen → wasm-opt）で WebAssembly に組みます。
 
 版を上げるときは `scripts/deps/fetch-web.py` の版を書き換えて実行します。公開から 7 日たっていない版は取りません。
 
 ## テスト
 
-C# のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.NetAnalyzers、Microsoft.CodeAnalysis.CSharp.CodeStyle、Meziantou.Analyzer）にかけ、警告はエラーとして扱います。言語の版、解析器とその版は `Directory.Build.props` で決めています。止めている規則とその理由、書き方の決まり（型は `var` でなく名前で書く、`if` などには必ず波かっこを付ける、null とは `is null` / `is not null` で比べる、1 つのファイルに 1 つの型、メソッドは 100 行・60 文まで）は `.editorconfig` に書いてあります。null になりうる参照は C# の Nullable で型に書き、コンパイラが確かめます（`!` で黙らせることはしません）。古い形式の csproj には .NET SDK の「すべての規則」の一覧が渡らないため、NetAnalyzers の一覧はパッケージから `scripts/deps/netanalyzers-config.py` で作り、`deps/analyzers/` に置いています（CI で照合します）。ビルドの警告は、この解析器 1 つが読み込めないという既知の CS8032 だけを通し、ほかの警告が出ていないことを `scripts/test/build-warnings.py` が CI で確かめます。
+### 静的解析
 
-`scripts/test/ComScriptTests` は、PowerPoint なしで pptcom スクリプトの解析と実行を調べる構文テストです。式の値は VBScript で求めた値（`expected.tsv`、`make_expected.vbs` で作る）と照らし、VBA と VBScript で違うところは VBA の値で調べます。ほかに、受け付ける文と断る文、モデルに返す報告の文と、依頼の途中で利用者が別のプレゼンテーションに切り替えても、スライドの読み取りと `Application.ActivePresentation`（括弧を付けて書いても）が依頼の始まったプレゼンテーションを指すこと、Application からほかの開いているプレゼンテーションに届くメンバー（`Presentations`、`Windows`、`ActiveWindow` など）を断ることを調べます。MSBuild で組んで `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` を実行します（CI でも流します）。
+C# のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.NetAnalyzers、Microsoft.CodeAnalysis.CSharp.CodeStyle、Meziantou.Analyzer）にかけ、警告はエラーとして扱います。言語の版と解析器の版は `Directory.Build.props`、止めている規則等は、 `.editorconfig` にあります。古い形式の csproj には .NET SDK の規則の一覧が渡らないので、NetAnalyzers の一覧は `scripts/deps/netanalyzers-config.py` がパッケージから作って `deps/analyzers/` に置きます。
 
-`scripts/test/ChatStreamTests` は、LLM の応答の読み取りを調べるテストです。ループバックのアドレスに立てた模擬サーバーが応答を返し、終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答やサーバー側の失敗（再試行の対象になるか）、送信の止まった応答やエラーの本文が中止と待ち時間の上限で終わること、`mm_processor_kwargs` を受け付けないサーバーにはそれを外して送り直すこと、画像の要求が依頼の終わりで待ちを抜けることを確かめます。実際の LLM には接続しません。組み方と実行のしかたは構文テストと同じです（CI でも流します）。
+### 自動テスト
 
-`python -X utf8 scripts/test/js-syntax.py` は、作業ウィンドウの自作の JavaScript（`pptcom/UI/web/*.js`）が構文として読めることを Node の `--check` で調べます（CI でも流します）。
+どれも PowerPoint と LLM なしで動き、GitHub Actions の `check.yml`（手で流す）と、リリースの前の `release.yml` でも流します。C# の 2 つは MSBuild で組んでから実行します。ほかに Python 3 と Node.js が要ります。
 
-`node scripts/test/docs-queue.cjs` は、作業ウィンドウが添付の資料を受け取る `docs.js` を、ブラウザの代わりの最小限のオブジェクトの中でそのまま動かします。どのファイルも読み出す前にアドインへ知らせて「読み取り中」になること、読み出しや変換のどこで失敗しても、そのファイルは添付か失敗のどちらかで終わり、後のファイルは続けて読まれることを確かめます（CI でも流します）。
+| 実行するもの | 調べること |
+|---|---|
+| `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcom スクリプトの解析と実行。式の値を VBScript の値（`expected.tsv`。式を足したら `make_expected.vbs` で作り直す）と、VBScript と違うところは VBA の値と照らす。受け付ける文と断る文、モデルへの報告の文、依頼のプレゼンテーションの固定、ほかのプレゼンテーションに届くメンバーを断ること |
+| `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLM の応答の読み取り（模擬サーバー）。終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答、サーバー側の失敗、中止と待ち時間の上限、`mm_processor_kwargs` の送り直し、画像の待ちの終わり方 |
+| `node scripts/test/docs-queue.cjs` | 作業ウィンドウの添付の受け付け（`docs.js`）。読み出す前に「読み取り中」になり、どこで失敗しても添付か失敗で終わり、後のファイルが続くこと |
+| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼が 1 つだけ送られること、依頼の終わり方の表示 |
+| `python -X utf8 scripts/test/rig-stream.py` | リグ（`tool_loop.py`）の応答の読み取りと失敗の分け方、証明書の検証、失敗した回も記録が残ること（模擬サーバーと模擬のランナー） |
+| `python -X utf8 scripts/test/js-syntax.py` | 作業ウィンドウの JavaScript が構文として読めること（Node の `--check`） |
+| `python -X utf8 scripts/test/i18n.py` | 文言のコードが `ja.json` にあり、値の数と言語がそろい、コードに日本語の文が無いこと |
+| `python -X utf8 scripts/test/no-secrets.py` | Git が追跡するファイルに、私有 IP、社内のホスト名、API キー、開発機のパス、鍵や証明書が無いこと。`--history` で全コミット、`--self-test` で自分自身を確かめる。パターンで見分けられない語は `notes/secrets-denylist.txt`（Git の管理外、1 行に 1 語）に書くと照合する |
+| `python -X utf8 scripts/deps/netanalyzers-config.py --check` | NetAnalyzers の規則の一覧が、固定した版のパッケージと合うこと |
+| `python -X utf8 scripts/test/build-warnings.py <ログ>...` | ビルドの警告が、解析器 1 つが読み込めない既知の CS8032 だけであること（ログは MSBuild の `-flp:logfile=<ログ>;warningsonly`） |
 
-`node scripts/test/taskpane.cjs` は、作業ウィンドウの `taskpane.js` を同じようにそのまま動かし、アドインの返事（実行中の状態）が届く前に 2 回送っても依頼は 1 つだけ送ること、別のウィンドウで依頼が実行中のあいだは送らないこと、断られた送信のあとも次を送れること、依頼の終わり方（プレゼンテーションが閉じられた、中止、エラー、完了）が作業の欄に正しく出ることを確かめます（CI でも流します）。
+SBOM の検査（`scripts/test/sbom.py`）は「リリースと検証」を見てください。
 
-`python -X utf8 scripts/test/rig-stream.py` は、実験用のリグ（`scripts/test/tool_loop.py`。アドインと同じ指示とツールで LLM を回し、ランナーで PowerPoint を動かす）について、ループバックの模擬サーバーで応答の読み取りと失敗の分け方を、模擬のランナーで、失敗で終わった回もデッキと `summary.json` を残すことを確かめます。サーバーの証明書とホスト名を検証することも確かめます。LLM にも PowerPoint にも接続しません（CI でも流します）。
+### 実機でのテスト
 
-`python -X utf8 scripts/test/i18n.py` は、作業ウィンドウの文言について、使っているコードがすべて `ja.json` にあること、値の数が `{0}` などと合うこと、ほかの言語が同じコードを持つこと、コードに日本語の文が書かれていないことを調べます（CI でも流します）。
+本物の PowerPoint や LLM を使うので、CI では流しません。
 
-`python -X utf8 scripts/test/no-secrets.py` は、Git が追跡しているファイルに、私有 IP アドレス、社内のホスト名、API キーらしき文字列、開発機のパス、鍵や証明書の中身が混ざっていないかを調べます（CI でも流します）。`--history` を付けると、すべてのコミットのファイルとコミットのメッセージを調べます。パターンでは見分けられない接続先のホスト名やモデル名は、Git の管理外の `notes/secrets-denylist.txt`（1 行に 1 語）に書いておくと、それも照合します。
-
-ここに書いた検査とテストは、GitHub Actions の `.github/workflows/check.yml` でも流せます（アドインもビルドします）。push では動かず、手で `gh workflow run check.yml --ref <ブランチ>` として流します。リリースのワークフローも同じものを流します。
+- `scripts/test/ComScriptRunner`: PowerPoint を外から動かし、アドインと同じ解析・実行・検査で pptcom スクリプトを流す
+- `scripts/test/tool_loop.py`（リグ）: アドインと同じ指示とツールで LLM を回し、ランナーで PowerPoint を動かす。接続先と API キーはアドインの設定を使い、記録は `%LOCALAPPDATA%\KashiharaCity\pptcom\generated-pptx\<名前>\` に残す
+- `scripts/test/drive_addin.ps1`: 本物のアドインを外から操作する（依頼、新しい会話、中止、添付）。作業ウィンドウの設定で「外部からの操作を許可」をオンにしてから使う
+- 記録の集計と実験: `usage_report.py`（COM の呼び出しの集計）、`used_members.py`（モデルが使った COM のメンバー）、`extract_corpus.py`（過去のスクリプトを集め、パーサの変更の前後で比べる）、`replay_parse_error.py`（構文エラーの知らせ方の実験）
 
 ## リリースと検証
 
-タグ `v*` を push すると、GitHub Actions（`.github/workflows/release.yml`）がそのタグのソースから MSI を組み、CycloneDX 1.6 の SBOM を作って、両方に証明（attestation）を付けてから GitHub Release に載せます。受け取った MSI は、次のコマンドで確かめられます。
+タグ `v*` を push すると、GitHub Actions（`.github/workflows/release.yml`）がそのタグのソースから MSI を組み、CycloneDX 1.6 の SBOM を作って、両方に証明（attestation）を付けてから GitHub Release に載せます。手で流すと（workflow_dispatch）、そのときのコミットで同じことをして、Release には載せません。受け取った MSI は、次のコマンドで確かめられます。
 
 ```
 gh attestation verify vsto-llm-pptcom-<版>.msi --repo kashihara-city/vsto-llm-pptcom
@@ -185,20 +195,19 @@ gh attestation verify vsto-llm-pptcom-<版>.msi --repo kashihara-city/vsto-llm-p
 
 ## リポジトリの構成
 
-- `pptcom/` アドイン本体（C#、VSTO）
-- `pptcom/Agent/` LLM との通信、モデルへの指示（`system-prompt.txt`）とツールの定義（`tools.json`。どちらも DLL に埋め込み）
-- `pptcom/ComProxy/` pptcom スクリプトの解析と実行、使ってよいメンバーの検査
-- `pptcom/Documents/` 添付した資料の保持、docread、資料の画像
-- `pptcom/Polyfills/` .NET Framework 4.8 に無く、C# の `required` にコンパイラが使う属性
-- `pptcom/UI/` 作業ウィンドウ（`web/` が画面の HTML・CSS・JavaScript、`web/locales/` が言語ごとの文言。DLL に埋め込み、WebView2 に渡す）
-- `deps/` 作業ウィンドウで使う PDF.js と anydoc の、公式の配布元から取ったもの（`web-sources.lock.json` に版・取得元・ハッシュ）、SBOM を確かめる CycloneDX の公式スキーマ（`cyclonedx/`）、NetAnalyzers の規則の一覧（`analyzers/`）
-- `scripts/build/` MSI のビルド（WiX）、SBOM の生成、anydoc に含まれる Rust ライブラリのライセンス一覧の生成
-- `scripts/deps/` `deps/` を更新するスクリプト
-- `scripts/test/` テストと実験用の道具（構文テスト、PowerPoint を外から動かすランナー、アドインを外から操作するスクリプトなど）
-- `.github/workflows/` 手で流す検査（`check.yml`）、タグから MSI と SBOM を組み、検査と証明をして Release に載せるワークフロー（`release.yml`）
-- `.github/actions/build-setup/` 2 つのワークフローが使う、ビルドの準備（MSBuild、Rust、VSTO ランタイム、PIA、仮の署名証明書）
-- `docs/` README の画像
-- `licenses/` 同梱している第三者のコンポーネントとライセンス（`THIRD-PARTY-NOTICES.md`。MSI にも入れます）
-- `Directory.Build.props`、`.editorconfig` C# の言語の版と静的解析の設定
-- `LICENSE` このリポジトリのライセンス（MIT）
-- `SECURITY.md` 脆弱性の報告のしかた
+```
+pptcom/                アドイン本体（C#、VSTO）
+├─ Agent/              LLM との通信、モデルへの指示とツールの定義
+├─ ComProxy/           pptcom スクリプトの解析と実行、使ってよいメンバーの検査
+├─ Documents/          添付した資料
+├─ Polyfills/          C# の required に要る属性
+└─ UI/                 作業ウィンドウ（web/ が画面、web/locales/ が文言）
+deps/                  固定した外部のもの（PDF.js、anydoc、CycloneDX のスキーマ、NetAnalyzers の規則）
+scripts/build/         MSI、SBOM、テスト証明書を作る
+scripts/deps/          deps/ を更新する
+scripts/test/          テストと実験用の道具
+.github/               CI（手で流す検査と、タグからのリリース）
+docs/                  README の画像
+licenses/              同梱している第三者のライセンス
+```
+

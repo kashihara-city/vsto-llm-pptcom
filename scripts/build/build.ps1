@@ -1,7 +1,7 @@
 <#
   Builds the release MSI: release\vsto-llm-pptcom-<version>.msi (release\ is git-ignored and holds only the MSI).
 
-  1. Builds the add-in (Release) into temp\build\pptcom\bin\Release\. Needs temp\signing\ (ClickOnce signing; made by
+  1. Restores and builds the add-in (Release) into temp\build\pptcom\bin\Release\. Needs temp\signing\ (ClickOnce signing; made by
      scripts\build\new-signing.ps1).
   2. Reads the signing public key from the signed pptcom.vsto and writes temp\build\pptcom.Installer\obj\generated\Signing.wxi
      (the key belongs to this machine's certificate, so it is never committed).
@@ -35,7 +35,7 @@ $addinKey = "HKCU:\Software\Microsoft\Office\PowerPoint\Addins\pptcom"
 $before = if (Test-Path $addinKey) { (Get-ItemProperty $addinKey).Manifest } else { $null }
 $log = @()
 if ($WarningsLog) { $log += "-flp:logfile=$WarningsLog;warningsonly" }
-& $msbuild $csproj -p:Configuration=Release -p:Platform=AnyCPU -nologo -v:minimal @log
+& $msbuild $csproj -restore -p:Configuration=Release -p:Platform=AnyCPU -nologo -v:minimal @log
 $buildExit = $LASTEXITCODE
 if ($before) { Set-ItemProperty $addinKey -Name Manifest -Value $before }
 elseif (Test-Path $addinKey) { Remove-Item $addinKey -Recurse }
