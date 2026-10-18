@@ -18,7 +18,8 @@ const i18n = (() => {
     return r.json();
   }
 
-  // `lang` is the one the add-in chose (index.html?lang=...); without its file, Japanese.
+  // `lang` is the one the add-in chose among the files there are (index.html?lang=..., Texts.LanguageFor);
+  // should its file not load, Japanese.
   async function load(lang) {
     base = await read("ja");
     table = base;

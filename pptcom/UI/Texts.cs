@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 using Pptcom.ComProxy;
@@ -14,6 +15,17 @@ namespace Pptcom.UI
     // (PaneText). ja.json is the base: a code missing from another language falls back to it.
     internal static class Texts
     {
+        private const string ResourcePrefix = "pptcom.web/locales\\";
+
+        // The languages there is a file for ("en", "ja", "zh-TW"), by the names of the embedded files.
+        private static readonly string[] Languages = [.. typeof(Texts).Assembly.GetManifestResourceNames()
+            .Where(static n => n.StartsWith(ResourcePrefix, StringComparison.Ordinal) && n.EndsWith(".json", StringComparison.Ordinal))
+            .Select(static n => n.Substring(ResourcePrefix.Length, n.Length - ResourcePrefix.Length - ".json".Length))
+            .OrderBy(static n => n, StringComparer.Ordinal)];
+
+        // A UI language with no file of its own (French, Korean, ...) gets English.
+        private const string Fallback = "en";
+
         private static readonly Dictionary<string, string> Base = Read("ja") ?? new Dictionary<string, string>(StringComparer.Ordinal);
         private static Dictionary<string, string> _table = Base;
 
@@ -22,43 +34,48 @@ namespace Pptcom.UI
         // The language the page is told to use too (AiTaskPaneControl's start page).
         public static string Language { get; private set; } = "ja";
 
-        // tag: PowerPoint's UI language ("en-US"). That language, or else its primary one ("en"), when there is a
-        // file for it; Japanese otherwise.
+        // tag: PowerPoint's UI language ("en-US"); see LanguageFor.
         public static void UseLanguage(string tag)
         {
-            Language = "ja";
+            Language = LanguageFor(tag);
             _table = Base;
-            if (string.IsNullOrEmpty(tag))
+            if (Language == "ja")
             {
                 return;
             }
 
-            int dash = tag.IndexOf('-');
-            foreach (string candidate in dash > 0 ? new[] { tag, tag.Substring(0, dash) } : [tag])
+            Dictionary<string, string>? table = Read(Language);
+            if (table is null)
             {
-                if (candidate.Equals("ja", StringComparison.OrdinalIgnoreCase))
-                {
-                    return;
-                }
-
-                Dictionary<string, string>? table = Read(candidate);
-                if (table is null)
-                {
-                    continue;
-                }
-
-                foreach (KeyValuePair<string, string> kv in Base)
-                {
-                    if (!table.ContainsKey(kv.Key))
-                    {
-                        table[kv.Key] = kv.Value;
-                    }
-                }
-
-                _table = table;
-                Language = candidate;
+                Language = "ja";
                 return;
             }
+
+            foreach (KeyValuePair<string, string> kv in Base)
+            {
+                if (!table.ContainsKey(kv.Key))
+                {
+                    table[kv.Key] = kv.Value;
+                }
+            }
+
+            _table = table;
+        }
+
+        // The file for a UI language: the one of that name ("zh-TW"), else one of the same language ("en-GB" ->
+        // en, "zh-HK" and "zh-CN" -> zh-TW, as KSIP does), else English.
+        public static string LanguageFor(string tag)
+        {
+            string wanted = tag.Trim().Replace('_', '-');
+            string? exact = Array.Find(Languages, l => l.Equals(wanted, StringComparison.OrdinalIgnoreCase));
+            if (exact is not null)
+            {
+                return exact;
+            }
+
+            string primary = wanted.Split('-')[0];
+            string? same = primary.Length == 0 ? null : Array.Find(Languages, l => l.Split('-')[0].Equals(primary, StringComparison.OrdinalIgnoreCase));
+            return same ?? (Array.IndexOf(Languages, Fallback) >= 0 ? Fallback : "ja");
         }
 
         public static string Get(string code, params object[] args)
@@ -83,7 +100,7 @@ namespace Pptcom.UI
                 return null;
             }
 
-            using Stream stream = typeof(Texts).Assembly.GetManifestResourceStream("pptcom.web/locales\\" + language + ".json");
+            using Stream stream = typeof(Texts).Assembly.GetManifestResourceStream(ResourcePrefix + language + ".json");
             if (stream is null)
             {
                 return null;

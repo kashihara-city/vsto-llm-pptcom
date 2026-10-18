@@ -21,6 +21,7 @@ PowerPoint で開いているプレゼンテーションを、LLM が作った�
 - Word・Excel・PowerPoint・PDF・テキストのファイルを添付し、「この資料を5枚にまとめて」のような依頼も可能です。
 - 資料の図や写真を、そのままスライドに貼ることもできます。
 - LLM は VBA に近い短いスクリプト（pptcom スクリプト）を書きます。アドインがそれを検査してから PowerPoint で実行します。
+- 多言語対応です。
 
 ![橿原市第5期地域福祉推進計画（PDF）を添付して「この資料を5枚にまとめて」と依頼し、続けて1枚目の文字の高さを揃えるよう頼んだところ。右が作業ウィンドウで、オンプレミスで動かしているモデルを使っている](docs/image.png)
 
@@ -38,6 +39,7 @@ PowerPoint で開いているプレゼンテーションを、LLM が作った�
 
 ## インストールされるものと書き込む場所
 
+ここから以下は、運用管理者向けの説明です。  
 このアドインは、ログオンしているユーザーの範囲に次のものを置きます。コンピューター全体の場所（Program Files、HKEY_LOCAL_MACHINE）には書きません。
 
 - **Windows 資格情報マネージャー**に、接続先の API キー
@@ -100,6 +102,9 @@ PowerPoint で開いているプレゼンテーションを、LLM が作った�
 
 ## pptcom.dllの構造
 
+ここから以下は、開発者向けの説明です。  
+vsto-llm-pptcomの主な機能を担うpptcom.dllは、以下のような構造となっています。
+
 ```
 PowerPoint
 └─ pptcom.dll
@@ -124,7 +129,7 @@ PowerPoint
 
 ## ビルド
 
-次のものが必要です。
+ビルドには、次のものが必要です。
 
 - Visual Studio Build Tools 2026 の 18.9 以降（「Office/SharePoint ビルド ツール」に、オプションの「Visual Studio Tools for Office (VSTO) ビルド ツール」と「.NET Framework 4.8 開発ツール」を足したもの）。C# 14 と静的解析（「テスト」を参照）のために、このコンパイラが要ります
 - Rust 1.99.0 と wasm32-unknown-unknown ターゲット（`rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown`）
