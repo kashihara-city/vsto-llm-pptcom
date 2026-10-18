@@ -328,6 +328,17 @@ def slide_count(runner: Runner) -> str:
     return "?" if not r.get("success") else "(see deck)"
 
 
+# Same as the add-in (OpenAiCompatibleClient.StreamIdleLimit): a reply's stream that sends nothing for this long
+# is a failure on the server side. urlopen's timeout bounds every socket wait, so it is the long one up to the
+# headers and this one after them.
+STREAM_IDLE_SEC = 60
+
+
+class StreamFailure(Exception):
+    """A failure on the server side while the reply streams (the add-in's LlmServerException): the run ends
+    there, with the deck and the summary saved."""
+
+
 def stream(payload: dict) -> dict:
     req = urllib.request.Request(
         BASE_URL + "/v1/chat/completions",
@@ -339,15 +350,33 @@ def stream(payload: dict) -> dict:
     content, reasoning, tool_args = [], [], {}
     usage, finish = None, None
     first_token = first_output = None  # seconds; see ChatReply.FirstToken / FirstOutput
+    done = False
     with urllib.request.urlopen(req, context=ctx, timeout=1200) as resp:
-        for raw in resp:
+        sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
+        if sock is not None:
+            sock.settimeout(STREAM_IDLE_SEC)
+        lines = iter(resp)
+        while True:
+            try:
+                raw = next(lines, None)
+            except TimeoutError as ex:
+                raise StreamFailure("LLM stream stalled: nothing arrived for %d s" % STREAM_IDLE_SEC) from ex
+            if raw is None:
+                break
             line = raw.decode("utf-8", errors="replace").strip()
             if not line.startswith("data:"):
                 continue
             data = line[5:].strip()
             if data == "[DONE]":
+                done = True
                 break
-            chunk = json.loads(data)
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue  # as the add-in: a line that is not JSON is skipped
+            if chunk.get("error"):
+                # LiteLLM reports a backend failure after the 200 header as an error event
+                raise StreamFailure("LLM stream error: " + json.dumps(chunk["error"], ensure_ascii=False))
             if chunk.get("usage"):
                 usage = chunk["usage"]
             for choice in chunk.get("choices") or []:
@@ -373,6 +402,8 @@ def stream(payload: dict) -> dict:
                         slot["arguments"] += fn["arguments"]
                 if choice.get("finish_reason"):
                     finish = choice["finish_reason"]
+    if not done and finish is None:
+        raise StreamFailure("LLM stream ended before the reply was complete (no finish_reason, no [DONE])")
     calls = []
     for k in sorted(tool_args):
         t = tool_args[k]
@@ -418,7 +449,13 @@ def main() -> int:
                        "max_tokens": 32000, "stream": True, "stream_options": {"include_usage": True},
                        # same as the add-in: keep images at native resolution (server default upscales ~4x)
                        "mm_processor_kwargs": {"min_pixels": 3136}}
-            r = stream(payload)
+            try:
+                r = stream(payload)
+            except StreamFailure as ex:
+                # The add-in waits for 再試行 here; the rig has nobody to press it, so the run ends.
+                outcome = "server_error: " + str(ex)
+                print("   !!", outcome, flush=True)
+                break
             rt = (r["usage"] or {}).get("completion_tokens_details", {}).get("reasoning_tokens")
             info = {"turn": turn, "elapsed_sec": r["elapsed_sec"],
                     "first_token_sec": r["first_token_sec"], "first_output_sec": r["first_output_sec"],
@@ -491,7 +528,8 @@ def main() -> int:
                         for m in messages]
                 json.dump(slim, f, ensure_ascii=False, indent=1)
             if not r["tool_calls"]:
-                outcome = "completed"
+                # max_tokens: the reply reached the output limit before it was done (same as the add-in)
+                outcome = "max_tokens" if r["finish_reason"] == "length" else "completed"
                 break
         total = (datetime.datetime.now() - t0).total_seconds()
         saved = runner.call({"save": os.path.join(out_dir, "deck.pptx")})
