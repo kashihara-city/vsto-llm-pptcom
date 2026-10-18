@@ -17,8 +17,14 @@ $bin = Join-Path $root "pptcom\bin\Release\"
 $generated = Join-Path $PSScriptRoot "obj\generated\"
 $release = Join-Path $root "release"
 
-$msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
-if (-not $msbuild) { throw "MSBuild (Visual Studio) not found" }
+# $env:MSBUILD when set (the release workflow sets it), otherwise the newest Visual Studio or Build Tools
+# (-products *: without it vswhere leaves Build Tools out).
+$msbuild = $env:MSBUILD
+if (-not $msbuild) {
+    $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+}
+if (-not $msbuild) { throw "MSBuild (Visual Studio or Build Tools) not found" }
+"MSBuild: $msbuild"
 
 # 1. add-in. A VSTO build also registers the add-in for this user (HKCU ...\Addins\pptcom) at its
 #    output folder; put back whatever was registered before (usually the developer's bin\Debug).

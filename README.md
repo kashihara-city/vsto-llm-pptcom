@@ -121,7 +121,7 @@ PowerPoint
 
 次のものが必要です。
 
-- Visual Studio 2022 以降（「Office/SharePoint 開発」ワークロード）
+- Visual Studio Build Tools 2022 以降（「Office/SharePoint ビルド ツール」に、オプションの「Visual Studio Tools for Office (VSTO) ビルド ツール」と「.NET Framework 4.8 開発ツール」を足したもの）
 - Rust 1.99.0 と wasm32-unknown-unknown ターゲット（`rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown`）
 
 ```
