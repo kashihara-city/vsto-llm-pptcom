@@ -15,7 +15,7 @@
   The tools stay in -OutDir\.cache; the cargo build (about 800 MB) is deleted once anydoc is built, so it is
   built again only when the lock or this script changes (WebVendor.targets).
 
-  usage: powershell -ExecutionPolicy Bypass -File WebVendor.ps1 -Lock ..\deps\web-sources.lock.json -OutDir obj\webvendor\
+  usage: powershell -ExecutionPolicy Bypass -File WebVendor.ps1 -Lock ..\deps\web-sources.lock.json -OutDir ..\temp\build\pptcom\obj\webvendor\
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Lock,

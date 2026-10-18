@@ -4,7 +4,7 @@ what built them, from the pinned records only - no network access.
   python -X utf8 scripts/build/sbom.py --msi release/vsto-llm-pptcom-<version>.msi --out <file>.cdx.json
 
   components        Newtonsoft.Json and the WebView2 SDK (NuGet, with the SHA-512 NuGet recorded in
-                    pptcom/obj/project.assets.json), the VSTO Utilities DLL shipped next to pptcom.dll, PDF.js (the
+                    temp/build/pptcom/obj/project.assets.json), the VSTO Utilities DLL shipped next to pptcom.dll, PDF.js (the
                     release archive pinned in deps/web-sources.lock.json, with the parts it brings), anydoc (the
                     pinned source) and the Rust crates compiled into its WebAssembly build (cargo tree for the
                     wasm32 target, normal dependencies, as anydoc's Cargo.lock pins them, with their checksums)
@@ -19,11 +19,12 @@ import argparse, base64, datetime, hashlib, json, pathlib, re, shutil, subproces
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 REPOSITORY = 'kashihara-city/vsto-llm-pptcom'
 LOCK = ROOT / 'deps/web-sources.lock.json'
-ASSETS = ROOT / 'pptcom/obj/project.assets.json'
+BUILD = ROOT / 'temp/build'
+ASSETS = BUILD / 'pptcom/obj/project.assets.json'
 CSPROJ = ROOT / 'pptcom/pptcom.csproj'
 WIXPROJ = ROOT / 'scripts/build/pptcom.Installer.wixproj'
-UTILITIES = ROOT / 'pptcom/bin/Release/Microsoft.Office.Tools.Common.v4.0.Utilities.dll'
-WORK = ROOT / 'pptcom/obj/sbom'
+UTILITIES = BUILD / 'pptcom/bin/Release/Microsoft.Office.Tools.Common.v4.0.Utilities.dll'
+WORK = BUILD / 'pptcom/obj/sbom'
 SPEC = '1.6'
 
 # What ships, and how (shown as a property of each component).
@@ -72,7 +73,7 @@ def property_list(pairs):
 
 
 def anydoc_source():
-    """deps/anydoc.tar.gz unpacked into pptcom/obj/sbom/anydoc (fresh each time)."""
+    """deps/anydoc.tar.gz unpacked into temp/build/pptcom/obj/sbom/anydoc (fresh each time)."""
     target = WORK / 'anydoc'
     if target.exists():
         shutil.rmtree(target)

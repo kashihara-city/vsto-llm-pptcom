@@ -82,23 +82,10 @@ runs:
     - name: Make a throwaway signing certificate
       shell: pwsh
       run: |
-        # VSTO signs its ClickOnce manifests; the build stops without pptcom\signing.local.props.
+        # VSTO signs its ClickOnce manifests; the build stops without temp\signing\signing.local.props. The same
+        # script as on a developer's machine, with a certificate for this run only. Its password never goes to the
+        # log, and is masked in case a tool prints it.
         $ErrorActionPreference = "Stop"
-        $cert = New-SelfSignedCertificate -Subject "CN=pptcom CI test build" -Type CodeSigningCert `
-          -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(7)
-        $password = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(24))
-        "::add-mask::$password"
-        $pfx = Join-Path $env:GITHUB_WORKSPACE "pptcom\ci-signing.pfx"
-        Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString $password -AsPlainText -Force) | Out-Null
-        $props = @"
-        <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-          <PropertyGroup>
-            <SignManifests>true</SignManifests>
-            <ManifestKeyFile>ci-signing.pfx</ManifestKeyFile>
-            <ManifestCertificateThumbprint>$($cert.Thumbprint)</ManifestCertificateThumbprint>
-            <ManifestPassword>$password</ManifestPassword>
-          </PropertyGroup>
-        </Project>
-        "@
-        Set-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE "pptcom\signing.local.props") -Value $props -Encoding utf8
-        "thumbprint $($cert.Thumbprint)"
+        & scripts\build\new-signing.ps1 -Subject "CN=pptcom CI test build" -Days 7
+        [xml]$props = Get-Content -LiteralPath temp\signing\signing.local.props -Raw
+        "::add-mask::$($props.Project.PropertyGroup.ManifestPassword)"

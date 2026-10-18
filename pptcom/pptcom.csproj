@@ -19,10 +19,14 @@
     <ApplicationVersion>0.0.2.0</ApplicationVersion>
   </PropertyGroup>
   <!-- ClickOnce manifest signing is machine-specific (certificate thumbprint, key file, password), so it lives in
-       signing.local.props next to this file, which git ignores. See .gitignore for how to create one. -->
-  <Import Project="signing.local.props" Condition="Exists('signing.local.props')" />
-  <Target Name="RequireLocalSigning" BeforeTargets="PrepareForBuild" Condition="!Exists('signing.local.props')">
-    <Error Text="pptcom needs pptcom\signing.local.props with this machine's ClickOnce signing settings (SignManifests, ManifestKeyFile, ManifestCertificateThumbprint, ManifestPassword). Create a test certificate in Visual Studio (project properties, Signing tab), then move those four properties from the csproj into signing.local.props. See .gitignore." />
+       temp\signing\signing.local.props, which git ignores, next to its test certificate. scripts\build\new-signing.ps1
+       makes both. -->
+  <PropertyGroup>
+    <SigningProps>$(MSBuildThisFileDirectory)..\temp\signing\signing.local.props</SigningProps>
+  </PropertyGroup>
+  <Import Project="$(SigningProps)" Condition="Exists('$(SigningProps)')" />
+  <Target Name="RequireLocalSigning" BeforeTargets="PrepareForBuild" Condition="!Exists('$(SigningProps)')">
+    <Error Text="pptcom needs temp\signing\signing.local.props with this machine's ClickOnce signing settings and its test certificate. Make them with: powershell -ExecutionPolicy Bypass -File scripts\build\new-signing.ps1" />
   </Target>
 
   <ItemGroup>
@@ -46,7 +50,7 @@
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
-    <OutputPath>bin\Debug\</OutputPath>
+    <OutputPath>$(BaseOutputPath)Debug\</OutputPath>
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
     <DefineConstants>$(DefineConstants);DEBUG;TRACE</DefineConstants>
     <WarningLevel>4</WarningLevel>
@@ -55,7 +59,7 @@
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
-    <OutputPath>bin\Release\</OutputPath>
+    <OutputPath>$(BaseOutputPath)Release\</OutputPath>
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
     <DefineConstants>$(DefineConstants);TRACE</DefineConstants>
     <WarningLevel>4</WarningLevel>

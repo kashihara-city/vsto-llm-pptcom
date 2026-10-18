@@ -7,6 +7,7 @@ the MSI, deps/web-sources.lock.json, NuGet's assets file, anydoc's Cargo.lock an
 import argparse, base64, copy, hashlib, json, pathlib, re, subprocess, sys, tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.dont_write_bytecode = True  # no __pycache__ next to the scripts
 sys.path.insert(0, str(ROOT / 'scripts/test'))
 from json_schema import Schemas  # noqa: E402
 
@@ -63,7 +64,7 @@ def main():
         c = by_ref.get(f"pkg:github/{entry['repository']}@{entry['version']}")
         check(c is not None and c['hashes'][0]['content'] == entry['sha256'], f'{name}: the archive pinned in the lock')
 
-    assets = json.loads((ROOT / 'pptcom/obj/project.assets.json').read_text(encoding='utf-8'))
+    assets = json.loads((ROOT / 'temp/build/pptcom/obj/project.assets.json').read_text(encoding='utf-8'))
     # PrivateAssets="all" (suppressParent All): only builds it (ILRepack, the analyzers), listed under metadata.tools
     build_only = {n for fw in assets['project']['frameworks'].values()
                   for n, d in fw.get('dependencies', {}).items() if d.get('suppressParent') == 'All'}
@@ -75,7 +76,7 @@ def main():
               f'{name} {version}: the package NuGet restored' + (' (a build tool)' if name in build_only else ''))
 
     # The crates cargo builds into anydoc's .wasm, read independently of sbom.py's parsing
-    source = ROOT / 'pptcom/obj/sbom/anydoc'
+    source = ROOT / 'temp/build/pptcom/obj/sbom/anydoc'
     tree = subprocess.check_output(['rustup', 'run', lock['rust']['toolchain'], 'cargo', 'tree', '--locked', '--offline',
                                     '--manifest-path', str(source / 'wasm/Cargo.toml'), '--target', lock['rust']['target'],
                                     '-e', 'normal,no-proc-macro', '--prefix', 'none', '--format', '{p}'], cwd=ROOT, text=True)

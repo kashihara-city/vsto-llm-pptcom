@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 
+sys.dont_write_bytecode = True  # no __pycache__ next to the scripts
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tool_loop  # noqa: E402  (reads the add-in's settings; the test sends nothing to the endpoint)
 

@@ -86,7 +86,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           & $env:MSBUILD scripts\test\ComScriptTests\ComScriptTests.csproj -restore -p:Configuration=Debug -p:Platform=AnyCPU -nologo -v:minimal "-flp:logfile=$env:RUNNER_TEMP\tests.log;warningsonly"
           if ($LASTEXITCODE -ne 0) { throw "ComScriptTests build failed" }
-          scripts\test\ComScriptTests\bin\Debug\ComScriptTests.exe
+          temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe
           if ($LASTEXITCODE -ne 0) { throw "parser tests failed" }
 
       - name: Build and run the chat stream tests
@@ -97,7 +97,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           & $env:MSBUILD scripts\test\ChatStreamTests\ChatStreamTests.csproj -restore -p:Configuration=Debug -p:Platform=AnyCPU -nologo -v:minimal "-flp:logfile=$env:RUNNER_TEMP\stream.log;warningsonly"
           if ($LASTEXITCODE -ne 0) { throw "ChatStreamTests build failed" }
-          scripts\test\ChatStreamTests\bin\Debug\ChatStreamTests.exe
+          temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe
           if ($LASTEXITCODE -ne 0) { throw "chat stream tests failed" }
 
       - name: Check the NetAnalyzers rule list

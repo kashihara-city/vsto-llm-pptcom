@@ -5,11 +5,11 @@
     https://pptcom.invalid/vendor/...). Nothing is installed as a separate file and npm is not used:
     WebVendor.ps1 takes them from deps\ (pinned in deps\web-sources.lock.json, fetched by
     scripts\deps\fetch-web.py), copying PDF.js out of Mozilla's release archive and building anydoc from its
-    source with Rust, into obj\webvendor\files\. It runs again only when the lock, the archives or the script
+    source with Rust, into the project's obj\webvendor\files\ (temp\build\pptcom\obj\). It runs again only when the lock, the archives or the script
     change; the first build of anydoc takes a few minutes.
   -->
   <PropertyGroup>
-    <WebVendorDir>$(MSBuildThisFileDirectory)obj\webvendor\</WebVendorDir>
+    <WebVendorDir>$(BaseIntermediateOutputPath)webvendor\</WebVendorDir>
     <WebVendorDeps>$(MSBuildThisFileDirectory)..\deps\</WebVendorDeps>
   </PropertyGroup>
 

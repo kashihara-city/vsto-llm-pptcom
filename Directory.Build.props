@@ -1,4 +1,14 @@
 <Project>
+  <!-- Every project builds into temp\build\<project>\ (git ignores temp\): bin\<configuration>\ for its output, obj\
+       for the rest (NuGet's restore, the task pane's vendor files, the WiX project's generated include). The MSI
+       itself goes to release\ (scripts\build\build.ps1). Set here, before Microsoft.Common.props and the SDKs read
+       them; the csproj files take their OutputPath from BaseOutputPath. -->
+  <PropertyGroup>
+    <BuildRoot>$(MSBuildThisFileDirectory)temp\build\</BuildRoot>
+    <BaseOutputPath>$(BuildRoot)$(MSBuildProjectName)\bin\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(BuildRoot)$(MSBuildProjectName)\obj\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+
   <!-- C# settings shared by the add-in (pptcom) and the test tools (scripts/test). The WiX project in
        scripts/build reads this file too, hence the conditions. -->
   <PropertyGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'">

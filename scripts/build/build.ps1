@@ -1,8 +1,9 @@
 <#
   Builds the release MSI: release\vsto-llm-pptcom-<version>.msi (release\ is git-ignored and holds only the MSI).
 
-  1. Builds the add-in (Release). Needs pptcom\signing.local.props (ClickOnce signing, see .gitignore).
-  2. Reads the signing public key from the signed pptcom.vsto and writes obj\generated\Signing.wxi
+  1. Builds the add-in (Release) into temp\build\pptcom\bin\Release\. Needs temp\signing\ (ClickOnce signing; made by
+     scripts\build\new-signing.ps1).
+  2. Reads the signing public key from the signed pptcom.vsto and writes temp\build\pptcom.Installer\obj\generated\Signing.wxi
      (the key belongs to this machine's certificate, so it is never committed).
   3. Builds the WiX v5 project (WixToolset.Sdk is restored from nuget.org) and copies the MSI to release\.
 
@@ -15,8 +16,8 @@ param([string]$WarningsLog)
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $csproj = Join-Path $root "pptcom\pptcom.csproj"
-$bin = Join-Path $root "pptcom\bin\Release\"
-$generated = Join-Path $PSScriptRoot "obj\generated\"
+$bin = Join-Path $root "temp\build\pptcom\bin\Release\"
+$generated = Join-Path $root "temp\build\pptcom.Installer\obj\generated\"
 $release = Join-Path $root "release"
 
 # $env:MSBUILD when set (the release workflow sets it), otherwise the newest Visual Studio or Build Tools
@@ -29,7 +30,7 @@ if (-not $msbuild) { throw "MSBuild (Visual Studio or Build Tools) not found" }
 "MSBuild: $msbuild"
 
 # 1. add-in. A VSTO build also registers the add-in for this user (HKCU ...\Addins\pptcom) at its
-#    output folder; put back whatever was registered before (usually the developer's bin\Debug).
+#    output folder; put back whatever was registered before (usually the developer's Debug build).
 $addinKey = "HKCU:\Software\Microsoft\Office\PowerPoint\Addins\pptcom"
 $before = if (Test-Path $addinKey) { (Get-ItemProperty $addinKey).Manifest } else { $null }
 $log = @()
@@ -61,7 +62,7 @@ dotnet build (Join-Path $PSScriptRoot "pptcom.Installer.wixproj") -c Release -no
     "-p:ProductVersion=$version" "-p:AddinBinDir=$bin" "-p:GeneratedDir=$generated"
 if ($LASTEXITCODE -ne 0) { throw "MSI build failed" }
 
-$msi = Get-ChildItem (Join-Path $PSScriptRoot "bin\Release") -Recurse -Filter "vsto-llm-pptcom.msi" | Select-Object -First 1
+$msi = Get-ChildItem (Join-Path $root "temp\build\pptcom.Installer\bin\Release") -Recurse -Filter "vsto-llm-pptcom.msi" | Select-Object -First 1
 if (-not $msi) { throw "vsto-llm-pptcom.msi not found" }
 if (Test-Path $release) { Remove-Item -Recurse -Force $release }
 New-Item -ItemType Directory -Force $release | Out-Null

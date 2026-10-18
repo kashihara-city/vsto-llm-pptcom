@@ -137,8 +137,11 @@ PowerPoint
 - Rust 1.99.0 と wasm32-unknown-unknown ターゲット（`rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown`）
 
 ```
+powershell -ExecutionPolicy Bypass -File scripts\build\new-signing.ps1   # 初めてビルドする PC で 1 回だけ
 powershell -ExecutionPolicy Bypass -File scripts\build\build.ps1
 ```
+
+VSTO のビルドは ClickOnce のマニフェストに署名するので、開発機ごとにテスト用の証明書が要ります。`new-signing.ps1` が自己署名の証明書と署名の設定を `temp\signing\` に作ります（Git の管理外。消したときは作り直せば済みます）。ビルドの生成物は、どのプロジェクトも `temp\build\<プロジェクト名>\` の `bin\<構成>\` と `obj\` にでき、MSI は `release\` にできます。
 
 作業ウィンドウで使う PDF.js と anydoc は、公式の配布元から取ったものを `deps/` に置き、版とハッシュを `deps/web-sources.lock.json` で固定しています。npm は使いません。
 
@@ -151,7 +154,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build\build.ps1
 
 C# のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.NetAnalyzers、Microsoft.CodeAnalysis.CSharp.CodeStyle、Meziantou.Analyzer）にかけ、警告はエラーとして扱います。言語の版、解析器とその版は `Directory.Build.props` で決めています。止めている規則とその理由、書き方の決まり（型は `var` でなく名前で書く、`if` などには必ず波かっこを付ける、null とは `is null` / `is not null` で比べる、1 つのファイルに 1 つの型、メソッドは 100 行・60 文まで）は `.editorconfig` に書いてあります。null になりうる参照は C# の Nullable で型に書き、コンパイラが確かめます（`!` で黙らせることはしません）。古い形式の csproj には .NET SDK の「すべての規則」の一覧が渡らないため、NetAnalyzers の一覧はパッケージから `scripts/deps/netanalyzers-config.py` で作り、`deps/analyzers/` に置いています（CI で照合します）。ビルドの警告は、この解析器 1 つが読み込めないという既知の CS8032 だけを通し、ほかの警告が出ていないことを `scripts/test/build-warnings.py` が CI で確かめます。
 
-`scripts/test/ComScriptTests` は、PowerPoint なしで pptcom スクリプトの解析と実行を調べる構文テストです。式の値は VBScript で求めた値（`expected.tsv`、`make_expected.vbs` で作る）と照らし、VBA と VBScript で違うところは VBA の値で調べます。ほかに、受け付ける文と断る文、モデルに返す報告の文と、依頼の途中で利用者が別のプレゼンテーションに切り替えても、スライドの読み取りと `Application.ActivePresentation`（括弧を付けて書いても）が依頼の始まったプレゼンテーションを指すこと、Application からほかの開いているプレゼンテーションに届くメンバー（`Presentations`、`Windows`、`ActiveWindow` など）を断ることを調べます。MSBuild で組んで `scripts\test\ComScriptTests\bin\Debug\ComScriptTests.exe` を実行します（CI でも流します）。
+`scripts/test/ComScriptTests` は、PowerPoint なしで pptcom スクリプトの解析と実行を調べる構文テストです。式の値は VBScript で求めた値（`expected.tsv`、`make_expected.vbs` で作る）と照らし、VBA と VBScript で違うところは VBA の値で調べます。ほかに、受け付ける文と断る文、モデルに返す報告の文と、依頼の途中で利用者が別のプレゼンテーションに切り替えても、スライドの読み取りと `Application.ActivePresentation`（括弧を付けて書いても）が依頼の始まったプレゼンテーションを指すこと、Application からほかの開いているプレゼンテーションに届くメンバー（`Presentations`、`Windows`、`ActiveWindow` など）を断ることを調べます。MSBuild で組んで `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` を実行します（CI でも流します）。
 
 `scripts/test/ChatStreamTests` は、LLM の応答の読み取りを調べるテストです。ループバックのアドレスに立てた模擬サーバーが応答を返し、終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答やサーバー側の失敗（再試行の対象になるか）、送信の止まった応答やエラーの本文が中止と待ち時間の上限で終わること、`mm_processor_kwargs` を受け付けないサーバーにはそれを外して送り直すことを確かめます。実際の LLM には接続しません。組み方と実行のしかたは構文テストと同じです（CI でも流します）。
 

@@ -9,7 +9,7 @@
     Visual Studio writes for development, pointing at the installed .vsto with |vstolocal.
   - Adds the deployment manifest to the VSTO inclusion list (HKCU) with the signing certificate's
     public key, so the "publisher cannot be verified" trust prompt does not appear. The key is not in
-    this file: build.ps1 reads it from the signed .vsto and writes obj\generated\Signing.wxi.
+    this file: build.ps1 reads it from the signed .vsto and writes Signing.wxi (temp\build\pptcom.Installer\obj\generated\).
   - Settings (HKCU\Software\KashiharaCity\pptcom values and the "KashiharaCity/pptcom:api_key" credential) are not
     touched and survive uninstall.
 -->

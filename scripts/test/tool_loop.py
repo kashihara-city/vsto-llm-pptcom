@@ -77,7 +77,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # Every generated deck (pptx + slide PNGs + transcript + reasoning) lands in generated-pptx/<run>, next to
 # the add-in's own run folders (its 途中経過を保存 setting): %LOCALAPPDATA%\KashiharaCity\pptcom\generated-pptx.
 GENERATED_DIR = os.path.expandvars(r"%LOCALAPPDATA%\KashiharaCity\pptcom\generated-pptx")
-RUNNER = os.path.join(HERE, "ComScriptRunner", "bin", "Debug", "ComScriptRunner.exe")
+RUNNER = os.path.join(os.path.dirname(os.path.dirname(HERE)), "temp", "build", "ComScriptRunner", "bin", "Debug", "ComScriptRunner.exe")
 DEFAULT_REQUEST = "litellmが何か説明するパワポを３枚ぐらいで作って。画像も入れて。"
 
 # Deliberately short and in the coding-agent register: the run8 experiment (old/experiment/out) showed that this

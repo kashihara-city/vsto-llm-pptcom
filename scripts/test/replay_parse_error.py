@@ -13,6 +13,7 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.dont_write_bytecode = True  # no __pycache__ next to the scripts
 sys.path.insert(0, HERE)
 import tool_loop  # noqa: E402
 

@@ -8,7 +8,7 @@
     <RootNamespace>ComScriptRunner</RootNamespace>
     <AssemblyName>ComScriptRunner</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
-    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <OutputPath>$(BaseOutputPath)$(Configuration)\</OutputPath>
     <DebugType>full</DebugType>
     <DebugSymbols>true</DebugSymbols>
     <!-- It compiles OpenAiCompatibleClient.cs for image generation only: the chat types in that file (SlideImage,

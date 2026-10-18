@@ -94,7 +94,7 @@ def selftest():
     assert findings("Microsoft.CodeAnalysis.NetAnalyzers 10.0.401") == [], "a three-part version is not an address"
     assert findings("cache = pathlib.Path.home() / '.nuget'") == []
     assert [r for r, _ in findings("Path.home() and nas.home")] == ["社内ホスト名"]
-    assert findings("pptcom/signing.local.props") == []
+    assert findings("temp/signing/signing.local.props") == []
     assert [r for r, _ in findings("signing.local.props on build.local")] == ["社内ホスト名"]
     example = '"examples": ["3942447fac867ae5cdb3229b658f4d48"],'
     assert findings(example, (), "deps/cyclonedx/bom-1.6.schema.json") == []

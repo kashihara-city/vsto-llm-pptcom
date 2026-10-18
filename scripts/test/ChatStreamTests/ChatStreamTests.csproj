@@ -8,7 +8,7 @@
     <RootNamespace>ChatStreamTests</RootNamespace>
     <AssemblyName>ChatStreamTests</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
-    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <OutputPath>$(BaseOutputPath)$(Configuration)\</OutputPath>
     <DebugType>full</DebugType>
     <DebugSymbols>true</DebugSymbols>
     <!-- It compiles OpenAiCompatibleClient.cs for its chat stream only: the chat types it does not use here

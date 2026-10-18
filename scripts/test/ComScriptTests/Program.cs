@@ -56,11 +56,15 @@ namespace ComScriptTests
         private static string FindTestFolder()
         {
             string d = AppDomain.CurrentDomain.BaseDirectory;
-            for (int i = 0; i < 5 && d is not null; i++, d = Path.GetDirectoryName(d.TrimEnd('\\')))
+            // The exe is built into temp\build\ComScriptTests\bin\<configuration>\: up to the repository, then down.
+            for (int i = 0; i < 8 && d is not null; i++, d = Path.GetDirectoryName(d.TrimEnd('\\')))
             {
-                if (File.Exists(Path.Combine(d, "expected.tsv")))
+                foreach (string folder in new[] { d, Path.Combine(d, "scripts", "test", "ComScriptTests") })
                 {
-                    return d;
+                    if (File.Exists(Path.Combine(folder, "expected.tsv")))
+                    {
+                        return folder;
+                    }
                 }
             }
 
