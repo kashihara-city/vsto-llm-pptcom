@@ -126,7 +126,7 @@ PowerPoint
 
 次のものが必要です。
 
-- Visual Studio Build Tools 2026 の 18.9 以降（「Office/SharePoint ビルド ツール」に、オプションの「Visual Studio Tools for Office (VSTO) ビルド ツール」と「.NET Framework 4.8 開発ツール」を足したもの）。C# 14 と、下の静的解析のために、このコンパイラが要ります
+- Visual Studio Build Tools 2026 の 18.9 以降（「Office/SharePoint ビルド ツール」に、オプションの「Visual Studio Tools for Office (VSTO) ビルド ツール」と「.NET Framework 4.8 開発ツール」を足したもの）。C# 14 と静的解析（「テスト」を参照）のために、このコンパイラが要ります
 - Rust 1.99.0 と wasm32-unknown-unknown ターゲット（`rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown`）
 
 ```
@@ -140,9 +140,13 @@ powershell -ExecutionPolicy Bypass -File scripts\build\build.ps1
 
 版を上げるときは `scripts/deps/fetch-web.py` の版を書き換えて実行します。公開から 7 日たっていない版は取りません。
 
+## テスト
+
 C# のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.NetAnalyzers、Microsoft.CodeAnalysis.CSharp.CodeStyle、Meziantou.Analyzer）にかけ、警告はエラーとして扱います。言語の版、解析器とその版は `Directory.Build.props` で決めています。止めている規則とその理由、書き方の決まり（型は `var` でなく名前で書く、`if` などには必ず波かっこを付ける、null とは `is null` / `is not null` で比べる、1 つのファイルに 1 つの型、メソッドは 100 行・60 文まで）は `.editorconfig` に書いてあります。null になりうる参照は C# の Nullable で型に書き、コンパイラが確かめます（`!` で黙らせることはしません）。古い形式の csproj には .NET SDK の「すべての規則」の一覧が渡らないため、NetAnalyzers の一覧はパッケージから `scripts/deps/netanalyzers-config.py` で作り、`deps/analyzers/` に置いています（CI で照合します）。
 
-作業ウィンドウの文言は、コードには書かず、`pptcom/UI/web/locales/<言語>.json` にメッセージのコードごとに置いています。アドインはコードと値だけを作業ウィンドウに送り、文にするのは作業ウィンドウ（`i18n.js`）です。`ja.json` がもとで、ほかの言語のファイルに無いコードは日本語で出ます。どの言語を使うかは PowerPoint の表示言語で決めます。`python -X utf8 scripts/test/i18n.py` は、使っているコードがすべて `ja.json` にあること、値の数が `{0}` などと合うこと、ほかの言語が同じコードを持つこと、コードに日本語の文が書かれていないことを調べます（CI でも流します）。
+`scripts/test/ComScriptTests` は、PowerPoint なしで pptcom スクリプトの解析と実行を調べる構文テストです。式の値は VBScript で求めた値（`expected.tsv`、`make_expected.vbs` で作る）と照らし、VBA と VBScript で違うところは VBA の値で調べます。ほかに、受け付ける文と断る文、モデルに返す報告の文を調べます。MSBuild で組んで `scripts\test\ComScriptTests\bin\Debug\ComScriptTests.exe` を実行します（CI でも流します）。
+
+`python -X utf8 scripts/test/i18n.py` は、作業ウィンドウの文言について、使っているコードがすべて `ja.json` にあること、値の数が `{0}` などと合うこと、ほかの言語が同じコードを持つこと、コードに日本語の文が書かれていないことを調べます（CI でも流します）。
 
 `python -X utf8 scripts/test/no-secrets.py` は、Git が追跡しているファイルに、私有 IP アドレス、社内のホスト名、API キーらしき文字列、開発機のパス、鍵や証明書の中身が混ざっていないかを調べます（CI でも毎回流します）。`--history` を付けると、すべてのコミットのファイルとコミットのメッセージを調べます。パターンでは見分けられない接続先のホスト名やモデル名は、Git の管理外の `notes/secrets-denylist.txt`（1 行に 1 語）に書いておくと、それも照合します。
 
