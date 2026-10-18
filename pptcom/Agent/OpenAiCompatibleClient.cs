@@ -34,8 +34,8 @@ namespace Pptcom.Agent
 
         // How long a reply's stream may send nothing before it counts as a server failure (再試行). The thinking
         // model streams its reasoning, so the gaps are short; the longest is the wait before the first token
-        // (the server reading the prompt): at most 47 s in 649 turns of the add-in's runs (2026-09/10), mostly
-        // under 10 s. HttpClient.Timeout does not cover the stream: it ends with the headers (ResponseHeadersRead).
+        // (the server reading the prompt), well within the limit in the add-in's runs. HttpClient.Timeout does not
+        // cover the stream: it ends with the headers (ResponseHeadersRead).
         public TimeSpan StreamIdleLimit { get; set; } = TimeSpan.FromMinutes(1);
         private bool _sendMmProcessorKwargs = true;
         public string Model { get; }
@@ -460,9 +460,16 @@ namespace Pptcom.Agent
             return result;
         }
 
-        // Not stopped by 中止: the engine waits for the image (a script stops between its statements, not in one).
-        // `cancellationToken` is for a request that ends altogether (its window is gone, ThisAddIn.StopForGoneWindow):
-        // it ends the wait for the headers and for the body, as the chat's 中止 does; the server may still make the image.
+        // How long an image may take, its headers and its body together (the server makes it meanwhile). Images come in
+        // seconds in the add-in's runs; the limit leaves room for a server that loads the model first, or a queue. An
+        // image that does not come in time is a failed line the model is told about, not a stopped request.
+        // HttpClient.Timeout (20 min) ends with the headers here (ResponseHeadersRead), so the image has its own limit
+        // over both.
+        public TimeSpan ImageTimeLimit { get; set; } = TimeSpan.FromMinutes(1);
+
+        // Not stopped by 中止: the engine waits for the image (a script stops between its statements, not in one), up to
+        // ImageTimeLimit (TimeoutException). `cancellationToken` is for a request that ends altogether (its window is gone,
+        // ThisAddIn.StopForGoneWindow): it ends the wait for the headers and for the body; the server may still make the image.
         public async Task<byte[]> GenerateImageAsync(string imageModel, string prompt, string size = "1024x1024", CancellationToken cancellationToken = default)
         {
             // The Z-Image Turbo server accepts only 512 / 768 / 1024 per side (anything else returned HTTP 422).
@@ -475,23 +482,30 @@ namespace Pptcom.Agent
             };
 
             using HttpRequestMessage request = Request(HttpMethod.Post, "/v1/images/generations", new StringContent(payload.ToString(), Encoding.UTF8, "application/json"));
-            using HttpResponseMessage resp = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(true);
-            string body;
-            // .NET Framework reads a body without a token: closing the response ends the read.
-            using (cancellationToken.Register(resp.Dispose))
+            using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            limit.CancelAfter(ImageTimeLimit);
+            string body, status;
+            bool ok;
+            try
             {
-                try
+                using HttpResponseMessage resp = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, limit.Token).ConfigureAwait(true);
+                // .NET Framework reads a body without a token: closing the response ends the read.
+                using (limit.Token.Register(resp.Dispose))
                 {
                     body = await resp.Content.ReadAsStringAsync().ConfigureAwait(true);
                 }
-                catch (Exception ex) when (Guard.IsRecoverable(ex) && cancellationToken.IsCancellationRequested)
-                {
-                    throw new OperationCanceledException("the image was not waited for: the request ended", ex, cancellationToken);
-                }
+
+                ok = resp.IsSuccessStatusCode;
+                status = Invariant($"{(int)resp.StatusCode} {resp.ReasonPhrase}");
             }
-            if (!resp.IsSuccessStatusCode)
+            catch (Exception ex) when (Guard.IsRecoverable(ex) && limit.IsCancellationRequested)
             {
-                throw new InvalidOperationException(Invariant($"Image generation failed: {(int)resp.StatusCode} {resp.ReasonPhrase}\n{body}"));
+                cancellationToken.ThrowIfCancellationRequested(); // the request ended
+                throw new TimeoutException(Invariant($"the image did not come within {ImageTimeLimit.TotalSeconds:0} s"), ex);
+            }
+            if (!ok)
+            {
+                throw new InvalidOperationException("Image generation failed: " + status + "\n" + body);
             }
 
             JObject root = JObject.Parse(body);

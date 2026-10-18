@@ -113,7 +113,7 @@ namespace ChatStreamTests
         }
 
         // An image is not stopped by 中止 (the engine waits for it); a request that ends altogether (its window is gone)
-        // ends the wait with its token, whether the headers or the body have not come.
+        // ends the wait with its token, and ImageTimeLimit ends it otherwise, whether the headers or the body have not come.
         private static async Task ImagesAsync()
         {
             Console.WriteLine("== an image");
@@ -124,23 +124,38 @@ namespace ChatStreamTests
                 Check("an image that comes is returned", Encoding.ASCII.GetString(image) == "ABC", Encoding.ASCII.GetString(image));
             }
 
-            Exception? ex = await ImageEndedAsync(Streaming(200, "{\"data\":")).ConfigureAwait(true);
+            string body = Streaming(200, "{\"data\":");
+            Exception? ex = await ImageEndedAsync(body, cancel: true).ConfigureAwait(true);
             Check("the end of the request stops the wait for its body", ex is OperationCanceledException, Describe(ex));
-            ex = await ImageEndedAsync("").ConfigureAwait(true);
+            ex = await ImageEndedAsync("", cancel: true).ConfigureAwait(true);
             Check("the end of the request stops the wait for its headers", ex is OperationCanceledException, Describe(ex));
+            ex = await ImageEndedAsync(body, cancel: false).ConfigureAwait(true);
+            Check("the time limit ends the wait for its body", ex is TimeoutException, Describe(ex));
+            ex = await ImageEndedAsync("", cancel: false).ConfigureAwait(true);
+            Check("the time limit ends the wait for its headers", ex is TimeoutException, Describe(ex));
         }
 
-        // The server holds the image's response open; the request ends once the response (if any) is out.
-        private static async Task<Exception?> ImageEndedAsync(string response)
+        // The server holds the image's response open. With `cancel`, the request ends once the response (if any) is out;
+        // without, nobody ends it and only ImageTimeLimit (1 s here) can.
+        private static async Task<Exception?> ImageEndedAsync(string response, bool cancel)
         {
             using FakeServer server = new(response, stall: true);
             using CancellationTokenSource gone = new();
             OpenAiCompatibleClient client = new(server.Url, "", "test-model");
+            if (!cancel)
+            {
+                client.ImageTimeLimit = TimeSpan.FromSeconds(1);
+            }
+
             Task<byte[]> image = client.GenerateImageAsync("image-model", "a cat", "1024x1024", gone.Token);
-            await server.Sent.ConfigureAwait(true);
-            await Task.Delay(200, CancellationToken.None).ConfigureAwait(true);
-            gone.Cancel();
-            return await EndingAsync(image, TimeSpan.FromSeconds(3)).ConfigureAwait(true);
+            if (cancel)
+            {
+                await server.Sent.ConfigureAwait(true);
+                await Task.Delay(200, CancellationToken.None).ConfigureAwait(true);
+                gone.Cancel();
+            }
+
+            return await EndingAsync(image, TimeSpan.FromSeconds(cancel ? 3 : 5)).ConfigureAwait(true);
         }
 
         // A server that does not know mm_processor_kwargs gets the request again without it.
