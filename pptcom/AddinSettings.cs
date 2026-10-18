@@ -1,6 +1,4 @@
 using System;
-using System.Runtime.InteropServices;
-using System.Text;
 using Microsoft.Win32;
 
 namespace Pptcom
@@ -41,27 +39,28 @@ namespace Pptcom
         public static readonly string DataFolder = System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KashiharaCity", "pptcom");
 
-        public bool HasEndpoint { get { return Endpoint.Length > 0; } }
-        public bool HasApiKey { get { return ApiKey.Length > 0; } }
+        public bool HasEndpoint => Endpoint.Length > 0;
+        public bool HasApiKey => ApiKey.Length > 0;
 
         public static AddinSettings Load()
         {
-            var s = new AddinSettings();
+            AddinSettings s = new();
             try
             {
-                using (var key = Registry.CurrentUser.OpenSubKey(RegistryPath))
+                using RegistryKey key = Registry.CurrentUser.OpenSubKey(RegistryPath);
+                if (key is not null)
                 {
-                    if (key != null)
-                    {
-                        s.Endpoint = ((key.GetValue("endpoint") as string) ?? "").Trim().TrimEnd('/');
-                        s.ChatModel = ((key.GetValue("chat_model") as string) ?? "").Trim();
-                        s.ImageModel = ((key.GetValue("image_model") as string) ?? "").Trim();
-                        s.ExternalControl = key.GetValue("external_control") is int ec && ec != 0;
-                        s.SaveProgress = key.GetValue("save_progress") is int sp && sp != 0;
-                    }
+                    s.Endpoint = ((key.GetValue("endpoint") as string) ?? "").Trim().TrimEnd('/');
+                    s.ChatModel = ((key.GetValue("chat_model") as string) ?? "").Trim();
+                    s.ImageModel = ((key.GetValue("image_model") as string) ?? "").Trim();
+                    s.ExternalControl = key.GetValue("external_control") is int ec && ec != 0;
+                    s.SaveProgress = key.GetValue("save_progress") is int sp && sp != 0;
                 }
             }
-            catch { /* unreadable: start empty */ }
+            catch (Exception ex) when (IsRegistryFailure(ex))
+            {
+                // unreadable: start empty
+            }
             s.ApiKey = CredentialStore.Read(CredentialTarget) ?? "";
             return s;
         }
@@ -71,16 +70,22 @@ namespace Pptcom
         {
             try
             {
-                using (var key = Registry.CurrentUser.CreateSubKey(RegistryPath))
-                {
-                    key.SetValue("endpoint", Endpoint, RegistryValueKind.String);
-                    key.SetValue("chat_model", ChatModel, RegistryValueKind.String);
-                    key.SetValue("image_model", ImageModel, RegistryValueKind.String);
-                    key.SetValue("external_control", ExternalControl ? 1 : 0, RegistryValueKind.DWord);
-                    key.SetValue("save_progress", SaveProgress ? 1 : 0, RegistryValueKind.DWord);
-                }
+                using RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath);
+                key.SetValue("endpoint", Endpoint, RegistryValueKind.String);
+                key.SetValue("chat_model", ChatModel, RegistryValueKind.String);
+                key.SetValue("image_model", ImageModel, RegistryValueKind.String);
+                key.SetValue("external_control", ExternalControl ? 1 : 0, RegistryValueKind.DWord);
+                key.SetValue("save_progress", SaveProgress ? 1 : 0, RegistryValueKind.DWord);
             }
-            catch { }
+            catch (Exception ex) when (IsRegistryFailure(ex))
+            {
+            }
+        }
+
+        // What Registry throws when the key cannot be read or written (a policy, a locked hive).
+        private static bool IsRegistryFailure(Exception ex)
+        {
+            return ex is System.Security.SecurityException or UnauthorizedAccessException or System.IO.IOException;
         }
 
         // Empty = remove the stored key.
@@ -88,86 +93,12 @@ namespace Pptcom
         {
             apiKey = (apiKey ?? "").Trim();
             bool ok = apiKey.Length == 0 ? CredentialStore.Delete(CredentialTarget) : CredentialStore.Write(CredentialTarget, "api_key", apiKey);
-            if (ok) ApiKey = apiKey;
+            if (ok)
+            {
+                ApiKey = apiKey;
+            }
+
             return ok;
-        }
-    }
-
-    // Minimal wrapper over the Win32 credential API (generic credentials of the current user).
-    internal static class CredentialStore
-    {
-        private const int CRED_TYPE_GENERIC = 1;
-        private const int CRED_PERSIST_LOCAL_MACHINE = 2; // this user on this PC (does not roam)
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        private struct CREDENTIAL
-        {
-            public int Flags;
-            public int Type;
-            public string TargetName;
-            public string Comment;
-            public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
-            public int CredentialBlobSize;
-            public IntPtr CredentialBlob;
-            public int Persist;
-            public int AttributeCount;
-            public IntPtr Attributes;
-            public string TargetAlias;
-            public string UserName;
-        }
-
-        [DllImport("advapi32.dll", EntryPoint = "CredReadW", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern bool CredRead(string target, int type, int reservedFlag, out IntPtr credential);
-
-        [DllImport("advapi32.dll", EntryPoint = "CredWriteW", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern bool CredWrite(ref CREDENTIAL credential, int flags);
-
-        [DllImport("advapi32.dll", EntryPoint = "CredDeleteW", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern bool CredDelete(string target, int type, int flags);
-
-        [DllImport("advapi32.dll")]
-        private static extern void CredFree(IntPtr buffer);
-
-        public static string Read(string target)
-        {
-            IntPtr p;
-            if (!CredRead(target, CRED_TYPE_GENERIC, 0, out p)) return null;
-            try
-            {
-                var c = (CREDENTIAL)Marshal.PtrToStructure(p, typeof(CREDENTIAL));
-                if (c.CredentialBlob == IntPtr.Zero || c.CredentialBlobSize == 0) return "";
-                var bytes = new byte[c.CredentialBlobSize];
-                Marshal.Copy(c.CredentialBlob, bytes, 0, bytes.Length);
-                return Encoding.Unicode.GetString(bytes);
-            }
-            finally { CredFree(p); }
-        }
-
-        public static bool Write(string target, string userName, string secret)
-        {
-            byte[] bytes = Encoding.Unicode.GetBytes(secret);
-            IntPtr blob = Marshal.AllocHGlobal(bytes.Length);
-            try
-            {
-                Marshal.Copy(bytes, 0, blob, bytes.Length);
-                var c = new CREDENTIAL
-                {
-                    Type = CRED_TYPE_GENERIC,
-                    TargetName = target,
-                    UserName = userName,
-                    Comment = "pptcom (vsto-llm-pptcom): API key for the LLM endpoint",
-                    CredentialBlob = blob,
-                    CredentialBlobSize = bytes.Length,
-                    Persist = CRED_PERSIST_LOCAL_MACHINE,
-                };
-                return CredWrite(ref c, 0);
-            }
-            finally { Marshal.FreeHGlobal(blob); }
-        }
-
-        public static bool Delete(string target)
-        {
-            return CredDelete(target, CRED_TYPE_GENERIC, 0) || Read(target) == null;
         }
     }
 }

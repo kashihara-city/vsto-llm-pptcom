@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
+using static System.FormattableString;
 
 namespace Pptcom.ComProxy
 {
@@ -27,9 +28,9 @@ namespace Pptcom.ComProxy
     // A bareword value (e.g. msoTrue, ppLayoutBlank) is passed through to ComProxyEngine as a
     // JSON string, exactly like today's ops JSON - EnumResolver there is what turns it into the
     // real enum value, so that logic doesn't move or change either.
-    public static class ComScriptParser
+    internal static class ComScriptParser
     {
-        public sealed class ParseResult
+        internal sealed class ParseResult
         {
             public bool Success;
             public string OpsJson;
@@ -44,9 +45,6 @@ namespace Pptcom.ComProxy
             // carry them forward into the next round's `priorKnownIds` and let the model keep
             // referencing e.g. `slide1` without re-fetching it.
             public List<string> DefinedIds;
-            // On failure: the trimmed text of the statement that failed to parse (null if the
-            // failure was not tied to one line, e.g. "too many lines").
-            public string FailedLineText;
             // Per statement (index = statement number - 1): the variable whose object the statement
             // changes - `card.Fill.ForeColor.RGB = ...`, `card.Delete`, and inside `With card.TextFrame`
             // `.Font.Size = 12` all give card - or null when it only binds a variable (`Set x = ...`,
@@ -55,10 +53,10 @@ namespace Pptcom.ComProxy
             // Statements that could not be parsed (1-based statement number -> error). They emit no
             // ops; the rest of the script still parses, and ComProxyEngine.ExecuteScriptAsync reports
             // them as failed and skips the statements that use what they would have set.
-            public Dictionary<int, LineError> LineErrors = new Dictionary<int, LineError>();
+            public Dictionary<int, LineError> LineErrors = [];
         }
 
-        public sealed class LineError
+        internal sealed class LineError
         {
             public string Message;
             public string Cause;    // same key = same mistake (grouped in the report)
@@ -72,75 +70,52 @@ namespace Pptcom.ComProxy
         // never for a model's pptcom script.
         public static ParseResult Parse(string script, IEnumerable<string> priorKnownIds, int maxLines, bool allowImage = false)
         {
-            // One entry per statement: trailing ' comments are dropped, lines ending in VBA's ` _` are
-            // joined to the next one, `a = 1: b = 2` becomes two statements (as in VBA), and
-            // `Dim x As T` declarations are skipped (nothing to do).
-            var lines = new List<string>();
-            foreach (string logical in JoinContinuedLines((script ?? "").Replace("\r\n", "\n").Split('\n')))
-            {
-                string l = logical.Trim();
-                if (l.Length == 0 || l.StartsWith("//") || RemPattern.IsMatch(l)) continue;
-                foreach (string stmt in SplitStatements(l))
-                {
-                    string st = stmt.Trim();
-                    if (st.Length > 0 && !DimPattern.IsMatch(st)) lines.Add(st);
-                }
-            }
+            List<string> lines = StatementsOf(script);
             if (lines.Count == 0)
+            {
                 return new ParseResult { Success = false, Error = "script is empty" };
+            }
 
             // For ... Next loops are written out, then With blocks rewritten. Each Stmt keeps the code to
             // parse and the text reports show (as written, with the loop counters of that pass), so a
             // report says `.Font.Size = 12   (rr = 3)`, not `_w1.Font.Size = 12`.
             _currentKnownIds = null;
             _currentState = null;
-            string loopError;
-            List<Stmt> stmts = ExpandForLoops(lines.Select(l => new Stmt { Code = l, Shown = l }).ToList(), maxLines, out loopError);
-            if (loopError != null)
+            List<Stmt> stmts = ExpandForLoops([.. lines.Select(static l => new Stmt { Code = l, Shown = l })], maxLines, out string loopError);
+            if (loopError is not null)
+            {
                 return new ParseResult { Success = false, Error = loopError };
+            }
+
             stmts = ExpandWithBlocks(stmts);
-            List<string> code = stmts.Select(x => x.Code).ToList();
-            lines = stmts.Select(x => x.Shown).ToList();
+            List<string> code = [.. stmts.Select(static x => x.Code)];
+            lines = [.. stmts.Select(static x => x.Shown)];
 
             if (lines.Count == 0)
-                return new ParseResult { Success = false, Error = "script is empty" };
-            if (lines.Count > maxLines)
-                return new ParseResult { Success = false, Error = "too many lines (" + lines.Count + " > " + maxLines + ")" };
-
-            var state = new State { AllowImage = allowImage };
-            if (priorKnownIds != null)
             {
-                foreach (var id in priorKnownIds) state.KnownIds.Add(id);
+                return new ParseResult { Success = false, Error = "script is empty" };
+            }
+
+            if (lines.Count > maxLines)
+            {
+                return new ParseResult { Success = false, Error = Invariant($"too many lines ({lines.Count} > {maxLines})") };
+            }
+
+            State state = new()
+            {
+                AllowImage = allowImage,
+            };
+            if (priorKnownIds is not null)
+            {
+                foreach (string id in priorKnownIds)
+                {
+                    state.KnownIds.Add(id);
+                }
             }
             _currentKnownIds = state.KnownIds; // lets ParseValue tell variables from enum names
             _currentState = state;             // lets ParseValue emit the ops of a COM expression
 
-            // A statement that does not parse is dropped on its own, like one that fails at run time:
-            // its partial ops are taken back, and the variable it would have set is still made known
-            // so later statements parse - the engine skips those (they depend on a failed line).
-            var lineErrors = new Dictionary<int, LineError>();
-            for (int lineNo = 1; lineNo <= lines.Count; lineNo++)
-            {
-                int opsBefore = state.Ops.Count;
-                try
-                {
-                    _currentLine = lineNo;
-                    var decided = stmts[lineNo - 1];
-                    if (decided.Error != null) throw new ComScriptScope.RejectedException(decided.Error, decided.Cause ?? decided.Error);
-                    ParseLine(code[lineNo - 1], lineNo, state);
-                }
-                catch (Exception ex)
-                {
-                    while (state.Ops.Count > opsBefore) state.Ops.RemoveAt(state.Ops.Count - 1);
-                    while (state.OpLineNumbers.Count > opsBefore) state.OpLineNumbers.RemoveAt(state.OpLineNumbers.Count - 1);
-                    var scope = ex as ComScriptScope.RejectedException;
-                    var named = AssignedNamePattern.Match(code[lineNo - 1]);
-                    string assigns = named.Success && !ReservedWords.Contains(named.Groups[1].Value) ? named.Groups[1].Value : null;
-                    if (assigns != null) state.KnownIds.Add(assigns);
-                    lineErrors[lineNo] = new LineError { Message = ex.Message, Cause = scope != null ? scope.Cause : ex.Message, Assigns = assigns };
-                }
-            }
-
+            Dictionary<int, LineError> lineErrors = ParseStatements(stmts, code, state);
             return new ParseResult
             {
                 Success = true,
@@ -153,32 +128,116 @@ namespace Pptcom.ComProxy
             };
         }
 
-        private static readonly Regex HiddenWithSetPattern = new Regex(@"^Set\s+(_w\d+)\s*=\s*([A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly Regex BindsVariablePattern = new Regex(@"^(Set\s|[A-Za-z_]\w*\s*=)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly Regex LeadingRootPattern = new Regex(@"^([A-Za-z_]\w*)\s*[.(]", RegexOptions.Compiled);
+        // One entry per statement: trailing ' comments are dropped, lines ending in VBA's ` _` are
+        // joined to the next one, `a = 1: b = 2` becomes two statements (as in VBA), and
+        // `Dim x As T` declarations are skipped (nothing to do).
+        private static List<string> StatementsOf(string script)
+        {
+            List<string> lines = [];
+            foreach (string logical in JoinContinuedLines((script ?? "").Replace("\r\n", "\n").Split('\n')))
+            {
+                string l = logical.Trim();
+                if (l.Length == 0 || l.StartsWith("//", StringComparison.Ordinal) || RemPattern.IsMatch(l))
+                {
+                    continue;
+                }
+
+                foreach (string stmt in SplitStatements(l))
+                {
+                    string st = stmt.Trim();
+                    if (st.Length > 0 && !DimPattern.IsMatch(st))
+                    {
+                        lines.Add(st);
+                    }
+                }
+            }
+            return lines;
+        }
+
+        // A statement that does not parse is dropped on its own, like one that fails at run time:
+        // its partial ops are taken back, and the variable it would have set is still made known
+        // so later statements parse - the engine skips those (they depend on a failed line).
+        private static Dictionary<int, LineError> ParseStatements(List<Stmt> stmts, List<string> code, State state)
+        {
+            Dictionary<int, LineError> lineErrors = [];
+            for (int lineNo = 1; lineNo <= code.Count; lineNo++)
+            {
+                int opsBefore = state.Ops.Count;
+                try
+                {
+                    _currentLine = lineNo;
+                    Stmt decided = stmts[lineNo - 1];
+                    if (decided.Error is not null)
+                    {
+                        throw new ComScriptScope.RejectedException(decided.Error, decided.Cause ?? decided.Error);
+                    }
+
+                    ParseLine(code[lineNo - 1], lineNo, state);
+                }
+                // Whatever the line's parse throws makes it a line that could not be read; the others go on.
+                catch (Exception ex) when (Guard.IsRecoverable(ex))
+                {
+                    while (state.Ops.Count > opsBefore)
+                    {
+                        state.Ops.RemoveAt(state.Ops.Count - 1);
+                    }
+
+                    while (state.OpLineNumbers.Count > opsBefore)
+                    {
+                        state.OpLineNumbers.RemoveAt(state.OpLineNumbers.Count - 1);
+                    }
+
+                    Match named = AssignedNamePattern.Match(code[lineNo - 1]);
+                    string assigns = named.Success && !ReservedWords.Contains(named.Groups[1].Value) ? named.Groups[1].Value : null;
+                    if (assigns is not null)
+                    {
+                        state.KnownIds.Add(assigns);
+                    }
+
+                    lineErrors[lineNo] = new LineError { Message = ex.Message, Cause = ex is ComScriptScope.RejectedException scope ? scope.Cause : ex.Message, Assigns = assigns };
+                }
+            }
+
+            return lineErrors;
+        }
+
+        private static readonly Regex HiddenWithSetPattern = new(@"^Set\s+(_w\d+)\s*=\s*([A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
+        private static readonly Regex BindsVariablePattern = new(@"^(Set\s|[A-Za-z_]\w*\s*=)", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
+        private static readonly Regex LeadingRootPattern = new(@"^([A-Za-z_]\w*)\s*[.(]", RegexOptions.Compiled, Guard.RegexTimeout);
 
         // See ParseResult.ChangedRoots. Reads the code as parsed (With blocks already written out), so a
         // hidden With variable stands for the variable its object came from.
         private static List<string> ChangedRootsOf(List<string> code)
         {
-            var withRoots = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var roots = new List<string>();
+            Dictionary<string, string> withRoots = new(StringComparer.OrdinalIgnoreCase);
+            List<string> roots = [];
             foreach (string c in code)
             {
-                var set = HiddenWithSetPattern.Match(c);
+                Match set = HiddenWithSetPattern.Match(c);
                 if (set.Success)
                 {
-                    string from = set.Groups[2].Value, outer;
-                    withRoots[set.Groups[1].Value] = withRoots.TryGetValue(from, out outer) ? outer : from;
+                    string from = set.Groups[2].Value;
+                    withRoots[set.Groups[1].Value] = withRoots.TryGetValue(from, out string outer) ? outer : from;
                     roots.Add(null);
                     continue;
                 }
-                if (BindsVariablePattern.IsMatch(c)) { roots.Add(null); continue; }
-                var m = LeadingRootPattern.Match(c);
+                if (BindsVariablePattern.IsMatch(c))
+                {
+                    roots.Add(null);
+                    continue;
+                }
+                Match m = LeadingRootPattern.Match(c);
                 string root = m.Success ? m.Groups[1].Value : null;
-                string mapped;
-                if (root != null && withRoots.TryGetValue(root, out mapped)) root = mapped;
-                if (root != null && (IsApp(root) || IsHiddenName(root) || root.Equals(PresId, StringComparison.OrdinalIgnoreCase))) root = null;
+                if (root is not null && withRoots.TryGetValue(root, out string mapped))
+                {
+                    root = mapped;
+                }
+
+                if (root is not null && (IsApp(root) || IsHiddenName(root) || root.Equals(PresId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    root = null;
+                }
+
                 roots.Add(root);
             }
             return roots;
@@ -190,11 +249,11 @@ namespace Pptcom.ComProxy
 
         private sealed class State
         {
-            public readonly JArray Ops = new JArray();
-            public readonly List<int> OpLineNumbers = new List<int>();
+            public readonly JArray Ops = [];
+            public readonly List<int> OpLineNumbers = [];
             // Application and ActivePresentation are bound by ComProxyEngine before any script runs.
-            public readonly HashSet<string> KnownIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { AppId, PresId };
-            public readonly List<string> NewlyDefinedIds = new List<string>();
+            public readonly HashSet<string> KnownIds = new(StringComparer.OrdinalIgnoreCase) { AppId, PresId };
+            public readonly List<string> NewlyDefinedIds = [];
             public int SyntheticCounter;
             public bool AllowImage;
 
@@ -203,8 +262,15 @@ namespace Pptcom.ComProxy
             public void DefineId(string id)
             {
                 KnownIds.Add(id);
-                if (IsHiddenName(id)) return; // a With block's object: not one of the script's variables
-                if (!NewlyDefinedIds.Contains(id, StringComparer.OrdinalIgnoreCase)) NewlyDefinedIds.Add(id);
+                if (IsHiddenName(id))
+                {
+                    return; // a With block's object: not one of the script's variables
+                }
+
+                if (!NewlyDefinedIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+                {
+                    NewlyDefinedIds.Add(id);
+                }
             }
         }
 
@@ -213,11 +279,11 @@ namespace Pptcom.ComProxy
         // `Set x = ...` / `Let x = ...` / `Const x = ...` / `Call x.M(...)`: the keyword is dropped.
         // Set is remembered: without it, `tr = "text"` on an object variable follows VBA's Let rule
         // (writes the default property, see ComProxyEngine) instead of replacing the variable.
-        private static readonly Regex AssignKeywordPattern = new Regex(@"^(?:Set|Let|Const)\s+(?=\$?[A-Za-z_])", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly Regex SetKeywordPattern = new Regex(@"^Set\s+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly Regex CallKeywordPattern = new Regex(@"^Call\s+(?=[A-Za-z_])", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly Regex DimPattern = new Regex(@"^(?:Dim|Static)\s+[A-Za-z_]", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly Regex RemPattern = new Regex(@"^Rem(?:\s|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex AssignKeywordPattern = new(@"^(?:Set|Let|Const)\s+(?=\$?[A-Za-z_])", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
+        private static readonly Regex SetKeywordPattern = new(@"^Set\s+", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
+        private static readonly Regex CallKeywordPattern = new(@"^Call\s+(?=[A-Za-z_])", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
+        private static readonly Regex DimPattern = new(@"^(?:Dim|Static)\s+[A-Za-z_]", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
+        private static readonly Regex RemPattern = new(@"^Rem(?:\s|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
 
         // Cuts a trailing ' comment (outside strings).
         private static string StripComment(string line)
@@ -226,8 +292,14 @@ namespace Pptcom.ComProxy
             for (int i = 0; i < line.Length; i++)
             {
                 char c = line[i];
-                if (c == '"') inStr = !inStr;
-                else if (!inStr && c == '\'') return line.Substring(0, i);
+                if (c == '"')
+                {
+                    inStr = !inStr;
+                }
+                else if (!inStr && c == '\'')
+                {
+                    return line.Substring(0, i);
+                }
             }
             return line;
         }
@@ -239,31 +311,34 @@ namespace Pptcom.ComProxy
         // Inside the block a leading-dot member (`.Font.Size = 12`, `x = .Width / 2`, `With .Paragraphs(1)`)
         // gets the innermost With object in front. `End With` closes the block; one with no open
         // block is left for ComScriptScope to report.
-        private static readonly Regex WithPattern = new Regex(@"^With\s+(.+)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly Regex EndWithPattern = new Regex(@"^End\s+With$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex WithPattern = new(@"^With\s+(.+)$", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
+        private static readonly Regex EndWithPattern = new(@"^End\s+With$", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
 
         private static List<Stmt> ExpandWithBlocks(List<Stmt> statements)
         {
-            var result = new List<Stmt>();
-            var open = new List<string>();
+            List<Stmt> result = [];
+            List<string> open = [];
             int hidden = 0;
-            foreach (var st in statements)
+            foreach (Stmt st in statements)
             {
                 string s = open.Count > 0 ? PrefixWithMembers(st.Code, open[open.Count - 1]) : st.Code;
-                var with = WithPattern.Match(s);
-                if (with.Success && st.Error == null)
+                Match with = WithPattern.Match(s);
+                if (with.Success && st.Error is null)
                 {
                     string target = with.Groups[1].Value.Trim();
-                    if (IsIdentifier(target) && !IsApp(target)) open.Add(target);
+                    if (IsIdentifier(target) && !IsApp(target))
+                    {
+                        open.Add(target);
+                    }
                     else
                     {
-                        string name = HiddenWithPrefix + (++hidden);
+                        string name = Invariant($"{HiddenWithPrefix}{++hidden}");
                         result.Add(new Stmt { Code = "Set " + name + " = " + target, Shown = st.Shown });
                         open.Add(name);
                     }
                     continue;
                 }
-                if (open.Count > 0 && EndWithPattern.IsMatch(s) && st.Error == null)
+                if (open.Count > 0 && EndWithPattern.IsMatch(s) && st.Error is null)
                 {
                     open.RemoveAt(open.Count - 1);
                     continue;
@@ -289,12 +364,12 @@ namespace Pptcom.ComProxy
         // measured before writing anything out (iterations x body), and a script over it is rejected
         // with each loop's share. A loop whose bounds are only known while running (To tbl.Rows.Count)
         // is not written out: its lines fail together with a note saying to write the number.
-        private static readonly Regex ForPattern = new Regex(@"^For\s+([A-Za-z_]\w*)\s*=\s*(.+?)\s+To\s+(.+?)(?:\s+Step\s+(.+))?$",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly Regex NextPattern = new Regex(@"^Next(?:\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*))?$",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex ForPattern = new(@"^For\s+([A-Za-z_]\w*)\s*=\s*(.+?)\s+To\s+(.+?)(?:\s+Step\s+(.+))?$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
+        private static readonly Regex NextPattern = new(@"^Next(?:\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*))?$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
 
-        private abstract class LoopNode { }
+        private abstract class LoopNode;
 
         private sealed class PlainNode : LoopNode
         {
@@ -307,13 +382,17 @@ namespace Pptcom.ComProxy
             public int HeaderNumber;           // statement number as written, for the over-limit report
             public string Variable, Problem;   // Problem: why it cannot be written out
             public double From, To, Step;
-            public readonly List<LoopNode> Body = new List<LoopNode>();
+            public readonly List<LoopNode> Body = [];
 
             public long Iterations
             {
                 get
                 {
-                    if (Problem != null) return 0;
+                    if (Problem is not null)
+                    {
+                        return 0;
+                    }
+
                     double n = Math.Floor((To - From) / Step) + 1;
                     return n < 0 ? 0 : (long)Math.Min(n, long.MaxValue / 4);
                 }
@@ -323,24 +402,29 @@ namespace Pptcom.ComProxy
         private static List<Stmt> ExpandForLoops(List<Stmt> statements, int maxStatements, out string error)
         {
             error = null;
-            var root = new List<LoopNode>();
-            var open = new List<ForNode>();
+            List<LoopNode> root = [];
+            List<ForNode> open = [];
             bool anyLoop = false;
             for (int i = 0; i < statements.Count; i++)
             {
-                var st = statements[i];
+                Stmt st = statements[i];
                 List<LoopNode> into = open.Count > 0 ? open[open.Count - 1].Body : root;
-                var header = ForPattern.Match(st.Code);
+                Match header = ForPattern.Match(st.Code);
                 if (header.Success)
                 {
                     anyLoop = true;
-                    var loop = new ForNode { Header = st, HeaderNumber = i + 1, Variable = header.Groups[1].Value };
+                    ForNode loop = new()
+                    {
+                        Header = st,
+                        HeaderNumber = i + 1,
+                        Variable = header.Groups[1].Value,
+                    };
                     loop.Problem = LoopBounds(header, loop);
                     into.Add(loop);
                     open.Add(loop);
                     continue;
                 }
-                var next = NextPattern.Match(st.Code);
+                Match next = NextPattern.Match(st.Code);
                 if (next.Success && open.Count > 0)
                 {
                     int closes = next.Groups[1].Success ? next.Groups[1].Value.Split(',').Length : 1;
@@ -353,23 +437,36 @@ namespace Pptcom.ComProxy
                 }
                 into.Add(new PlainNode { Statement = st });
             }
-            foreach (var unclosed in open)
-                if (unclosed.Problem == null) unclosed.Problem = "For without Next: the loop '" + unclosed.Header.Shown + "' is never closed.";
-            if (!anyLoop) return statements;
+            foreach (ForNode unclosed in open)
+            {
+                unclosed.Problem ??= "For without Next: the loop '" + unclosed.Header.Shown + "' is never closed.";
+            }
 
-            long total = root.Sum(n => SizeOf(n));
+            if (!anyLoop)
+            {
+                return statements;
+            }
+
+            long total = root.Sum(SizeOf);
             if (total > maxStatements)
             {
-                var sb = new StringBuilder("too many statements after writing out the For loops: " + total.ToString("N0", CultureInfo.InvariantCulture) +
-                                           " > " + maxStatements + ".");
-                foreach (var loop in root.OfType<ForNode>())
+                StringBuilder sb = new("too many statements after writing out the For loops: " + total.ToString("N0", CultureInfo.InvariantCulture) +
+                                           Invariant($" > {maxStatements}."));
+                foreach (ForNode loop in root.OfType<ForNode>())
+                {
                     sb.Append("\n  statement ").Append(loop.HeaderNumber).Append(": ").Append(loop.Header.Shown)
                       .Append(" -> ").Append(SizeOf(loop).ToString("N0", CultureInfo.InvariantCulture)).Append(" statements");
+                }
+
                 error = sb.ToString();
                 return null;
             }
-            var result = new List<Stmt>();
-            foreach (var n in root) WriteOut(n, result, "");
+            List<Stmt> result = [];
+            foreach (LoopNode n in root)
+            {
+                WriteOut(n, result, "");
+            }
+
             return result;
         }
 
@@ -379,12 +476,13 @@ namespace Pptcom.ComProxy
         {
             string from = header.Groups[2].Value.Trim(), to = header.Groups[3].Value.Trim();
             string step = header.Groups[4].Success ? header.Groups[4].Value.Trim() : "1";
-            foreach (var part in new[] { from, to, step })
+            foreach (string part in new[] { from, to, step })
             {
-                double v;
-                if (!TryConstantNumber(part, out v))
+                if (!TryConstantNumber(part, out _))
+                {
                     return "pptcom writes a For loop out before running it, so its bounds must be numbers; '" + part + "' is only known while running. " +
                            "Read it in an earlier pptcom call (n = " + part + ") and write the number, e.g. For " + loop.Variable + " = 1 To 6.";
+                }
             }
             TryConstantNumber(from, out loop.From);
             TryConstantNumber(to, out loop.To);
@@ -397,67 +495,100 @@ namespace Pptcom.ComProxy
             value = 0;
             try
             {
-                var e = AsValue(ParseExpression(text));
-                if (!e.IsConst || e.Value is string || e.Value is bool) return false;
+                Expr e = AsValue(ParseExpression(text));
+                if (!e.IsConst || e.Value is string || e.Value is bool)
+                {
+                    return false;
+                }
+
                 value = Convert.ToDouble(e.Value, CultureInfo.InvariantCulture);
                 return true;
             }
-            catch (Exception) { return false; }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                return false;
+            }
         }
 
         private static long SizeOf(LoopNode node)
         {
-            var loop = node as ForNode;
-            if (loop == null) return 1;
-            long body = loop.Body.Sum(n => SizeOf(n));
-            if (loop.Problem != null) return 1 + body + (loop.Next != null ? 1 : 0);
+            if (node is not ForNode loop)
+            {
+                return 1;
+            }
+
+            long body = loop.Body.Sum(SizeOf);
+            if (loop.Problem is not null)
+            {
+                return 1 + body + (loop.Next is not null ? 1 : 0);
+            }
+
             long n2 = loop.Iterations;
             // saturate instead of overflowing: only "more than the limit" matters
-            return n2 > 0 && body + 1 > (long.MaxValue / 4) / n2 ? long.MaxValue / 4 : n2 * (body + 1) + 1;
+            return n2 > 0 && body + 1 > long.MaxValue / 4 / n2 ? long.MaxValue / 4 : (n2 * (body + 1)) + 1;
         }
 
         private static void WriteOut(LoopNode node, List<Stmt> into, string counters)
         {
-            var plain = node as PlainNode;
-            if (plain != null)
+            if (node is PlainNode plain)
             {
-                var st = plain.Statement;
+                Stmt st = plain.Statement;
                 into.Add(counters.Length == 0 ? st : new Stmt { Code = st.Code, Shown = st.Shown + "   (" + counters + ")", Error = st.Error, Cause = st.Cause });
                 return;
             }
-            var loop = (ForNode)node;
-            if (loop.Problem != null)
+            ForNode loop = (ForNode)node;
+            if (loop.Problem is not null)
             {
                 // the whole loop fails as one mistake; none of it runs
                 string cause = "for loop: " + loop.Header.Shown;
                 into.Add(new Stmt { Code = loop.Header.Code, Shown = loop.Header.Shown, Error = loop.Problem, Cause = cause });
-                foreach (var st in Flatten(loop.Body))
+                foreach (Stmt st in Flatten(loop.Body))
+                {
                     into.Add(new Stmt { Code = st.Code, Shown = st.Shown, Error = loop.Problem, Cause = cause });
-                if (loop.Next != null) into.Add(new Stmt { Code = loop.Next.Code, Shown = loop.Next.Shown, Error = loop.Problem, Cause = cause });
+                }
+
+                if (loop.Next is not null)
+                {
+                    into.Add(new Stmt { Code = loop.Next.Code, Shown = loop.Next.Shown, Error = loop.Problem, Cause = cause });
+                }
+
                 return;
             }
             double value = loop.From;
-            for (long i = 0; i < loop.Iterations; i++, value = loop.From + i * loop.Step)
+            for (long i = 0; i < loop.Iterations; i++, value = loop.From + (i * loop.Step))
             {
                 string here = (counters.Length > 0 ? counters + ", " : "") + loop.Variable + " = " + Number(value);
                 into.Add(new Stmt { Code = loop.Variable + " = " + Number(value), Shown = loop.Header.Shown + "   (" + here + ")" });
-                foreach (var child in loop.Body) WriteOut(child, into, here);
+                foreach (LoopNode child in loop.Body)
+                {
+                    WriteOut(child, into, here);
+                }
             }
             // as in VBA, the counter is one Step past the last value after the loop
-            double after = loop.From + loop.Iterations * loop.Step;
-            into.Add(new Stmt { Code = loop.Variable + " = " + Number(after), Shown = (loop.Next != null ? loop.Next.Shown : "Next") + "   (" + loop.Variable + " = " + Number(after) + ")" });
+            double after = loop.From + (loop.Iterations * loop.Step);
+            into.Add(new Stmt { Code = loop.Variable + " = " + Number(after), Shown = (loop.Next is not null ? loop.Next.Shown : "Next") + "   (" + loop.Variable + " = " + Number(after) + ")" });
         }
 
         private static IEnumerable<Stmt> Flatten(List<LoopNode> nodes)
         {
-            foreach (var n in nodes)
+            foreach (LoopNode n in nodes)
             {
-                var plain = n as PlainNode;
-                if (plain != null) { yield return plain.Statement; continue; }
-                var loop = (ForNode)n;
+                if (n is PlainNode plain)
+                {
+                    yield return plain.Statement;
+                    continue;
+                }
+                ForNode loop = (ForNode)n;
                 yield return loop.Header;
-                foreach (var st in Flatten(loop.Body)) yield return st;
-                if (loop.Next != null) yield return loop.Next;
+                foreach (Stmt st in Flatten(loop.Body))
+                {
+                    yield return st;
+                }
+
+                if (loop.Next is not null)
+                {
+                    yield return loop.Next;
+                }
             }
         }
 
@@ -472,7 +603,7 @@ namespace Pptcom.ComProxy
 
         public static bool IsHiddenName(string id)
         {
-            return id != null && id.Length > 2 && (id.StartsWith("_h", StringComparison.Ordinal) || id.StartsWith(HiddenWithPrefix, StringComparison.Ordinal))
+            return id is not null && id.Length > 2 && (id.StartsWith("_h", StringComparison.Ordinal) || id.StartsWith(HiddenWithPrefix, StringComparison.Ordinal))
                    && id.Skip(2).All(char.IsDigit);
         }
 
@@ -481,16 +612,23 @@ namespace Pptcom.ComProxy
         // and is followed by a letter (so .5 stays a number).
         private static string PrefixWithMembers(string statement, string withObject)
         {
-            var sb = new StringBuilder();
+            StringBuilder sb = new();
             bool inStr = false;
             for (int i = 0; i < statement.Length; i++)
             {
                 char c = statement[i];
-                if (c == '"') inStr = !inStr;
+                if (c == '"')
+                {
+                    inStr = !inStr;
+                }
+
                 if (!inStr && c == '.' && i + 1 < statement.Length && (char.IsLetter(statement[i + 1]) || statement[i + 1] == '_'))
                 {
                     char prev = i > 0 ? statement[i - 1] : ' ';
-                    if (!(char.IsLetterOrDigit(prev) || prev == '_' || prev == ')' || prev == ']')) sb.Append(withObject);
+                    if (!(char.IsLetterOrDigit(prev) || prev == '_' || prev == ')' || prev == ']'))
+                    {
+                        sb.Append(withObject);
+                    }
                 }
                 sb.Append(c);
             }
@@ -507,7 +645,7 @@ namespace Pptcom.ComProxy
             {
                 string code = StripComment(raw).TrimEnd();
                 bool continues = code.Length >= 2 && code[code.Length - 1] == '_' && char.IsWhiteSpace(code[code.Length - 2])
-                                 && code.Count(c => c == '"') % 2 == 0;
+                                 && code.Count(static c => c == '"') % 2 == 0;
                 if (continues)
                 {
                     pending = (pending ?? "") + code.Substring(0, code.Length - 1);
@@ -516,22 +654,37 @@ namespace Pptcom.ComProxy
                 yield return (pending ?? "") + code;
                 pending = null;
             }
-            if (pending != null) yield return pending + "_";
+            if (pending is not null)
+            {
+                yield return pending + "_";
+            }
         }
 
         // Splits `a = 1: b = 2` at top-level ':' (outside strings and parentheses; ':=' is left alone).
         private static List<string> SplitStatements(string line)
         {
-            var result = new List<string>();
+            List<string> result = [];
             int depth = 0, start = 0;
             bool inStr = false;
             for (int i = 0; i < line.Length; i++)
             {
                 char c = line[i];
-                if (c == '"') inStr = !inStr;
-                else if (inStr) continue;
-                else if (c == '(') depth++;
-                else if (c == ')') depth--;
+                if (c == '"')
+                {
+                    inStr = !inStr;
+                }
+                else if (inStr)
+                {
+                    continue;
+                }
+                else if (c == '(')
+                {
+                    depth++;
+                }
+                else if (c == ')')
+                {
+                    depth--;
+                }
                 else if (c == ':' && depth == 0 && (i + 1 >= line.Length || line[i + 1] != '='))
                 {
                     result.Add(line.Substring(start, i - start));
@@ -551,17 +704,38 @@ namespace Pptcom.ComProxy
             for (int i = 0; i < line.Length; i++)
             {
                 char c = line[i];
-                if (c == '"') { inStr = !inStr; continue; }
-                if (inStr) continue;
-                if (c == '(') depth++;
-                else if (c == ')') depth--;
+                if (c == '"')
+                {
+                    inStr = !inStr;
+                    continue;
+                }
+                if (inStr)
+                {
+                    continue;
+                }
+
+                if (c == '(')
+                {
+                    depth++;
+                }
+                else if (c == ')')
+                {
+                    depth--;
+                }
                 else if (char.IsWhiteSpace(c) && depth == 0)
                 {
                     string head = line.Substring(0, i).TrimEnd();
                     string rest = line.Substring(i).Trim();
-                    if (head.Length == 0 || rest.Length == 0 || head.EndsWith(")")) return line;
+                    if (head.Length == 0 || rest.Length == 0 || head.EndsWith(")", StringComparison.Ordinal))
+                    {
+                        return line;
+                    }
                     // `shp.ZOrder (msoSendToBack)` - VBA's spaced parentheses around the argument list
-                    if (rest.StartsWith("(") && rest.EndsWith(")") && IsSingleGroup(rest)) return head + rest;
+                    if (rest.StartsWith("(", StringComparison.Ordinal) && rest.EndsWith(")", StringComparison.Ordinal) && IsSingleGroup(rest))
+                    {
+                        return head + rest;
+                    }
+
                     return head + "(" + rest + ")";
                 }
             }
@@ -575,10 +749,26 @@ namespace Pptcom.ComProxy
             for (int i = 0; i < s.Length; i++)
             {
                 char c = s[i];
-                if (c == '"') inStr = !inStr;
-                else if (inStr) continue;
-                else if (c == '(') depth++;
-                else if (c == ')') { depth--; if (depth == 0 && i != s.Length - 1) return false; }
+                if (c == '"')
+                {
+                    inStr = !inStr;
+                }
+                else if (inStr)
+                {
+                    continue;
+                }
+                else if (c == '(')
+                {
+                    depth++;
+                }
+                else if (c == ')')
+                {
+                    depth--;
+                    if (depth == 0 && i != s.Length - 1)
+                    {
+                        return false;
+                    }
+                }
             }
             return depth == 0;
         }
@@ -586,7 +776,7 @@ namespace Pptcom.ComProxy
         // VBA reserved words: as in VBA, none of them can be a variable name. The system prompt
         // lists the same words (keep the two in sync).
         public static readonly string[] ReservedWordList =
-        {
+        [
             "And", "As", "Boolean", "ByRef", "Byte", "ByVal", "Call", "Case", "Const", "Currency", "Date", "Declare", "Dim", "Do",
             "Double", "Each", "Else", "ElseIf", "Empty", "End", "Enum", "Eqv", "Erase", "Error", "Event", "Exit", "False", "For",
             "Friend", "Function", "Get", "Global", "GoSub", "GoTo", "If", "Imp", "Implements", "In", "Integer", "Is", "Let", "Like",
@@ -594,14 +784,14 @@ namespace Pptcom.ComProxy
             "ParamArray", "Preserve", "Private", "Property", "Public", "RaiseEvent", "ReDim", "Rem", "Resume", "Return", "RSet",
             "Select", "Set", "Single", "Static", "Stop", "String", "Sub", "Then", "To", "True", "Type", "TypeOf", "Until",
             "Variant", "Wend", "While", "With", "WithEvents", "Xor",
-        };
-        private static readonly HashSet<string> ReservedWords = new HashSet<string>(ReservedWordList, StringComparer.OrdinalIgnoreCase);
-        private static readonly Regex AssignedNamePattern = new Regex(@"^(?:(?:Set|Let|Const)\s+)?\$?([A-Za-z_]\w*)\s*=(?!=)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        ];
+        private static readonly HashSet<string> ReservedWords = new(ReservedWordList, StringComparer.OrdinalIgnoreCase);
+        private static readonly Regex AssignedNamePattern = new(@"^(?:(?:Set|Let|Const)\s+)?\$?([A-Za-z_]\w*)\s*=(?!=)", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
 
         private static void ParseLine(string line, int lineNo, State state)
         {
             RejectDollarVariables(line);
-            var named = AssignedNamePattern.Match(line);
+            Match named = AssignedNamePattern.Match(line);
             if (named.Success && ReservedWords.Contains(named.Groups[1].Value))
             {
                 string name = named.Groups[1].Value;
@@ -619,8 +809,8 @@ namespace Pptcom.ComProxy
             if (eq < 0)
             {
                 // Bare statement, e.g. a call whose result nobody needs.
-                var segments = SplitChain(RewriteCallStatement(line));
-                EmitChain(segments, null, lineNo, state);
+                List<string> segments = SplitChain(RewriteCallStatement(line));
+                EmitChain(segments, finalId: null, lineNo, state);
                 return;
             }
             int opsBefore = state.Ops.Count;
@@ -631,11 +821,23 @@ namespace Pptcom.ComProxy
             {
                 for (int k = state.Ops.Count - 1; k >= opsBefore; k--)
                 {
-                    var o = (JObject)state.Ops[k];
-                    if ((string)o["id"] != assigned) continue;
-                    if ((string)o["action"] == ComOpAction.Image) break;
+                    JObject o = (JObject)state.Ops[k];
+                    if ((string)o["id"] != assigned)
+                    {
+                        continue;
+                    }
+
+                    if ((string)o["action"] == ComOpAction.Image)
+                    {
+                        break;
+                    }
+
                     o["assign"] = true;
-                    if (hasSet) o["set"] = true;
+                    if (hasSet)
+                    {
+                        o["set"] = true;
+                    }
+
                     break;
                 }
             }
@@ -643,86 +845,115 @@ namespace Pptcom.ComProxy
 
         private static void ParseAssignment(string line, int eq, int lineNo, State state)
         {
-
             string lhs = line.Substring(0, eq).Trim();
             string rhsText = line.Substring(eq + 1).Trim();
-
             if (IsIdentifier(lhs))
             {
-                // hero = broccoli_hero: a second name for an existing variable.
-                // No COM call; the engine copies the handle, which already passed the policy checks.
-                string aliasOf = rhsText;
-                if (IsIdentifier(aliasOf) && state.KnownIds.Contains(aliasOf))
+                AssignVariable(lhs, rhsText, lineNo, state);
+            }
+            else
+            {
+                SetProperty(lhs, rhsText, lineNo, state);
+            }
+        }
+
+        private static void AssignVariable(string lhs, string rhsText, int lineNo, State state)
+        {
+            // hero = broccoli_hero: a second name for an existing variable.
+            // No COM call; the engine copies the handle, which already passed the policy checks.
+            string aliasOf = rhsText;
+            if (IsIdentifier(aliasOf) && state.KnownIds.Contains(aliasOf))
+            {
+                if (IsApp(aliasOf))
                 {
-                    if (IsApp(aliasOf)) throw new FormatException("cannot alias 'Application' - use Application itself");
-                    state.Ops.Add(new JObject
-                    {
-                        ["id"] = lhs,
-                        ["action"] = ComOpAction.Let,
-                        ["value"] = "$" + aliasOf,
-                    });
-                    state.OpLineNumbers.Add(lineNo);
-                    state.DefineId(lhs);
-                    return;
+                    throw new FormatException("cannot alias 'Application' - use Application itself");
                 }
 
-                // id = Image("prompt", "size") -- not a COM hop. Only the hosts' own zimage path may
-                // write it (Parse(..., allowImage: true)); in a model's script it is not VBA and is
-                // reported like any unknown name.
-                if (state.AllowImage && rhsText.StartsWith("Image(", StringComparison.OrdinalIgnoreCase) && rhsText.EndsWith(")"))
-                {
-                    string inner = rhsText.Substring("Image(".Length, rhsText.Length - "Image(".Length - 1);
-                    List<string> imageArgs = SplitArgs(inner);
-                    if (imageArgs.Count < 1 || imageArgs.Count > 2)
-                        throw new FormatException("Image(...) takes a prompt string and an optional size string like \"1024x768\"");
-                    JToken promptVal = ParseValue(imageArgs[0].Trim());
-                    if (promptVal.Type != JTokenType.String)
-                        throw new FormatException("Image(...) takes a string prompt");
-
-                    var imageOp = new JObject
-                    {
-                        ["id"] = lhs,
-                        ["action"] = ComOpAction.Image,
-                        ["prompt"] = promptVal,
-                    };
-                    if (imageArgs.Count == 2)
-                    {
-                        JToken sizeVal = ParseValue(imageArgs[1].Trim());
-                        if (sizeVal.Type != JTokenType.String) throw new FormatException("Image(...) size must be a string like \"1024x768\"");
-                        imageOp["size"] = sizeVal;
-                    }
-                    state.Ops.Add(imageOp);
-                    state.OpLineNumbers.Add(lineNo);
-                    state.DefineId(lhs);
-                    return;
-                }
-
-                // id = expression. A lone COM expression (`Set s = slide1.Shapes`) binds its last hop
-                // to the name itself, so the variable holds that object; anything else (a string, a
-                // number, arithmetic, text joining, RGB(...)) becomes a value the engine stores.
-                Expr value = ParseExpression(rhsText);
-                if (value.ChainId != null)
-                {
-                    var lastHop = state.Ops.Cast<JObject>().Last(o => (string)o["id"] == value.ChainId);
-                    lastHop["id"] = lhs;
-                    state.DefineId(lhs);
-                    return;
-                }
                 state.Ops.Add(new JObject
                 {
                     ["id"] = lhs,
                     ["action"] = ComOpAction.Let,
-                    ["value"] = AsValue(value).ToJson(), // x = ppAlignLeft stores its number, as in VBA
+                    ["value"] = "$" + aliasOf,
                 });
                 state.OpLineNumbers.Add(lineNo);
                 state.DefineId(lhs);
                 return;
             }
 
-            // property set: chain.Member = value
-            var lhsSegments = SplitChain(lhs);
+            // id = Image("prompt", "size") -- not a COM hop. Only the hosts' own zimage path may
+            // write it (Parse(..., allowImage: true)); in a model's script it is not VBA and is
+            // reported like any unknown name.
+            if (state.AllowImage && rhsText.StartsWith("Image(", StringComparison.OrdinalIgnoreCase) && rhsText.EndsWith(")", StringComparison.Ordinal))
+            {
+                AddImageOp(lhs, rhsText, lineNo, state);
+                return;
+            }
+
+            // id = expression. A lone COM expression (`Set s = slide1.Shapes`) binds its last hop
+            // to the name itself, so the variable holds that object; anything else (a string, a
+            // number, arithmetic, text joining, RGB(...)) becomes a value the engine stores.
+            Expr value = ParseExpression(rhsText);
+            if (value.ChainId is not null)
+            {
+                JObject lastHop = state.Ops.Cast<JObject>().Last(o => (string)o["id"] == value.ChainId);
+                lastHop["id"] = lhs;
+                state.DefineId(lhs);
+                return;
+            }
+            state.Ops.Add(new JObject
+            {
+                ["id"] = lhs,
+                ["action"] = ComOpAction.Let,
+                ["value"] = AsValue(value).ToJson(), // x = ppAlignLeft stores its number, as in VBA
+            });
+            state.OpLineNumbers.Add(lineNo);
+            state.DefineId(lhs);
+        }
+
+        private static void AddImageOp(string lhs, string rhsText, int lineNo, State state)
+        {
+            string inner = rhsText.Substring("Image(".Length, rhsText.Length - "Image(".Length - 1);
+            List<string> imageArgs = SplitArgs(inner);
+            if (imageArgs.Count < 1 || imageArgs.Count > 2)
+            {
+                throw new FormatException("Image(...) takes a prompt string and an optional size string like \"1024x768\"");
+            }
+
+            JToken promptVal = ParseValue(imageArgs[0].Trim());
+            if (promptVal.Type != JTokenType.String)
+            {
+                throw new FormatException("Image(...) takes a string prompt");
+            }
+
+            JObject imageOp = new()
+            {
+                ["id"] = lhs,
+                ["action"] = ComOpAction.Image,
+                ["prompt"] = promptVal,
+            };
+            if (imageArgs.Count == 2)
+            {
+                JToken sizeVal = ParseValue(imageArgs[1].Trim());
+                if (sizeVal.Type != JTokenType.String)
+                {
+                    throw new FormatException("Image(...) size must be a string like \"1024x768\"");
+                }
+
+                imageOp["size"] = sizeVal;
+            }
+            state.Ops.Add(imageOp);
+            state.OpLineNumbers.Add(lineNo);
+            state.DefineId(lhs);
+        }
+
+        // property set: chain.Member = value
+        private static void SetProperty(string lhs, string rhsText, int lineNo, State state)
+        {
+            List<string> lhsSegments = SplitChain(lhs);
             if (lhsSegments.Count < 2)
+            {
                 throw new FormatException("left-hand side of '=' must be 'id' or 'chain.Member': " + lhs);
+            }
 
             string memberName = lhsSegments[lhsSegments.Count - 1];
 
@@ -732,19 +963,25 @@ namespace Pptcom.ComProxy
             int paren = memberName.IndexOf('(');
             if (paren >= 0)
             {
-                if (!memberName.EndsWith(")")) throw new FormatException("unbalanced parentheses: " + memberName);
+                if (!memberName.EndsWith(")", StringComparison.Ordinal))
+                {
+                    throw new FormatException("unbalanced parentheses: " + memberName);
+                }
+
                 string argsText = memberName.Substring(paren + 1, memberName.Length - paren - 2);
-                setArgs = new JArray();
+                setArgs = [];
                 foreach (string a in SplitArgs(argsText))
                 {
                     setArgs.Add(ParseValue(a.Trim()));
                 }
                 memberName = memberName.Substring(0, paren);
                 if (!IsIdentifier(memberName))
+                {
                     throw new FormatException("left-hand side of '=' must end in a property name: " + lhs);
+                }
             }
 
-            var targetSegments = lhsSegments.Take(lhsSegments.Count - 1).ToList();
+            List<string> targetSegments = [.. lhsSegments.Take(lhsSegments.Count - 1)];
             string targetId;
             if (targetSegments.Count == 1)
             {
@@ -753,21 +990,27 @@ namespace Pptcom.ComProxy
                 // "statement has no effect" and made every intermediate-variable style script fail.)
                 targetId = targetSegments[0];
                 if (!state.KnownIds.Contains(targetId))
+                {
                     throw new FormatException(UnknownIdentifier(targetId));
+                }
             }
             else
             {
-                targetId = EmitChain(targetSegments, null, lineNo, state);
+                targetId = EmitChain(targetSegments, finalId: null, lineNo, state);
             }
 
-            var op = new JObject
+            JObject op = new()
             {
                 ["action"] = ComOpAction.Set,
                 ["target"] = targetId,
                 ["member"] = memberName,
                 ["value"] = ParseValue(rhsText),
             };
-            if (setArgs != null) op["args"] = setArgs;
+            if (setArgs is not null)
+            {
+                op["args"] = setArgs;
+            }
+
             state.Ops.Add(op);
             state.OpLineNumbers.Add(lineNo);
         }
@@ -778,7 +1021,10 @@ namespace Pptcom.ComProxy
         // address an intermediate hop directly.
         private static string EmitChain(List<string> segments, string finalId, int lineNo, State state)
         {
-            if (segments.Count == 0) throw new FormatException("empty expression");
+            if (segments.Count == 0)
+            {
+                throw new FormatException("empty expression");
+            }
 
             string baseTok = segments[0];
 
@@ -788,23 +1034,42 @@ namespace Pptcom.ComProxy
             if (baseParen > 0)
             {
                 string baseName = baseTok.Substring(0, baseParen);
-                if (!IsIdentifier(baseName)) throw new FormatException("invalid expression: " + baseTok);
-                if (!state.KnownIds.Contains(baseName)) throw new FormatException(DiagnoseValue(string.Join(".", segments), string.Join(".", segments)));
-                var rewritten = new List<string> { baseName, baseTok.Substring(baseParen) };
-                rewritten.AddRange(segments.Skip(1));
+                if (!IsIdentifier(baseName))
+                {
+                    throw new FormatException("invalid expression: " + baseTok);
+                }
+
+                if (!state.KnownIds.Contains(baseName))
+                {
+                    throw new FormatException(DiagnoseValue(string.Join(".", segments), string.Join(".", segments)));
+                }
+
+                List<string> rewritten = [baseName, baseTok.Substring(baseParen), .. segments.Skip(1)];
                 segments = rewritten;
                 baseTok = baseName;
             }
 
             if (!IsIdentifier(baseTok))
+            {
                 throw new FormatException("invalid expression: " + string.Join(".", segments) + ". " + ExpressionHelp);
+            }
+
             if (!state.KnownIds.Contains(baseTok))
+            {
                 throw new FormatException(UnknownIdentifier(baseTok));
+            }
 
             if (segments.Count == 1)
             {
-                if (finalId == null) throw new FormatException("statement has no effect: " + baseTok);
-                if (IsApp(baseTok)) throw new FormatException("cannot alias 'Application' - use Application itself");
+                if (finalId is null)
+                {
+                    throw new FormatException("statement has no effect: " + baseTok);
+                }
+
+                if (IsApp(baseTok))
+                {
+                    throw new FormatException("cannot alias 'Application' - use Application itself");
+                }
                 // Aliases of known variables are handled in ParseLine before reaching here.
                 throw new FormatException("right-hand side must reference at least one member: " + baseTok);
             }
@@ -823,16 +1088,23 @@ namespace Pptcom.ComProxy
             int paren = segment.IndexOf('(');
             string member = paren >= 0 ? segment.Substring(0, paren) : segment;
             if (!(paren >= 0 && member.Length == 0) && !IsIdentifier(member))
+            {
                 throw new FormatException("'" + member + "' is not a member name. Write one statement per line (or separate them with ':'); " +
                                           "a call with arguments is x.Method(a, b) or VBA's x.Method a, b.");
-            string id = explicitId ?? ("_h" + (++state.SyntheticCounter));
+            }
+
+            string id = explicitId ?? Invariant($"_h{++state.SyntheticCounter}");
 
             JObject op;
             if (paren >= 0)
             {
-                if (!segment.EndsWith(")")) throw new FormatException("unbalanced parentheses: " + segment);
+                if (!segment.EndsWith(")", StringComparison.Ordinal))
+                {
+                    throw new FormatException("unbalanced parentheses: " + segment);
+                }
+
                 string argsText = segment.Substring(paren + 1, segment.Length - paren - 2);
-                var argsArray = new JArray();
+                JArray argsArray = [];
                 foreach (string a in SplitArgs(argsText))
                 {
                     argsArray.Add(ParseValue(a.Trim()));
@@ -846,7 +1118,10 @@ namespace Pptcom.ComProxy
                     ["target"] = targetId,
                     ["args"] = argsArray,
                 };
-                if (!isIndexer) op["member"] = member;
+                if (!isIndexer)
+                {
+                    op["member"] = member;
+                }
             }
             else
             {
@@ -871,33 +1146,57 @@ namespace Pptcom.ComProxy
             // which knows the object and so the parameter's type, and can list the enum names that fit
             // (ComErrorText) - here only the whole enum catalog could be searched.
             string t = (text ?? "").Trim();
-            if (IsIdentifier(t) && !IsValueName(t)) return new JObject { ["$unresolved"] = t };
+            if (IsIdentifier(t) && !IsValueName(t))
+            {
+                return new JObject { ["$unresolved"] = t };
+            }
             // VBA's Array(...) as a whole argument: sld.Shapes.Range(Array(a.Name, b.Name)).Align ...
             // The prompt does not offer it; it is accepted because models write it for ShapeRange.
             JToken array = TryParseArrayArgument(t);
-            if (array != null) return array;
+            if (array is not null)
+            {
+                return array;
+            }
+
             return ParseExpression(text).ToJson();
         }
 
         // Array(v1, v2, ...) as the whole value -> {"$fn": "Array", "args": [...]}; the engine passes
         // it to COM as a VBA array. Anywhere else (x = Array(...), inside an expression) DiagnoseValue
         // says where it works.
-        private static JToken TryParseArrayArgument(string t)
+        private static JObject TryParseArrayArgument(string t)
         {
-            if (!t.StartsWith("Array", StringComparison.OrdinalIgnoreCase) || (_currentKnownIds != null && _currentKnownIds.Contains("Array"))) return null;
-            var tokens = ComScriptScope.Tokenize(t);
+            if (!t.StartsWith("Array", StringComparison.OrdinalIgnoreCase) || (_currentKnownIds is not null && _currentKnownIds.Contains("Array")))
+            {
+                return null;
+            }
+
+            List<ComScriptScope.Token> tokens = ComScriptScope.Tokenize(t);
             if (tokens.Count < 3 || tokens[0].Kind != ComScriptScope.TokenKind.Name || !string.Equals(tokens[0].Value, "Array", StringComparison.OrdinalIgnoreCase)
                 || tokens[1].Kind != ComScriptScope.TokenKind.Open || tokens[tokens.Count - 1].Kind != ComScriptScope.TokenKind.Close)
+            {
                 return null;
+            }
+
             int depth = 0;
             for (int i = 1; i < tokens.Count; i++)
             {
-                if (tokens[i].Kind == ComScriptScope.TokenKind.Open) depth++;
-                else if (tokens[i].Kind == ComScriptScope.TokenKind.Close && --depth == 0 && i != tokens.Count - 1) return null; // Array(a)(0) etc.
+                if (tokens[i].Kind == ComScriptScope.TokenKind.Open)
+                {
+                    depth++;
+                }
+                else if (tokens[i].Kind == ComScriptScope.TokenKind.Close && --depth == 0 && i != tokens.Count - 1)
+                {
+                    return null; // Array(a)(0) etc.
+                }
             }
             string inner = t.Substring(tokens[1].Start + 1, tokens[tokens.Count - 1].Start - tokens[1].Start - 1);
-            var items = new JArray();
-            foreach (string a in SplitArgs(inner)) items.Add(ParseValue(a.Trim()));
+            JArray items = [];
+            foreach (string a in SplitArgs(inner))
+            {
+                items.Add(ParseValue(a.Trim()));
+            }
+
             return new JObject { ["$fn"] = "Array", ["args"] = items };
         }
 
@@ -905,12 +1204,7 @@ namespace Pptcom.ComProxy
         // stay with the parser, whose messages for them say what to write instead.
         private static bool IsValueName(string name)
         {
-            object ignored;
-            string constant;
-            return (_currentKnownIds != null && _currentKnownIds.Contains(name)) || IsApp(name) ||
-                   string.Equals(name, "app", StringComparison.OrdinalIgnoreCase) || string.Equals(name, "pres", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(name, "True", StringComparison.OrdinalIgnoreCase) || string.Equals(name, "False", StringComparison.OrdinalIgnoreCase) ||
-                   TextConstants.TryGetValue(name, out constant) || EnumResolver.TryResolve(name, out ignored);
+            return (_currentKnownIds is not null && _currentKnownIds.Contains(name)) || IsApp(name) || string.Equals(name, "app", StringComparison.OrdinalIgnoreCase) || string.Equals(name, "pres", StringComparison.OrdinalIgnoreCase) || string.Equals(name, "True", StringComparison.OrdinalIgnoreCase) || string.Equals(name, "False", StringComparison.OrdinalIgnoreCase) || TextConstants.ContainsKey(name) || EnumResolver.TryResolve(name, out _);
         }
 
         // --- values: VBA expressions ---------------------------------------------------------------
@@ -932,13 +1226,27 @@ namespace Pptcom.ComProxy
             public JToken Token;     // a run-time value: "$id", {"$calc"}, {"$neg"}, {"$fn"}, {"$concat"}
             public string ChainId;   // the whole expression is one COM expression ending in this op id
 
-            public static Expr Const(object v) { return new Expr { IsConst = true, Value = v }; }
-            public static Expr Run(JToken t) { return new Expr { Token = t }; }
+            public static Expr Const(object v)
+            {
+                return new Expr { IsConst = true, Value = v };
+            }
+            public static Expr Run(JToken t)
+            {
+                return new Expr { Token = t };
+            }
 
             public JToken ToJson()
             {
-                if (IsConst) return Value is string ? LiteralText((string)Value) : new JValue(Value);
-                if (EnumName != null) return new JValue(EnumName);
+                if (IsConst)
+                {
+                    return Value is string ? LiteralText((string)Value) : new JValue(Value);
+                }
+
+                if (EnumName is not null)
+                {
+                    return new JValue(EnumName);
+                }
+
                 return Token;
             }
         }
@@ -946,25 +1254,42 @@ namespace Pptcom.ComProxy
         private static Expr ParseExpression(string text)
         {
             text = (text ?? "").Trim();
-            if (text.Length == 0) throw new FormatException("empty value");
+            if (text.Length == 0)
+            {
+                throw new FormatException("empty value");
+            }
+
             return new ExprParser(text).ParseAll();
         }
 
         // An enum name inside arithmetic or text joining is its number, as in VBA ("a" & msoTrue = "a-1").
         private static Expr AsValue(Expr e)
         {
-            if (e.EnumName == null) return e;
-            object v;
-            if (!EnumResolver.TryResolve(e.EnumName, out v)) throw new FormatException("unknown enum name: " + e.EnumName);
+            if (e.EnumName is null)
+            {
+                return e;
+            }
+
+            if (!EnumResolver.TryResolve(e.EnumName, out object v))
+            {
+                throw new FormatException("unknown enum name: " + e.EnumName);
+            }
+
             return Expr.Const(Convert.ToInt32(v, CultureInfo.InvariantCulture));
         }
 
         private static Expr Fold(Func<object> compute, Func<JToken> runtime, params Expr[] operands)
         {
-            if (operands.All(o => o.IsConst))
+            if (operands.All(static o => o.IsConst))
             {
-                try { return Expr.Const(compute()); }
-                catch (InvalidOperationException ex) { throw new FormatException(ex.Message); }
+                try
+                {
+                    return Expr.Const(compute());
+                }
+                catch (InvalidOperationException ex)
+                {
+                    throw new FormatException(ex.Message, ex);
+                }
             }
             return Expr.Run(runtime());
         }
@@ -979,11 +1304,18 @@ namespace Pptcom.ComProxy
 
         private static Expr Concat(List<Expr> parts)
         {
-            parts = parts.Select(AsValue).ToList();
-            if (parts.All(p => p.IsConst)) return Expr.Const(string.Concat(parts.Select(p => VbaOps.ToText(p.Value))));
-            var items = new JArray();
-            foreach (var p in parts)
+            parts = [.. parts.Select(AsValue)];
+            if (parts.TrueForAll(static p => p.IsConst))
+            {
+                return Expr.Const(string.Concat(parts.Select(static p => VbaOps.ToText(p.Value))));
+            }
+
+            JArray items = [];
+            foreach (Expr p in parts)
+            {
                 items.Add(p.IsConst ? new JObject { ["t"] = VbaOps.ToText(p.Value) } : p.ToJson());
+            }
+
             return Expr.Run(new JObject { ["$concat"] = items });
         }
 
@@ -1002,67 +1334,115 @@ namespace Pptcom.ComProxy
             public Expr ParseAll()
             {
                 Expr e = ConcatLevel();
-                if (_p < _t.Count) throw Unexpected();
+                if (_p < _t.Count)
+                {
+                    throw Unexpected();
+                }
+
                 return e;
             }
 
             private Expr ConcatLevel()
             {
                 Expr first = AddLevel();
-                if (!IsOp("&")) return first;
-                var parts = new List<Expr> { first };
-                while (IsOp("&")) { _p++; parts.Add(AddLevel()); }
+                if (!IsOp("&"))
+                {
+                    return first;
+                }
+
+                List<Expr> parts = [first];
+                while (IsOp("&"))
+                {
+                    _p++;
+                    parts.Add(AddLevel());
+                }
                 return Concat(parts);
             }
 
             private Expr AddLevel()
             {
                 Expr e = ModLevel();
-                while (IsOp("+") || IsOp("-")) { string op = _t[_p++].Value; e = Binary(e, op, ModLevel()); }
+                while (IsOp("+") || IsOp("-"))
+                {
+                    string op = _t[_p++].Value;
+                    e = Binary(e, op, ModLevel());
+                }
                 return e;
             }
 
             private Expr ModLevel()
             {
                 Expr e = IntDivLevel();
-                while (IsWord("Mod")) { _p++; e = Binary(e, "Mod", IntDivLevel()); }
+                while (IsWord("Mod"))
+                {
+                    _p++;
+                    e = Binary(e, "Mod", IntDivLevel());
+                }
                 return e;
             }
 
             private Expr IntDivLevel()
             {
                 Expr e = MulLevel();
-                while (IsOp("\\")) { _p++; e = Binary(e, "\\", MulLevel()); }
+                while (IsOp("\\"))
+                {
+                    _p++;
+                    e = Binary(e, "\\", MulLevel());
+                }
                 return e;
             }
 
             private Expr MulLevel()
             {
                 Expr e = UnaryLevel();
-                while (IsOp("*") || IsOp("/")) { string op = _t[_p++].Value; e = Binary(e, op, UnaryLevel()); }
+                while (IsOp("*") || IsOp("/"))
+                {
+                    string op = _t[_p++].Value;
+                    e = Binary(e, op, UnaryLevel());
+                }
                 return e;
             }
 
             // VBA puts negation below ^: -2 ^ 2 is -4.
             private Expr UnaryLevel()
             {
-                if (IsOp("-")) { _p++; return Negate(UnaryLevel()); }
-                if (IsOp("+")) { _p++; return UnaryLevel(); }
+                if (IsOp("-"))
+                {
+                    _p++;
+                    return Negate(UnaryLevel());
+                }
+                if (IsOp("+"))
+                {
+                    _p++;
+                    return UnaryLevel();
+                }
                 return PowerLevel();
             }
 
             private Expr PowerLevel()
             {
                 Expr e = Primary();
-                while (IsOp("^")) { _p++; e = Binary(e, "^", PowerOperand()); }
+                while (IsOp("^"))
+                {
+                    _p++;
+                    e = Binary(e, "^", PowerOperand());
+                }
                 return e;
             }
 
             // VBA accepts a sign right after ^ (2 ^ -1).
             private Expr PowerOperand()
             {
-                if (IsOp("-")) { _p++; return Negate(PowerOperand()); }
-                if (IsOp("+")) { _p++; return PowerOperand(); }
+                if (IsOp("-"))
+                {
+                    _p++;
+                    return Negate(PowerOperand());
+                }
+                if (IsOp("+"))
+                {
+                    _p++;
+                    return PowerOperand();
+                }
                 return Primary();
             }
 
@@ -1074,29 +1454,39 @@ namespace Pptcom.ComProxy
 
             private Expr Primary()
             {
-                if (_p >= _t.Count) throw new FormatException("incomplete value: '" + _text + "'. " + ValueHelp);
-                var tok = _t[_p];
+                if (_p >= _t.Count)
+                {
+                    throw new FormatException("incomplete value: '" + _text + "'. " + ValueHelp);
+                }
+
+                ComScriptScope.Token tok = _t[_p];
                 switch (tok.Kind)
                 {
                     case ComScriptScope.TokenKind.Open:
-                    {
-                        _p++;
-                        Expr inner = ConcatLevel();
-                        if (_p >= _t.Count || _t[_p].Kind != ComScriptScope.TokenKind.Close)
-                            throw new FormatException("unbalanced parentheses: '" + _text + "'");
-                        _p++;
-                        return inner;
-                    }
+                        {
+                            _p++;
+                            Expr inner = ConcatLevel();
+                            if (_p >= _t.Count || _t[_p].Kind != ComScriptScope.TokenKind.Close)
+                            {
+                                throw new FormatException("unbalanced parentheses: '" + _text + "'");
+                            }
+
+                            _p++;
+                            return inner;
+                        }
                     case ComScriptScope.TokenKind.Text:
                         _p++;
                         return Expr.Const(ParseStringLiteral(tok.Value));
                     case ComScriptScope.TokenKind.Number:
-                    {
-                        _p++;
-                        JValue number;
-                        if (!TryParseNumber(tok.Value, out number)) throw new FormatException("not a number: '" + tok.Value + "'");
-                        return Expr.Const(number.Value);
-                    }
+                        {
+                            _p++;
+                            if (!TryParseNumber(tok.Value, out JValue number))
+                            {
+                                throw new FormatException("not a number: '" + tok.Value + "'");
+                            }
+
+                            return Expr.Const(number.Value);
+                        }
                     case ComScriptScope.TokenKind.Name:
                         return NamePrimary();
                 }
@@ -1111,27 +1501,53 @@ namespace Pptcom.ComProxy
                 int end = _p + 1;
                 while (end < _t.Count)
                 {
-                    if (_t[end].Kind == ComScriptScope.TokenKind.Open) end = MatchingClose(end) + 1;
-                    else if (_t[end].Kind == ComScriptScope.TokenKind.Dot && end + 1 < _t.Count && _t[end + 1].Kind == ComScriptScope.TokenKind.Name) end += 2;
-                    else break;
+                    if (_t[end].Kind == ComScriptScope.TokenKind.Open)
+                    {
+                        end = MatchingClose(end) + 1;
+                    }
+                    else if (_t[end].Kind == ComScriptScope.TokenKind.Dot && end + 1 < _t.Count && _t[end + 1].Kind == ComScriptScope.TokenKind.Name)
+                    {
+                        end += 2;
+                    }
+                    else
+                    {
+                        break;
+                    }
                 }
                 _p = end;
-                var last = _t[end - 1];
+                ComScriptScope.Token last = _t[end - 1];
                 string s = _text.Substring(_t[start].Start, last.Start + last.Value.Length - _t[start].Start);
                 string name = _t[start].Value;
-                bool known = _currentKnownIds != null && _currentKnownIds.Contains(name) && !IsApp(name);
+                bool known = _currentKnownIds is not null && _currentKnownIds.Contains(name) && !IsApp(name);
 
                 if (end == start + 1)
                 {
-                    if (string.Equals(name, "True", StringComparison.OrdinalIgnoreCase)) return Expr.Const(true);
-                    if (string.Equals(name, "False", StringComparison.OrdinalIgnoreCase)) return Expr.Const(false);
+                    if (string.Equals(name, "True", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return Expr.Const(v: true);
+                    }
+
+                    if (string.Equals(name, "False", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return Expr.Const(v: false);
+                    }
                     // A variable of this script/session, by its plain name as in VBA (a variable wins over
                     // an enum or constant of the same name).
-                    if (known) return Expr.Run(new JValue("$" + name));
-                    string constant;
-                    if (TextConstants.TryGetValue(name, out constant)) return Expr.Const(constant);
-                    object enumValue;
-                    if (EnumResolver.TryResolve(name, out enumValue)) return new Expr { EnumName = name };
+                    if (known)
+                    {
+                        return Expr.Run(new JValue("$" + name));
+                    }
+
+                    if (TextConstants.TryGetValue(name, out string constant))
+                    {
+                        return Expr.Const(constant);
+                    }
+
+                    if (EnumResolver.TryResolve(name, out object enumValue))
+                    {
+                        return new Expr { EnumName = name };
+                    }
+
                     throw new FormatException(DiagnoseValue(s, _text));
                 }
 
@@ -1142,15 +1558,23 @@ namespace Pptcom.ComProxy
                     string inner = _text.Substring(_t[start + 1].Start + 1, _t[end - 1].Start - _t[start + 1].Start - 1);
                     if (string.Equals(name, "RGB", StringComparison.OrdinalIgnoreCase))
                     {
-                        var a = SplitArgs(inner).Select(x => AsValue(ParseExpression(x))).ToList();
-                        if (a.Count != 3) throw new FormatException("RGB(...) takes exactly 3 arguments: " + s);
+                        List<Expr> a = [.. SplitArgs(inner).Select(static x => AsValue(ParseExpression(x)))];
+                        if (a.Count != 3)
+                        {
+                            throw new FormatException("RGB(...) takes exactly 3 arguments: " + s);
+                        }
+
                         return Fold(() => VbaOps.Rgb(a[0].Value, a[1].Value, a[2].Value),
-                                    () => new JObject { ["$fn"] = "RGB", ["args"] = new JArray(a.Select(x => x.ToJson())) }, a.ToArray());
+                                    () => new JObject { ["$fn"] = "RGB", ["args"] = new JArray(a.Select(static x => x.ToJson())) }, [.. a]);
                     }
                     if (string.Equals(name, "Chr", StringComparison.OrdinalIgnoreCase) || string.Equals(name, "ChrW", StringComparison.OrdinalIgnoreCase))
                     {
-                        var a = SplitArgs(inner).Select(x => AsValue(ParseExpression(x))).ToList();
-                        if (a.Count != 1) throw new FormatException(name + "(...) takes exactly 1 argument: " + s);
+                        List<Expr> a = [.. SplitArgs(inner).Select(static x => AsValue(ParseExpression(x)))];
+                        if (a.Count != 1)
+                        {
+                            throw new FormatException(name + "(...) takes exactly 1 argument: " + s);
+                        }
+
                         return Fold(() => VbaOps.Chr(a[0].Value),
                                     () => new JObject { ["$fn"] = "Chr", ["args"] = new JArray(a[0].ToJson()) }, a[0]);
                     }
@@ -1170,8 +1594,14 @@ namespace Pptcom.ComProxy
                 int depth = 0;
                 for (int i = open; i < _t.Count; i++)
                 {
-                    if (_t[i].Kind == ComScriptScope.TokenKind.Open) depth++;
-                    else if (_t[i].Kind == ComScriptScope.TokenKind.Close && --depth == 0) return i;
+                    if (_t[i].Kind == ComScriptScope.TokenKind.Open)
+                    {
+                        depth++;
+                    }
+                    else if (_t[i].Kind == ComScriptScope.TokenKind.Close && --depth == 0)
+                    {
+                        return i;
+                    }
                 }
                 throw new FormatException("unbalanced parentheses: '" + _text + "'");
             }
@@ -1204,24 +1634,44 @@ namespace Pptcom.ComProxy
         private static string ChainBase(string text)
         {
             int i = 0;
-            if (text.Length == 0 || !(char.IsLetter(text[0]) || text[0] == '_')) return null;
-            while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] == '_')) i++;
-            if (i == text.Length) return null;
-            if (text[i] != '.' && text[i] != '(') return null;
+            if (text.Length == 0 || !(char.IsLetter(text[0]) || text[0] == '_'))
+            {
+                return null;
+            }
+
+            while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] == '_'))
+            {
+                i++;
+            }
+
+            if (i == text.Length)
+            {
+                return null;
+            }
+
+            if (text[i] != '.' && text[i] != '(')
+            {
+                return null;
+            }
+
             return text.Substring(0, i);
         }
 
         // Emits the hops of a COM expression used as a value; returns the id holding its result.
         private static string EmitValueChain(string chain, string wholeValue)
         {
-            if (_currentState == null) throw new FormatException("COM expressions are not allowed here: " + wholeValue);
+            if (_currentState is null)
+            {
+                throw new FormatException("COM expressions are not allowed here: " + wholeValue);
+            }
+
             try
             {
-                return EmitChain(SplitChain(chain), null, _currentLine, _currentState);
+                return EmitChain(SplitChain(chain), finalId: null, _currentLine, _currentState);
             }
             catch (FormatException ex)
             {
-                throw new FormatException("cannot use '" + chain + "' in '" + wholeValue + "': " + ex.Message);
+                throw new FormatException("cannot use '" + chain + "' in '" + wholeValue + "': " + ex.Message, ex);
             }
         }
 
@@ -1229,30 +1679,51 @@ namespace Pptcom.ComProxy
         // hex/octal literal (&HFF0000, &O17). Unlike VBA, a hex literal is always read as the
         // positive Long: VBA makes any value up to &HFFFF a 16-bit Integer, so &H00A000 (meant as
         // green) becomes -24576 and turns blue - a trap for colors that models fall into too.
-        private static readonly Regex HexOctPattern = new Regex(@"^&([HhOo])([0-9A-Fa-f]+)(&?)$", RegexOptions.Compiled);
+        private static readonly Regex HexOctPattern = new(@"^&([HhOo])([0-9A-Fa-f]+)(&?)$", RegexOptions.Compiled, Guard.RegexTimeout);
 
         private static bool TryParseNumber(string text, out JValue value)
         {
             value = null;
             text = text.Trim();
-            if (text.Length == 0) return false;
-            var m = HexOctPattern.Match(text);
+            if (text.Length == 0)
+            {
+                return false;
+            }
+
+            Match m = HexOctPattern.Match(text);
             if (m.Success)
             {
                 bool hex = char.ToUpperInvariant(m.Groups[1].Value[0]) == 'H';
                 string digits = m.Groups[2].Value;
                 long v;
-                try { v = Convert.ToInt64(digits, hex ? 16 : 8); }
-                catch (Exception) { return false; }
-                if (v > uint.MaxValue) return false;
+                try
+                {
+                    v = Convert.ToInt64(digits, hex ? 16 : 8);
+                }
+                catch (Exception ex) when (ex is FormatException or OverflowException)
+                {
+                    // 8, 9, A-F in octal; too long
+                    return false;
+                }
+                if (v > uint.MaxValue)
+                {
+                    return false;
+                }
+
                 value = new JValue((int)(uint)v);
                 return true;
             }
             string plain = text;
             if ("&%!#@".IndexOf(plain[plain.Length - 1]) >= 0 && plain.Length > 1 && char.IsDigit(plain[plain.Length - 2]))
+            {
                 plain = plain.Substring(0, plain.Length - 1);
-            double num;
-            if (!double.TryParse(plain, NumberStyles.Float, CultureInfo.InvariantCulture, out num)) return false;
+            }
+
+            if (!double.TryParse(plain, NumberStyles.Float, CultureInfo.InvariantCulture, out double num))
+            {
+                return false;
+            }
+
             value = num % 1 == 0 && Math.Abs(num) < int.MaxValue ? new JValue((int)num) : new JValue(num);
             return true;
         }
@@ -1262,22 +1733,26 @@ namespace Pptcom.ComProxy
         // VBA line-break constants. All of them become a paragraph break (CR): PowerPoint treats CR
         // as a paragraph mark but LF as a soft break inside one paragraph, which would silently
         // break Paragraphs(n)-based formatting (e.g. bolding only the first line of a card).
-        private static readonly Dictionary<string, string> TextConstants = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        private static readonly Dictionary<string, string> TextConstants = new(StringComparer.OrdinalIgnoreCase)
         {
-            ["vbCr"] = "\r", ["vbLf"] = "\r", ["vbCrLf"] = "\r", ["vbNewLine"] = "\r", ["vbTab"] = "\t",
+            ["vbCr"] = "\r",
+            ["vbLf"] = "\r",
+            ["vbCrLf"] = "\r",
+            ["vbNewLine"] = "\r",
+            ["vbTab"] = "\t",
         };
 
         // Text as a pptcom/VBA literal the model can copy back: quotes doubled, paragraph breaks as
         // `" & vbCr & "`, soft line breaks (Shift+Enter, char 11) as `" & Chr(11) & "`.
         public static string ToVbaLiteral(string text)
         {
-            string s = (text ?? "").Replace("\"", "\"\"").Replace("\r\n", "\r").Replace("\n", "\r");
+            string s = (text ?? "").Replace("\"", "\"\"").Replace("\r\n", "\r").Replace('\n', '\r');
             return "\"" + s.Replace("\r", "\" & vbCr & \"").Replace("\v", "\" & Chr(11) & \"") + "\"";
         }
 
         // VBA's built-in functions, so `Len(x)` is named as a function pptcom does not have, while
         // `sh(5)` with an undefined sh is reported as an undefined name.
-        private static readonly HashSet<string> VbaFunctions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        private static readonly HashSet<string> VbaFunctions = new(StringComparer.OrdinalIgnoreCase)
         {
             "Abs", "Array", "Asc", "AscW", "Atn", "CBool", "CDate", "CDbl", "CInt", "CLng", "CSng", "CStr", "CVar", "Choose", "Cos",
             "CreateObject", "Date", "DateAdd", "DateDiff", "DateSerial", "Day", "Dir", "Environ", "Exp", "Fix", "Format",
@@ -1292,27 +1767,43 @@ namespace Pptcom.ComProxy
         private static string DiagnoseValue(string s, string whole)
         {
             s = s.Trim();
-            if (s.StartsWith("\"")) return "text cannot be used here ('" + whole + "'). " + ValueHelp;
+            if (s.StartsWith("\"", StringComparison.Ordinal))
+            {
+                return "text cannot be used here ('" + whole + "'). " + ValueHelp;
+            }
+
             string chainBase = ChainBase(s);
-            if (chainBase != null)
+            if (chainBase is not null)
             {
                 bool isCall = s.Length > chainBase.Length && s[chainBase.Length] == '(';
-                if (isCall && string.Equals(chainBase, "Array", StringComparison.OrdinalIgnoreCase) && (_currentKnownIds == null || !_currentKnownIds.Contains(chainBase)))
+                if (isCall && string.Equals(chainBase, "Array", StringComparison.OrdinalIgnoreCase) && (_currentKnownIds is null || !_currentKnownIds.Contains(chainBase)))
+                {
                     throw ComScriptScope.Unsupported("Array(...) here", s,
                         "Array(...) works only as a whole argument passed to a method, e.g. sld.Shapes.Range(Array(a.Name, b.Name)).Align msoAlignLefts, msoFalse; " +
                         "it cannot be stored in a variable or indexed.",
                         "array outside an argument");
-                if (isCall && VbaFunctions.Contains(chainBase) && (_currentKnownIds == null || !_currentKnownIds.Contains(chainBase)))
+                }
+
+                if (isCall && VbaFunctions.Contains(chainBase) && (_currentKnownIds is null || !_currentKnownIds.Contains(chainBase)))
+                {
                     throw ComScriptScope.Unsupported("the VBA function '" + chainBase + "'", s,
                         "The only functions are RGB(r, g, b) and Chr(n); work the value out yourself and write it. " +
                         "For a line break inside text join with vbCr: \"a\" & vbCr & \"b\".",
                         "function " + chainBase.ToLowerInvariant());
+                }
+
                 return UnknownIdentifier(chainBase) + " (in '" + s + "')";
             }
             if (string.Equals(s, "app", StringComparison.OrdinalIgnoreCase) || string.Equals(s, "pres", StringComparison.OrdinalIgnoreCase))
+            {
                 return UnknownIdentifier(s);
+            }
+
             if (IsIdentifier(s))
+            {
                 return "'" + s + "' is neither a variable defined earlier nor a known enum name. " + ValueHelp;
+            }
+
             return "unrecognized value '" + s + "'. " + ValueHelp;
         }
 
@@ -1325,20 +1816,28 @@ namespace Pptcom.ComProxy
         // created - it tends to reuse them in the next attempt as if they existed.
         public static List<string> ScanAssignedIds(string script, IEnumerable<string> exclude = null)
         {
-            var skip = new HashSet<string>(exclude ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
-            var result = new List<string>();
+            HashSet<string> skip = new(exclude ?? [], StringComparer.OrdinalIgnoreCase);
+            List<string> result = [];
             foreach (string raw in (script ?? "").Replace("\r\n", "\n").Split('\n'))
             {
-                var m = AssignedIdPattern.Match(raw);
-                if (!m.Success) continue;
+                Match m = AssignedIdPattern.Match(raw);
+                if (!m.Success)
+                {
+                    continue;
+                }
+
                 string id = m.Groups[1].Value;
-                if (IsApp(id) || string.Equals(id, PresId, StringComparison.OrdinalIgnoreCase) || skip.Contains(id) || result.Contains(id, StringComparer.OrdinalIgnoreCase)) continue;
+                if (IsApp(id) || string.Equals(id, PresId, StringComparison.OrdinalIgnoreCase) || skip.Contains(id) || result.Contains(id, StringComparer.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 result.Add(id);
             }
             return result;
         }
 
-        private static readonly Regex AssignedIdPattern = new Regex(@"^\s*(?:(?:Set|Let)\s+)?\$?([A-Za-z_]\w*)\s*=(?!=)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex AssignedIdPattern = new(@"^\s*(?:(?:Set|Let)\s+)?\$?([A-Za-z_]\w*)\s*=(?!=)", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
 
 
         // Scans a real string literal boundary (handling ""-escaped quotes) instead of naively
@@ -1350,7 +1849,7 @@ namespace Pptcom.ComProxy
         // "C:\new" stays as written; line breaks are vbCr joined with & (vbCr = CR = paragraph).
         private static string ParseStringLiteral(string text)
         {
-            var sb = new StringBuilder();
+            StringBuilder sb = new();
             int i = 1;
             while (i < text.Length)
             {
@@ -1388,10 +1887,22 @@ namespace Pptcom.ComProxy
             for (int i = 0; i < line.Length; i++)
             {
                 char c = line[i];
-                if (c == '"') { inStr = !inStr; continue; }
-                if (inStr || c != '$' || i + 1 >= line.Length || !(char.IsLetter(line[i + 1]) || line[i + 1] == '_')) continue;
+                if (c == '"')
+                {
+                    inStr = !inStr;
+                    continue;
+                }
+                if (inStr || c != '$' || i + 1 >= line.Length || !(char.IsLetter(line[i + 1]) || line[i + 1] == '_'))
+                {
+                    continue;
+                }
+
                 int end = i + 1;
-                while (end < line.Length && (char.IsLetterOrDigit(line[end]) || line[end] == '_')) end++;
+                while (end < line.Length && (char.IsLetterOrDigit(line[end]) || line[end] == '_'))
+                {
+                    end++;
+                }
+
                 string name = line.Substring(i + 1, end - i - 1);
                 throw ComScriptScope.NotVba("'$" + name + "' - variable names have no '$'", line.Substring(i),
                     "Write " + name + ", as in VBA.", "dollar variable");
@@ -1402,7 +1913,11 @@ namespace Pptcom.ComProxy
         // that starts with '$' ("$100") travels as a one-piece {"$concat"} instead.
         private static JToken LiteralText(string s)
         {
-            if (s.Length > 0 && s[0] == '$') return new JObject { ["$concat"] = new JArray(new JObject { ["t"] = s }) };
+            if (s.Length > 0 && s[0] == '$')
+            {
+                return new JObject { ["$concat"] = new JArray(new JObject { ["t"] = s }) };
+            }
+
             return new JValue(s);
         }
 
@@ -1418,17 +1933,31 @@ namespace Pptcom.ComProxy
         private static string UnknownIdentifier(string id)
         {
             if (string.Equals(id, "app", StringComparison.OrdinalIgnoreCase))
+            {
                 return "unknown identifier: app - write Application, as in VBA.";
+            }
+
             if (string.Equals(id, "pres", StringComparison.OrdinalIgnoreCase))
+            {
                 return "unknown identifier: pres - write ActivePresentation, as in VBA (it is the deck this request works on).";
+            }
+
             return "unknown identifier: " + id + " - an expression must start from Application, ActivePresentation or a variable defined on an earlier line.";
         }
 
         private static bool IsIdentifier(string s)
         {
-            if (string.IsNullOrEmpty(s)) return false;
-            if (!char.IsLetter(s[0]) && s[0] != '_') return false;
-            return s.All(c => char.IsLetterOrDigit(c) || c == '_');
+            if (string.IsNullOrEmpty(s))
+            {
+                return false;
+            }
+
+            if (!char.IsLetter(s[0]) && s[0] != '_')
+            {
+                return false;
+            }
+
+            return s.All(static c => char.IsLetterOrDigit(c) || c == '_');
         }
 
         private static int FindTopLevelEquals(string s)
@@ -1438,26 +1967,47 @@ namespace Pptcom.ComProxy
             for (int i = 0; i < s.Length; i++)
             {
                 char c = s[i];
-                if (c == '"') inStr = !inStr;
-                else if (!inStr && c == '(') depth++;
-                else if (!inStr && c == ')') depth--;
-                else if (!inStr && c == '=' && depth == 0) return i;
+                if (c == '"')
+                {
+                    inStr = !inStr;
+                }
+                else if (!inStr && c == '(')
+                {
+                    depth++;
+                }
+                else if (!inStr && c == ')')
+                {
+                    depth--;
+                }
+                else if (!inStr && c == '=' && depth == 0)
+                {
+                    return i;
+                }
             }
             return -1;
         }
 
         private static List<string> SplitChain(string s)
         {
-            var result = new List<string>();
+            List<string> result = [];
             int depth = 0;
             bool inStr = false;
             int start = 0;
             for (int i = 0; i < s.Length; i++)
             {
                 char c = s[i];
-                if (c == '"') inStr = !inStr;
-                else if (!inStr && c == '(') depth++;
-                else if (!inStr && c == ')') depth--;
+                if (c == '"')
+                {
+                    inStr = !inStr;
+                }
+                else if (!inStr && c == '(')
+                {
+                    depth++;
+                }
+                else if (!inStr && c == ')')
+                {
+                    depth--;
+                }
                 else if (!inStr && c == '.' && depth == 0)
                 {
                     result.Add(s.Substring(start, i - start).Trim());
@@ -1465,13 +2015,16 @@ namespace Pptcom.ComProxy
                 }
             }
             result.Add(s.Substring(start).Trim());
-            return result.Where(x => x.Length > 0).ToList();
+            return [.. result.Where(static x => x.Length > 0)];
         }
 
         private static List<string> SplitArgs(string s)
         {
-            var result = new List<string>();
-            if (s.Trim().Length == 0) return result;
+            List<string> result = [];
+            if (s.Trim().Length == 0)
+            {
+                return result;
+            }
 
             int depth = 0;
             bool inStr = false;
@@ -1479,9 +2032,18 @@ namespace Pptcom.ComProxy
             for (int i = 0; i < s.Length; i++)
             {
                 char c = s[i];
-                if (c == '"') inStr = !inStr;
-                else if (!inStr && c == '(') depth++;
-                else if (!inStr && c == ')') depth--;
+                if (c == '"')
+                {
+                    inStr = !inStr;
+                }
+                else if (!inStr && c == '(')
+                {
+                    depth++;
+                }
+                else if (!inStr && c == ')')
+                {
+                    depth--;
+                }
                 else if (!inStr && c == ',' && depth == 0)
                 {
                     result.Add(s.Substring(start, i - start));

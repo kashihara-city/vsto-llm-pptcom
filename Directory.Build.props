@@ -1,0 +1,38 @@
+<Project>
+  <!-- C# settings shared by the add-in (pptcom) and the test tools (scripts/test). The WiX project in
+       scripts/build reads this file too, hence the conditions. -->
+  <PropertyGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'">
+    <!-- A fixed version, not "latest", so that every machine compiles the same language. C# 14 needs the
+         compiler of Visual Studio (Build Tools) 2026. On .NET Framework 4.8, features that need runtime
+         support (default interface members, static abstract members, ref fields) are still unavailable. -->
+    <LangVersion>14</LangVersion>
+    <!-- Every rule of the three analyzers below is a warning unless .editorconfig says otherwise. -->
+    <AnalysisLevel>10.0</AnalysisLevel>
+    <AnalysisMode>All</AnalysisMode>
+    <!-- CodeStyle 5.9 adds its list of rules by itself only from AnalysisLevel 11 (below that it leaves it to
+         the .NET SDK); a style level that differs from AnalysisLevel makes it add the list. -->
+    <AnalysisLevelStyle>10.0-all</AnalysisLevelStyle>
+    <MeziantouAnalysisMode>all-warnings</MeziantouAnalysisMode>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- CS8032 "an instance of analyzer cannot be created": Meziantou's analyzer for C# 15 closed types
+         (RemoveUnnecessaryClosedModifierAnalyzer, built against an experimental Roslyn 5.9 API) doesn't load in
+         the compiler of VS 2026 18.10/18.11. The code here doesn't use closed types; the other rules load. -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);CS8032</WarningsNotAsErrors>
+  </PropertyGroup>
+
+  <!-- Build-time only: analyzers run inside the compiler and nothing of them is copied to the output.
+       CodeStyle 5.9 needs the compiler of Visual Studio 2026 18.9 or later. Unlike the .NET SDK's built-in
+       copy, the CodeStyle package reports its rules in every build (EnforceCodeStyleInBuild is not needed). -->
+  <ItemGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'">
+    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.401" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.CodeStyle" Version="5.9.0" PrivateAssets="all" />
+    <PackageReference Include="Meziantou.Analyzer" Version="3.0.298" PrivateAssets="all" />
+    <!-- What AnalysisMode=All means for NetAnalyzers; the .NET SDK supplies this only to SDK-style projects.
+         Written from the package by scripts/deps/netanalyzers-config.py. -->
+    <GlobalAnalyzerConfigFiles Include="$(MSBuildThisFileDirectory)deps\analyzers\netanalyzers-all.globalconfig" />
+  </ItemGroup>
+
+  <Target Name="RequireVisualStudio2026" BeforeTargets="PrepareForBuild" Condition="'$(MSBuildProjectExtension)' == '.csproj' and $([MSBuild]::VersionLessThan('$(MSBuildVersion)', '18.9'))">
+    <Error Text="MSBuild $(MSBuildVersion) is too old: build with Visual Studio 2026 or Build Tools 2026, version 18.9 or later (C# 14 and the CodeStyle analyzers need its compiler)." />
+  </Target>
+</Project>

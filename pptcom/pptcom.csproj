@@ -142,8 +142,12 @@
       <DependentUpon>Settings.settings</DependentUpon>
     </Compile>
     <Compile Include="AddinSettings.cs" />
+    <Compile Include="CredentialStore.cs" />
     <Compile Include="AddinAutomation.cs" />
+    <Compile Include="IPptAiAutomation.cs" />
     <Compile Include="Documents\AttachedDocument.cs" />
+    <Compile Include="Documents\AttachedImage.cs" />
+    <Compile Include="Documents\DocRead.cs" />
     <Compile Include="Documents\DocumentImages.cs" />
     <Compile Include="ThisAddIn.cs">
       <SubType>Code</SubType>
@@ -151,15 +155,37 @@
     <Compile Include="UI\AiTaskPaneControl.cs">
       <SubType>UserControl</SubType>
     </Compile>
-    <!-- The task pane's page (HTML, CSS, scripts), inside the DLL rather than as files next to it:
-         AiTaskPaneControl serves them to the WebView2 at https://pptcom.invalid/<path under UI\web\>. -->
+    <Compile Include="UI\PaneText.cs" />
+    <Compile Include="UI\TextEventArgs.cs" />
+    <Compile Include="UI\SwitchEventArgs.cs" />
+    <Compile Include="UI\DocumentConvertedEventArgs.cs" />
+    <Compile Include="UI\DocumentFailedEventArgs.cs" />
+    <Compile Include="UI\Texts.cs" />
+    <!-- The task pane's page (HTML, CSS, scripts, the language files in locales\), inside the DLL rather than as
+         files next to it: AiTaskPaneControl serves them to the WebView2 at https://pptcom.invalid/<path under UI\web\>,
+         and Texts reads the language files for the text the add-in draws itself. -->
     <EmbeddedResource Include="UI\web\**\*">
       <LogicalName>pptcom.web/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <Compile Include="Agent\AgentFile.cs" />
+    <Compile Include="Agent\ChatMessage.cs" />
+    <Compile Include="Agent\ChatReply.cs" />
+    <Compile Include="Agent\LlmServerException.cs" />
+    <Compile Include="Agent\SlideImage.cs" />
+    <Compile Include="Agent\StreamProgress.cs" />
+    <Compile Include="Agent\StreamedReply.cs" />
+    <Compile Include="Agent\ToolCall.cs" />
+    <!-- The model's instructions and tool definitions, read by AgentFile. -->
+    <EmbeddedResource Include="Agent\system-prompt.txt">
+      <LogicalName>pptcom.agent/system-prompt.txt</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Agent\tools.json">
+      <LogicalName>pptcom.agent/tools.json</LogicalName>
     </EmbeddedResource>
     <Compile Include="Agent\OpenAiCompatibleClient.cs">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="ComProxy\ComOp.cs">
+    <Compile Include="ComProxy\ComOpAction.cs">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="ComProxy\ComBatchResult.cs">
@@ -171,10 +197,17 @@
     <Compile Include="ComProxy\ComSecurityPolicy.cs">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="ComProxy\ComProxy.cs">
+    <Compile Include="ComProxy\ComProxyEngine.cs">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="ComProxy\DeckReader.cs" />
+    <Compile Include="ComProxy\DeckDefaults.cs" />
+    <Compile Include="ComProxy\ComOpResult.cs" />
+    <Compile Include="ComProxy\ComLineStatus.cs" />
+    <Compile Include="ComProxy\ComLineResult.cs" />
+    <Compile Include="ComProxy\ComScriptResult.cs" />
+    <Compile Include="ComProxy\IDispatchMinimal.cs" />
+    <Compile Include="ComProxy\Guard.cs" />
     <Compile Include="ComProxy\ComErrorText.cs" />
     <Compile Include="ComProxy\DeckProbe.cs" />
     <Compile Include="ComProxy\ComScriptScope.cs" />

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace Pptcom.ComProxy
 {
@@ -17,11 +16,14 @@ namespace Pptcom.ComProxy
     //   Not valid VBA: <what> (at "<text from there>"). <note>
     //       rejected by VBA itself, e.g. a reserved word as a variable name (NotVba)
     // It only rejects; anything it lets through is parsed exactly as before.
-    public static class ComScriptScope
+    internal static class ComScriptScope
     {
-        public enum TokenKind { Text, Number, Name, Dot, Comma, Open, Close, Operator, NamedArg, Continuation, Other }
+        internal enum TokenKind
+        {
+            Text, Number, Name, Dot, Comma, Open, Close, Operator, NamedArg, Continuation, Other,
+        }
 
-        public sealed class Token
+        internal sealed class Token
         {
             public TokenKind Kind;
             public string Value;
@@ -30,10 +32,13 @@ namespace Pptcom.ComProxy
 
         // Thrown for a statement pptcom rejects. Cause groups repeats of one construct in the report
         // ("FAILED 3 lines, same cause").
-        public sealed class RejectedException : FormatException
+        internal sealed class RejectedException : FormatException
         {
             public readonly string Cause;
-            public RejectedException(string message, string cause) : base(message) { Cause = cause; }
+            public RejectedException(string message, string cause) : base(message)
+            {
+                Cause = cause;
+            }
         }
 
         public static RejectedException Unsupported(string construct, string at, string note, string cause)
@@ -48,7 +53,11 @@ namespace Pptcom.ComProxy
 
         private static string At(string at)
         {
-            if (string.IsNullOrEmpty(at)) return "";
+            if (string.IsNullOrEmpty(at))
+            {
+                return "";
+            }
+
             at = at.Trim();
             return " (at \"" + (at.Length > 40 ? at.Substring(0, 40) + "…" : at) + "\")";
         }
@@ -59,7 +68,7 @@ namespace Pptcom.ComProxy
         }
 
         // VBA statements that need control flow or declarations pptcom does not have.
-        private static readonly HashSet<string> ControlStatements = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        private static readonly HashSet<string> ControlStatements = new(StringComparer.OrdinalIgnoreCase)
         {
             "If", "ElseIf", "Else", "End", "For", "Next", "Do", "Loop", "While", "Wend", "With", "Select", "Case",
             "Exit", "GoTo", "GoSub", "Return", "On", "Resume", "Sub", "Function", "Property", "ReDim", "Erase", "Option", "Stop",
@@ -72,12 +81,19 @@ namespace Pptcom.ComProxy
             "(no comparisons, And/Or/Not or other functions).";
 
         // VBA operators written as words. A name after '.' is a member, not one of these.
-        private static readonly Dictionary<string, string> WordOperators = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        private static readonly Dictionary<string, string> WordOperators = new(StringComparer.OrdinalIgnoreCase)
         {
-            ["And"] = "the logical operator", ["Or"] = "the logical operator", ["Not"] = "the logical operator",
-            ["Xor"] = "the logical operator", ["Eqv"] = "the logical operator", ["Imp"] = "the logical operator",
-            ["Like"] = "the comparison operator", ["Is"] = "the comparison operator",
-            ["TypeOf"] = "the keyword", ["New"] = "the keyword", ["AddressOf"] = "the keyword",
+            ["And"] = "the logical operator",
+            ["Or"] = "the logical operator",
+            ["Not"] = "the logical operator",
+            ["Xor"] = "the logical operator",
+            ["Eqv"] = "the logical operator",
+            ["Imp"] = "the logical operator",
+            ["Like"] = "the comparison operator",
+            ["Is"] = "the comparison operator",
+            ["TypeOf"] = "the keyword",
+            ["New"] = "the keyword",
+            ["AddressOf"] = "the keyword",
         };
 
         public static void Check(string statement)
@@ -87,22 +103,33 @@ namespace Pptcom.ComProxy
             // these words (and is not an assignment to it, which VBA would refuse anyway).
             if (tokens.Count > 0 && tokens[0].Kind == TokenKind.Name && ControlStatements.Contains(tokens[0].Value) &&
                 (tokens.Count == 1 || (tokens[1].Kind != TokenKind.Dot && tokens[1].Value != "=")))
+            {
                 throw Unsupported("the control statement '" + tokens[0].Value + "'", statement,
                     "pptcom has no If/For/With/Do/Select: write each step as its own statement, with the values worked out beforehand.",
                     "control statement");
+            }
             // Not even well-formed VBA (e.g. a string closed early by a C-style \" inside it, so text
             // follows the closing quote): that is a broken statement, not an unsupported construct.
             // Leave it to the parser, whose message points at the string.
             for (int i = 0; i + 1 < tokens.Count; i++)
             {
-                if (tokens[i].Kind != TokenKind.Text) continue;
+                if (tokens[i].Kind != TokenKind.Text)
+                {
+                    continue;
+                }
+
                 TokenKind next = tokens[i + 1].Kind;
-                if (next != TokenKind.Operator && next != TokenKind.Comma && next != TokenKind.Close) return;
+                if (next != TokenKind.Operator && next != TokenKind.Comma && next != TokenKind.Close)
+                {
+                    return;
+                }
             }
             int first = 0;
             if (tokens.Count > 0 && tokens[0].Kind == TokenKind.Name &&
                 (Is(tokens[0], "Set") || Is(tokens[0], "Let") || Is(tokens[0], "Const") || Is(tokens[0], "Call")))
+            {
                 first = 1;
+            }
 
             int depth = 0;
             bool assignmentSeen = false;
@@ -121,20 +148,29 @@ namespace Pptcom.ComProxy
                     case TokenKind.Operator:
                         if (t.Value == "=")
                         {
-                            if (depth == 0 && !assignmentSeen) { assignmentSeen = true; break; }
+                            if (depth == 0 && !assignmentSeen)
+                            {
+                                assignmentSeen = true;
+                                break;
+                            }
                             Fail(statement, t, "the comparison operator '='", "comparison",
                                  "In VBA only the first '=' of a statement assigns; a later '=' compares. Set each property in its own statement.");
                         }
                         if (t.Value == "<>" || t.Value == "<" || t.Value == ">" || t.Value == "<=" || t.Value == ">=")
+                        {
                             Fail(statement, t, "the comparison operator '" + t.Value + "'", "comparison", "");
+                        }
+
                         break;
                     case TokenKind.Name:
-                        string kind;
-                        if ((prev == null || prev.Kind != TokenKind.Dot) && WordOperators.TryGetValue(t.Value, out kind))
+                        if ((prev is null || prev.Kind != TokenKind.Dot) && WordOperators.TryGetValue(t.Value, out string kind))
+                        {
                             Fail(statement, t, kind + " '" + t.Value + "'", "word " + t.Value.ToLowerInvariant(), "");
+                        }
+
                         break;
                     case TokenKind.NamedArg:
-                        Fail(statement, prev != null && prev.Kind == TokenKind.Name ? prev : t, "named arguments (name:=value)", "named arguments",
+                        Fail(statement, prev is not null && prev.Kind == TokenKind.Name ? prev : t, "named arguments (name:=value)", "named arguments",
                              "Pass the arguments by position, in the order of the method's parameters.");
                         break;
                     case TokenKind.Continuation:
@@ -163,28 +199,21 @@ namespace Pptcom.ComProxy
         // suffixes on numbers (255&, 1.5#), two-character operators, ':=' and the ' _' continuation.
         public static List<Token> Tokenize(string s)
         {
-            var tokens = new List<Token>();
+            List<Token> tokens = [];
             int i = 0;
             while (i < s.Length)
             {
                 char c = s[i];
-                if (char.IsWhiteSpace(c)) { i++; continue; }
+                if (char.IsWhiteSpace(c))
+                {
+                    i++;
+                    continue;
+                }
                 int start = i;
 
                 if (c == '"')
                 {
-                    i++;
-                    while (i < s.Length)
-                    {
-                        if (s[i] == '"')
-                        {
-                            if (i + 1 < s.Length && s[i + 1] == '"') { i += 2; continue; }
-                            i++;
-                            break;
-                        }
-                        i++;
-                    }
-                    // an unterminated string runs to the end; the parser reports it
+                    i = EndOfText(s, start);
                     Add(tokens, TokenKind.Text, s, start, i);
                     continue;
                 }
@@ -192,26 +221,14 @@ namespace Pptcom.ComProxy
                 bool operandExpected = tokens.Count == 0 || IsOperandStart(tokens[tokens.Count - 1]);
                 if (c == '&' && operandExpected && i + 1 < s.Length && "HhOo".IndexOf(s[i + 1]) >= 0)
                 {
-                    i += 2;
-                    while (i < s.Length && Uri.IsHexDigit(s[i])) i++;
-                    if (i < s.Length && s[i] == '&') i++;
+                    i = EndOfRadixNumber(s, start);
                     Add(tokens, TokenKind.Number, s, start, i);
                     continue;
                 }
 
                 if (char.IsDigit(c) || (c == '.' && i + 1 < s.Length && char.IsDigit(s[i + 1]) && operandExpected))
                 {
-                    while (i < s.Length && (char.IsDigit(s[i]) || s[i] == '.')) i++;
-                    if (i < s.Length && (s[i] == 'e' || s[i] == 'E'))
-                    {
-                        int j = i + 1;
-                        if (j < s.Length && (s[j] == '+' || s[j] == '-')) j++;
-                        if (j < s.Length && char.IsDigit(s[j])) { i = j; while (i < s.Length && char.IsDigit(s[i])) i++; }
-                    }
-                    // type suffix: only when nothing but a separator follows (255& but not 255&"x")
-                    if (i < s.Length && "&%!#@".IndexOf(s[i]) >= 0 &&
-                        (i + 1 == s.Length || char.IsWhiteSpace(s[i + 1]) || ",)".IndexOf(s[i + 1]) >= 0))
-                        i++;
+                    i = EndOfNumber(s, start);
                     Add(tokens, TokenKind.Number, s, start, i);
                     continue;
                 }
@@ -225,14 +242,33 @@ namespace Pptcom.ComProxy
                         i++;
                         continue;
                     }
-                    while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] == '_')) i++;
+                    while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] == '_'))
+                    {
+                        i++;
+                    }
+
                     Add(tokens, TokenKind.Name, s, start, i);
                     continue;
                 }
 
-                if (c == ':' && i + 1 < s.Length && s[i + 1] == '=') { i += 2; Add(tokens, TokenKind.NamedArg, s, start, i); continue; }
-                if (c == '<' && i + 1 < s.Length && (s[i + 1] == '>' || s[i + 1] == '=')) { i += 2; Add(tokens, TokenKind.Operator, s, start, i); continue; }
-                if (c == '>' && i + 1 < s.Length && s[i + 1] == '=') { i += 2; Add(tokens, TokenKind.Operator, s, start, i); continue; }
+                if (c == ':' && i + 1 < s.Length && s[i + 1] == '=')
+                {
+                    i += 2;
+                    Add(tokens, TokenKind.NamedArg, s, start, i);
+                    continue;
+                }
+                if (c == '<' && i + 1 < s.Length && (s[i + 1] == '>' || s[i + 1] == '='))
+                {
+                    i += 2;
+                    Add(tokens, TokenKind.Operator, s, start, i);
+                    continue;
+                }
+                if (c == '>' && i + 1 < s.Length && s[i + 1] == '=')
+                {
+                    i += 2;
+                    Add(tokens, TokenKind.Operator, s, start, i);
+                    continue;
+                }
 
                 i++;
                 TokenKind kind =
@@ -245,6 +281,81 @@ namespace Pptcom.ComProxy
                 Add(tokens, kind, s, start, i);
             }
             return tokens;
+        }
+
+        // The end of the string literal that starts at s[start]; "" inside it is a quote.
+        private static int EndOfText(string s, int start)
+        {
+            int i = start + 1;
+            while (i < s.Length)
+            {
+                if (s[i] == '"')
+                {
+                    if (i + 1 < s.Length && s[i + 1] == '"')
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    i++;
+                    break;
+                }
+                i++;
+            }
+            // an unterminated string runs to the end; the parser reports it
+            return i;
+        }
+
+        // The end of the &H/&O literal that starts at s[start], with its optional & suffix.
+        private static int EndOfRadixNumber(string s, int start)
+        {
+            int i = start + 2;
+            while (i < s.Length && Uri.IsHexDigit(s[i]))
+            {
+                i++;
+            }
+
+            if (i < s.Length && s[i] == '&')
+            {
+                i++;
+            }
+
+            return i;
+        }
+
+        // The end of the decimal number that starts at s[start]: digits and '.', an exponent, a type suffix.
+        private static int EndOfNumber(string s, int start)
+        {
+            int i = start;
+            while (i < s.Length && (char.IsDigit(s[i]) || s[i] == '.'))
+            {
+                i++;
+            }
+
+            if (i < s.Length && (s[i] == 'e' || s[i] == 'E'))
+            {
+                int j = i + 1;
+                if (j < s.Length && (s[j] == '+' || s[j] == '-'))
+                {
+                    j++;
+                }
+
+                if (j < s.Length && char.IsDigit(s[j]))
+                {
+                    i = j;
+                    while (i < s.Length && char.IsDigit(s[i]))
+                    {
+                        i++;
+                    }
+                }
+            }
+            // type suffix: only when nothing but a separator follows (255& but not 255&"x")
+            if (i < s.Length && "&%!#@".IndexOf(s[i]) >= 0 &&
+                (i + 1 == s.Length || char.IsWhiteSpace(s[i + 1]) || ",)".IndexOf(s[i + 1]) >= 0))
+            {
+                i++;
+            }
+
+            return i;
         }
 
         // True when the token before is one after which an operand (not an operator) comes.

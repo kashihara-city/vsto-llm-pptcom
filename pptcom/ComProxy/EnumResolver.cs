@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Reflection;
 
 namespace Pptcom.ComProxy
@@ -14,29 +15,36 @@ namespace Pptcom.ComProxy
 
         private static Dictionary<string, object> Build()
         {
-            var map = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase); // VBA: names ignore case
+            Dictionary<string, object> map = new(StringComparer.OrdinalIgnoreCase); // VBA: names ignore case
 
             // These interop references are EmbedInteropTypes=false (see OfficePia.props)
             // specifically so this scan sees the *complete* assemblies - our code never names
             // most of these enums directly, and NoPIA embedding only embeds types actually
             // referenced by name in source.
-            var assemblies = new[]
-            {
+            Assembly[] assemblies =
+            [
                 typeof(Microsoft.Office.Interop.PowerPoint.Application).Assembly,
                 typeof(Microsoft.Office.Core.MsoTriState).Assembly,
-            };
+            ];
 
             foreach (Assembly asm in assemblies)
             {
                 foreach (Type type in asm.GetTypes())
                 {
-                    if (!type.IsEnum) continue;
+                    if (!type.IsEnum)
+                    {
+                        continue;
+                    }
 
                     foreach (string name in Enum.GetNames(type))
                     {
-                        if (map.ContainsKey(name)) continue;
+                        if (map.ContainsKey(name))
+                        {
+                            continue;
+                        }
+
                         object enumValue = Enum.Parse(type, name);
-                        object underlying = Convert.ChangeType(enumValue, Enum.GetUnderlyingType(type));
+                        object underlying = Convert.ChangeType(enumValue, Enum.GetUnderlyingType(type), CultureInfo.InvariantCulture);
                         map[name] = underlying;
                     }
                 }

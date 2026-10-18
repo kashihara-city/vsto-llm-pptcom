@@ -5,21 +5,6 @@ using ComTypes = System.Runtime.InteropServices.ComTypes;
 
 namespace Pptcom.ComProxy
 {
-    // .NET Framework does not publicly expose IDispatch - declare just enough of it to call
-    // GetTypeInfo, matching the well-known IID for IDispatch.
-    [ComImport]
-    [Guid("00020400-0000-0000-C000-000000000046")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    internal interface IDispatchMinimal
-    {
-        void GetTypeInfoCount(out int count);
-
-        void GetTypeInfo(int index, int lcid, out ComTypes.ITypeInfo typeInfo);
-
-        // GetIDsOfNames / Invoke omitted - not needed here, and leaving them out keeps the
-        // vtable-order-sensitive parts of this interface as small as possible to get right.
-    }
-
     // Every COM operation the LLM requests goes through here before it is invoked, and every
     // value it gets back is checked before it is allowed to become a handle the LLM can chain
     // off of. Two layers, deliberately redundant:
@@ -30,7 +15,7 @@ namespace Pptcom.ComProxy
     //      looks innocuous.
     internal static class ComSecurityPolicy
     {
-        private static readonly HashSet<string> BlockedMembers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        private static readonly HashSet<string> BlockedMembers = new(StringComparer.OrdinalIgnoreCase)
         {
             // "Really dangerous only" set (2026-09-28). The wider review is in
             // the security review notes (kept outside the repository); usage is being observed before tightening further.
@@ -68,7 +53,7 @@ namespace Pptcom.ComProxy
         // is created by the host, not returned by a call, so it is unaffected; this closes the
         // `anything.Application` / `pres.Parent` route back to app-level members and the
         // CommandBars route to ExecuteMso.
-        private static readonly HashSet<string> BlockedReturnTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        private static readonly HashSet<string> BlockedReturnTypes = new(StringComparer.OrdinalIgnoreCase)
         {
             "_Application", "Application", "CommandBars", "CommandBar", "CommandBarControls", "CommandBarControl",
             "FileDialog", "OLEFormat", "AddIns", "AddIn", "COMAddIns", "COMAddIn", "VBE",
@@ -78,15 +63,19 @@ namespace Pptcom.ComProxy
         // System.__ComObject - GetType().Namespace is useless for these. To find out what a
         // returned object actually IS, we ask its IDispatch for its ITypeInfo and check which
         // type library that came from, against known Office object-model type libraries.
-        private static readonly HashSet<Guid> AllowedTypeLibGuids = new HashSet<Guid>
-        {
+        private static readonly HashSet<Guid> AllowedTypeLibGuids =
+        [
             new Guid("2DF8D04C-5BFA-101B-BDE5-00AA0044DE52"), // Microsoft Office Object Library (Core)
             new Guid("91493440-5A91-11CF-8700-00AA0060263B"), // Microsoft PowerPoint Object Library
-        };
+        ];
 
         public static bool IsMemberAllowed(string member)
         {
-            if (string.IsNullOrEmpty(member)) return true; // default-member "item" access
+            if (string.IsNullOrEmpty(member))
+            {
+                return true; // default-member "item" access
+            }
+
             return !BlockedMembers.Contains(member);
         }
 
@@ -94,7 +83,7 @@ namespace Pptcom.ComProxy
         // be too broad: blocking "Add" everywhere would also kill Slides.Add / Shapes.Add*).
         // Keyed by the COM interface name reported by the object's ITypeInfo.
         private static readonly Dictionary<string, HashSet<string>> BlockedMembersByType =
-            new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+            new(StringComparer.OrdinalIgnoreCase)
             {
                 // Creating a new deck puts the work outside the one the user has open; opening
                 // one reads an arbitrary local/network file into the session.
@@ -120,69 +109,111 @@ namespace Pptcom.ComProxy
         // members are never suggested).
         public static bool IsMemberAllowedOn(string typeName, string member)
         {
-            if (!IsMemberAllowed(member)) return false;
-            HashSet<string> blocked;
+            if (!IsMemberAllowed(member))
+            {
+                return false;
+            }
+
             foreach (string name in new[] { typeName, "_" + typeName })
-                if (name != null && BlockedMembersByType.TryGetValue(name, out blocked) && blocked.Contains(member)) return false;
+            {
+                if (name is not null && BlockedMembersByType.TryGetValue(name, out HashSet<string> blocked) && blocked.Contains(member))
+                {
+                    return false;
+                }
+            }
+
             return true;
         }
 
         // Returns the blocking rule's description, or null if the call is allowed.
         public static string CheckMemberOnTarget(object target, string member)
         {
-            if (string.IsNullOrEmpty(member) || target == null || !Marshal.IsComObject(target)) return null;
+            if (string.IsNullOrEmpty(member) || target is null || !Marshal.IsComObject(target))
+            {
+                return null;
+            }
+
             string typeName = TryGetTypeName(target);
-            if (typeName == null) return null;
-            HashSet<string> blocked;
-            if (BlockedMembersByType.TryGetValue(typeName, out blocked) && blocked.Contains(member))
+            if (typeName is null)
+            {
+                return null;
+            }
+
+            if (BlockedMembersByType.TryGetValue(typeName, out HashSet<string> blocked) && blocked.Contains(member))
+            {
                 return typeName + "." + member;
+            }
+
             return null;
         }
 
         public static string TryGetTypeName(object comObject)
         {
-            var dispatch = comObject as IDispatchMinimal;
-            if (dispatch == null) return null;
+            if (comObject is not IDispatchMinimal dispatch)
+            {
+                return null;
+            }
+
             ComTypes.ITypeInfo typeInfo = null;
             try
             {
                 dispatch.GetTypeInfo(0, 0, out typeInfo);
-                if (typeInfo == null) return null;
-                string name, doc, helpFile;
-                int helpContext;
-                typeInfo.GetDocumentation(-1, out name, out doc, out helpContext, out helpFile);
+                if (typeInfo is null)
+                {
+                    return null;
+                }
+
+                typeInfo.GetDocumentation(-1, out string name, out string doc, out int helpContext, out string helpFile);
                 return name;
             }
-            catch
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
                 return null;
             }
             finally
             {
-                if (typeInfo != null) Marshal.ReleaseComObject(typeInfo);
+                if (typeInfo is not null)
+                {
+                    Marshal.ReleaseComObject(typeInfo);
+                }
             }
         }
 
         public static bool IsReturnValueAllowed(object value)
         {
-            if (value == null) return true;
+            if (value is null)
+            {
+                return true;
+            }
+
             Type type = value.GetType();
 
             if (type.IsPrimitive || type == typeof(string) || type == typeof(decimal) || type == typeof(DateTime))
+            {
                 return true;
+            }
 
-            if (!Marshal.IsComObject(value)) return false;
+            if (!Marshal.IsComObject(value))
+            {
+                return false;
+            }
 
             Guid? libGuid = TryGetTypeLibGuid(value);
-            if (!libGuid.HasValue || !AllowedTypeLibGuids.Contains(libGuid.Value)) return false;
+            if (libGuid is null || !AllowedTypeLibGuids.Contains(libGuid.Value))
+            {
+                return false;
+            }
+
             string typeName = TryGetTypeName(value);
-            return typeName == null || !BlockedReturnTypes.Contains(typeName);
+            return typeName is null || !BlockedReturnTypes.Contains(typeName);
         }
 
         private static Guid? TryGetTypeLibGuid(object comObject)
         {
-            var dispatch = comObject as IDispatchMinimal;
-            if (dispatch == null) return null;
+            if (comObject is not IDispatchMinimal dispatch)
+            {
+                return null;
+            }
 
             ComTypes.ITypeInfo typeInfo = null;
             ComTypes.ITypeLib typeLib = null;
@@ -190,25 +221,41 @@ namespace Pptcom.ComProxy
             try
             {
                 dispatch.GetTypeInfo(0, 0, out typeInfo);
-                if (typeInfo == null) return null;
+                if (typeInfo is null)
+                {
+                    return null;
+                }
 
-                int typeLibIndex;
-                typeInfo.GetContainingTypeLib(out typeLib, out typeLibIndex);
-                if (typeLib == null) return null;
+                typeInfo.GetContainingTypeLib(out typeLib, out int typeLibIndex);
+                if (typeLib is null)
+                {
+                    return null;
+                }
 
                 typeLib.GetLibAttr(out pAttr);
-                var attr = (ComTypes.TYPELIBATTR)Marshal.PtrToStructure(pAttr, typeof(ComTypes.TYPELIBATTR));
+                ComTypes.TYPELIBATTR attr = Marshal.PtrToStructure<ComTypes.TYPELIBATTR>(pAttr);
                 return attr.guid;
             }
-            catch
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
-                return null;
+                return null; // no type library: not allowed (IsReturnValueAllowed)
             }
             finally
             {
-                if (pAttr != IntPtr.Zero && typeLib != null) typeLib.ReleaseTLibAttr(pAttr);
-                if (typeInfo != null) Marshal.ReleaseComObject(typeInfo);
-                if (typeLib != null) Marshal.ReleaseComObject(typeLib);
+                if (pAttr != IntPtr.Zero && typeLib is not null)
+                {
+                    typeLib.ReleaseTLibAttr(pAttr);
+                }
+
+                if (typeInfo is not null)
+                {
+                    Marshal.ReleaseComObject(typeInfo);
+                }
+
+                if (typeLib is not null)
+                {
+                    Marshal.ReleaseComObject(typeLib);
+                }
             }
         }
     }

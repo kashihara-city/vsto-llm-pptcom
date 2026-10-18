@@ -310,9 +310,9 @@ def run_tool(runner: Runner, name: str, args: dict):
             wd = r.get("wouldDefine") or []
             # only a script rejected as a whole (empty, too many lines); a statement that does not
             # parse comes back in the per-line report below, as in the add-in
-            return ("Script rejected - NOTHING in this script was executed.\n%s%s%s"
+            return ("Script rejected - NOTHING in this script was executed.\n%s%s"
                     "\nFix it and resend the WHOLE script."
-                    % (r.get("error"), ("\nLine: " + r["failedText"]) if r.get("failedText") else "",
+                    % (r.get("error"),
                        ("\nThese variables were NOT created and do not exist: " + ", ".join(wd) + ".") if wd else ""), None)
         # The runner builds the same report as the add-in (ComScriptResult.Describe): failed lines
         # with their errors, lines skipped because they depend on them; everything else applied.

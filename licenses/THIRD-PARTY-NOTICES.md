@@ -18,8 +18,9 @@ Not shipped: the Microsoft Edge WebView2 Runtime (part of Windows), and the Offi
 (Microsoft.Office.Interop.PowerPoint, office, Microsoft.Vbe.Interop 15.0), which Office installs in the GAC.
 
 Used only to build, not shipped: ILRepack 2.0.48 (Apache-2.0), WiX Toolset 5 (MS-RL), the Visual Studio build tools,
-and what builds anydoc: Rust 1.99.0 (MIT OR Apache-2.0), the wasm-bindgen CLI 0.2.126 (MIT OR Apache-2.0) and
-wasm-opt from binaryen version_117 (Apache-2.0). npm is not used.
+the code analyzers Microsoft.CodeAnalysis.NetAnalyzers 10.0.401, Microsoft.CodeAnalysis.CSharp.CodeStyle 5.9.0 and
+Meziantou.Analyzer 3.0.298 (all MIT), and what builds anydoc: Rust 1.99.0 (MIT OR Apache-2.0), the wasm-bindgen CLI
+0.2.126 (MIT OR Apache-2.0) and wasm-opt from binaryen version_117 (Apache-2.0). npm is not used.
 
 Left out of what PDF.js publishes: its viewer, its standard fonts (FoxitDingbats and others, and the Liberation
 fonts), the JavaScript fallbacks of the WebAssembly decoders, and the QuickJS sandbox for PDF scripts.

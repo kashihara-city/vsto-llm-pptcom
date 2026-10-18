@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Runtime.InteropServices;
 using Pptcom.ComProxy;
 
 namespace Pptcom.Documents
@@ -23,7 +24,7 @@ namespace Pptcom.Documents
         public static void Prepare(AttachedImage img)
         {
             string ext = Extension(img.MediaType);
-            img.Kind = ext != null ? ext.TrimStart('.').ToUpperInvariant() : (img.MediaType ?? "?");
+            img.Kind = ext is not null ? ext.TrimStart('.').ToUpperInvariant() : (img.MediaType ?? "?");
             if (ext == ".svg")
             {
                 img.FilePath = Write(img.Data, ext);   // PowerPoint places SVG; System.Drawing cannot read it
@@ -31,61 +32,77 @@ namespace Pptcom.Documents
             }
             try
             {
-                using (var ms = new MemoryStream(img.Data))
-                using (var image = Image.FromStream(ms))
+                using MemoryStream ms = new(img.Data);
+                using Image image = Image.FromStream(ms);
+                img.Width = image.Width;
+                img.Height = image.Height;
+                if (ext is not null)
                 {
-                    img.Width = image.Width;
-                    img.Height = image.Height;
-                    if (ext != null) img.FilePath = Write(img.Data, ext);
-                    else
-                    {
-                        img.Kind = "PNG";
-                        using (var outStream = new MemoryStream())
-                        {
-                            image.Save(outStream, ImageFormat.Png);
-                            img.FilePath = Write(outStream.ToArray(), ".png");
-                        }
-                    }
+                    img.FilePath = Write(img.Data, ext);
+                }
+                else
+                {
+                    img.Kind = "PNG";
+                    using MemoryStream outStream = new();
+                    image.Save(outStream, ImageFormat.Png);
+                    img.FilePath = Write(outStream.ToArray(), ".png");
                 }
             }
-            catch
+            catch (Exception ex) when (CannotDecode(ex))
             {
-                if (ext != null) img.FilePath = Write(img.Data, ext);
+                if (ext is not null)
+                {
+                    img.FilePath = Write(img.Data, ext);
+                }
             }
+        }
+
+        // How GDI+ reports a picture it cannot read: ArgumentException ("Parameter is not valid"),
+        // ExternalException ("A generic error occurred in GDI+") or OutOfMemoryException (an unknown format).
+        private static bool CannotDecode(Exception ex)
+        {
+            return ex is ArgumentException or ExternalException or OutOfMemoryException;
         }
 
         // A PNG of at most PreviewMax on the long side (drawn on white: EMF, PNG and GIF may be transparent).
         // Null when the image cannot be decoded here (SVG, a broken file).
         public static string Preview(AttachedImage img)
         {
-            if (img.PreviewPath != null && File.Exists(img.PreviewPath)) return img.PreviewPath;
+            if (img.PreviewPath is not null && File.Exists(img.PreviewPath))
+            {
+                return img.PreviewPath;
+            }
+
             try
             {
-                using (var ms = new MemoryStream(img.Data))
-                using (var image = Image.FromStream(ms))
+                using MemoryStream ms = new(img.Data);
+                using Image image = Image.FromStream(ms);
+                int w = Math.Max(1, image.Width), h = Math.Max(1, image.Height);
+                double scale = Math.Min(1.0, (double)PreviewMax / Math.Max(w, h));
+                // vector pictures (EMF/WMF) report small sizes at times: draw them at a readable size
+                if (image is Metafile && Math.Max(w, h) < 640)
                 {
-                    int w = Math.Max(1, image.Width), h = Math.Max(1, image.Height);
-                    double scale = Math.Min(1.0, (double)PreviewMax / Math.Max(w, h));
-                    // vector pictures (EMF/WMF) report small sizes at times: draw them at a readable size
-                    if (image is Metafile && Math.Max(w, h) < 640) scale = 640.0 / Math.Max(w, h);
-                    int pw = Math.Max(1, (int)Math.Round(w * scale)), ph = Math.Max(1, (int)Math.Round(h * scale));
-                    using (var bmp = new Bitmap(pw, ph))
-                    {
-                        using (var g = Graphics.FromImage(bmp))
-                        {
-                            g.Clear(Color.White);
-                            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                            g.SmoothingMode = SmoothingMode.HighQuality;
-                            g.DrawImage(image, 0, 0, pw, ph);
-                        }
-                        string path = ComProxyEngine.TempPath("pptcom_docview_" + Guid.NewGuid().ToString("N") + ".png");
-                        bmp.Save(path, ImageFormat.Png);
-                        img.PreviewPath = path;
-                        return path;
-                    }
+                    scale = 640.0 / Math.Max(w, h);
                 }
+
+                int pw = Math.Max(1, (int)Math.Round(w * scale, MidpointRounding.AwayFromZero)), ph = Math.Max(1, (int)Math.Round(h * scale, MidpointRounding.AwayFromZero));
+                using Bitmap bmp = new(pw, ph);
+                using (Graphics g = Graphics.FromImage(bmp))
+                {
+                    g.Clear(Color.White);
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.SmoothingMode = SmoothingMode.HighQuality;
+                    g.DrawImage(image, 0, 0, pw, ph);
+                }
+                string path = ComProxyEngine.TempPath("pptcom_docview_" + Guid.NewGuid().ToString("N") + ".png");
+                bmp.Save(path, ImageFormat.Png);
+                img.PreviewPath = path;
+                return path;
             }
-            catch { return null; }
+            catch (Exception ex) when (CannotDecode(ex) || ex is IOException || ex is UnauthorizedAccessException)
+            {
+                return null;
+            }
         }
 
         private static string Write(byte[] data, string ext)
@@ -98,18 +115,18 @@ namespace Pptcom.Documents
         // Types PowerPoint's AddPicture reads as they are.
         private static string Extension(string mediaType)
         {
-            switch ((mediaType ?? "").ToLowerInvariant())
+            return (mediaType ?? "").ToLowerInvariant() switch
             {
-                case "image/png": return ".png";
-                case "image/jpeg": case "image/jpg": case "image/pjpeg": return ".jpg";
-                case "image/gif": return ".gif";
-                case "image/bmp": case "image/x-bmp": case "image/x-ms-bmp": return ".bmp";
-                case "image/tiff": return ".tif";
-                case "image/x-emf": case "image/emf": return ".emf";
-                case "image/x-wmf": case "image/wmf": return ".wmf";
-                case "image/svg+xml": return ".svg";
-                default: return null;
-            }
+                "image/png" => ".png",
+                "image/jpeg" or "image/jpg" or "image/pjpeg" => ".jpg",
+                "image/gif" => ".gif",
+                "image/bmp" or "image/x-bmp" or "image/x-ms-bmp" => ".bmp",
+                "image/tiff" => ".tif",
+                "image/x-emf" or "image/emf" => ".emf",
+                "image/x-wmf" or "image/wmf" => ".wmf",
+                "image/svg+xml" => ".svg",
+                _ => null,
+            };
         }
     }
 }

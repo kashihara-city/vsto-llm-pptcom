@@ -105,12 +105,17 @@ PowerPoint
 └─ pptcom.dll
    ├─ C# のコード
    │   ├─ ThisAddIn             エージェントのループ、会話（添付資料も会話に属す）
+   │   ├─ Agent                 LLM との通信（OpenAI 互換の API、ストリーミング）
    │   ├─ ComProxy              pptcom（資料の画像も d1_img3 などの変数として貼れる）
    │   ├─ Documents             添付資料の保持、docread、画像の変換
-   │   └─ AiTaskPaneControl     作業ウィンドウ（WebView2）の土台。DLL 内のファイルを返す
+   │   ├─ AiTaskPaneControl     作業ウィンドウ（WebView2）の土台。DLL 内のファイルを返す
+   │   └─ PaneText / Texts      作業ウィンドウに送るメッセージ（コードと値）、アドインが自分で描く文言
    ├─ 結合したライブラリ         Newtonsoft.Json、WebView2 SDK（Core、WinForms）
-   └─ 埋め込みのファイル（https://pptcom.invalid/ で作業ウィンドウに渡す）
+   ├─ 埋め込みのファイル（Agent/）
+   │   └─ system-prompt.txt / tools.json   モデルへの指示とツールの定義（AgentFile が読む）
+   └─ 埋め込みのファイル（UI/web/。https://pptcom.invalid/ で作業ウィンドウに渡す）
        ├─ 画面          index.html / taskpane.js / taskpane.css
+       ├─ 文言          i18n.js、locales/<言語>.json（メッセージのコードごとの文言）
        ├─ docs.js       ドロップと添付の受付、PDF のページの描画
        ├─ docworker.js  Word・Excel・PowerPoint → 文字（anydoc）
        ├─ pdfdoc.js     PDF → 文字と画像（PDF.js）
@@ -121,7 +126,7 @@ PowerPoint
 
 次のものが必要です。
 
-- Visual Studio Build Tools 2022 以降（「Office/SharePoint ビルド ツール」に、オプションの「Visual Studio Tools for Office (VSTO) ビルド ツール」と「.NET Framework 4.8 開発ツール」を足したもの）
+- Visual Studio Build Tools 2026 の 18.9 以降（「Office/SharePoint ビルド ツール」に、オプションの「Visual Studio Tools for Office (VSTO) ビルド ツール」と「.NET Framework 4.8 開発ツール」を足したもの）。C# 14 と、下の静的解析のために、このコンパイラが要ります
 - Rust 1.99.0 と wasm32-unknown-unknown ターゲット（`rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown`）
 
 ```
@@ -134,6 +139,10 @@ powershell -ExecutionPolicy Bypass -File scripts\build\build.ps1
 - anydoc: タグのコミットのソース（`deps/anydoc.tar.gz`）から、anydoc 自身のリリースと同じ手順（cargo → wasm-bindgen → wasm-opt）で WebAssembly に組みます。wasm-bindgen と wasm-opt は公式のビルド済みを、lock のハッシュで確かめてから使います。最初のビルドは数分かかり、Rust のライブラリ（crates.io、Cargo.lock で固定）と 2 つの道具を取るためにネットワークが要ります。組んだ結果は `pptcom/obj/webvendor/` に残し、lock が変わるまで組み直しません。
 
 版を上げるときは `scripts/deps/fetch-web.py` の版を書き換えて実行します。公開から 7 日たっていない版は取りません。
+
+C# のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.NetAnalyzers、Microsoft.CodeAnalysis.CSharp.CodeStyle、Meziantou.Analyzer）にかけ、警告はエラーとして扱います。言語の版、解析器とその版は `Directory.Build.props` で決めています。止めている規則とその理由、書き方の決まり（型は `var` でなく名前で書く、`if` などには必ず波かっこを付ける、null とは `is null` / `is not null` で比べる、1 つのファイルに 1 つの型、メソッドは 100 行・60 文まで）は `.editorconfig` に書いてあります。古い形式の csproj には .NET SDK の「すべての規則」の一覧が渡らないため、NetAnalyzers の一覧はパッケージから `scripts/deps/netanalyzers-config.py` で作り、`deps/analyzers/` に置いています（CI で照合します）。
+
+作業ウィンドウの文言は、コードには書かず、`pptcom/UI/web/locales/<言語>.json` にメッセージのコードごとに置いています。アドインはコードと値だけを作業ウィンドウに送り、文にするのは作業ウィンドウ（`i18n.js`）です。`ja.json` がもとで、ほかの言語のファイルに無いコードは日本語で出ます。どの言語を使うかは PowerPoint の表示言語で決めます。`python -X utf8 scripts/test/i18n.py` は、使っているコードがすべて `ja.json` にあること、値の数が `{0}` などと合うこと、ほかの言語が同じコードを持つこと、コードに日本語の文が書かれていないことを調べます（CI でも流します）。
 
 `python -X utf8 scripts/test/no-secrets.py` は、Git が追跡しているファイルに、私有 IP アドレス、社内のホスト名、API キーらしき文字列、開発機のパス、鍵や証明書の中身が混ざっていないかを調べます（CI でも毎回流します）。`--history` を付けると、すべてのコミットのファイルとコミットのメッセージを調べます。パターンでは見分けられない接続先のホスト名やモデル名は、Git の管理外の `notes/secrets-denylist.txt`（1 行に 1 語）に書いておくと、それも照合します。
 
@@ -151,14 +160,17 @@ gh attestation verify vsto-llm-pptcom-<版>.msi --repo kashihara-city/vsto-llm-p
 ## リポジトリの構成
 
 - `pptcom/` アドイン本体（C#、VSTO）
+- `pptcom/Agent/` LLM との通信、モデルへの指示（`system-prompt.txt`）とツールの定義（`tools.json`。どちらも DLL に埋め込み）
 - `pptcom/ComProxy/` pptcom スクリプトの解析と実行、使ってよいメンバーの検査
-- `pptcom/UI/` 作業ウィンドウ（`web/` が画面の HTML・CSS・JavaScript。DLL に埋め込み、WebView2 に渡す）
 - `pptcom/Documents/` 添付した資料の保持、docread、資料の画像
-- `deps/` 作業ウィンドウで使う PDF.js と anydoc の、公式の配布元から取ったもの（`web-sources.lock.json` に版・取得元・ハッシュ）と、SBOM を確かめる CycloneDX の公式スキーマ（`cyclonedx/`）
-- `scripts/deps/` `deps/` を更新するスクリプト
+- `pptcom/UI/` 作業ウィンドウ（`web/` が画面の HTML・CSS・JavaScript、`web/locales/` が言語ごとの文言。DLL に埋め込み、WebView2 に渡す）
+- `deps/` 作業ウィンドウで使う PDF.js と anydoc の、公式の配布元から取ったもの（`web-sources.lock.json` に版・取得元・ハッシュ）、SBOM を確かめる CycloneDX の公式スキーマ（`cyclonedx/`）、NetAnalyzers の規則の一覧（`analyzers/`）
 - `scripts/build/` MSI のビルド（WiX）、SBOM の生成、anydoc に含まれる Rust ライブラリのライセンス一覧の生成
+- `scripts/deps/` `deps/` を更新するスクリプト
 - `scripts/test/` テストと実験用の道具（構文テスト、PowerPoint を外から動かすランナー、アドインを外から操作するスクリプトなど）
+- `.github/workflows/` タグから MSI と SBOM を組み、検査と証明をして Release に載せるワークフロー（`release.yml`）
+- `docs/` README の画像
 - `licenses/` 同梱している第三者のコンポーネントとライセンス（`THIRD-PARTY-NOTICES.md`。MSI にも入れます）
+- `Directory.Build.props`、`.editorconfig` C# の言語の版と静的解析の設定
 - `LICENSE` このリポジトリのライセンス（MIT）
 - `SECURITY.md` 脆弱性の報告のしかた
-- `docs/` README の画像

@@ -12,7 +12,7 @@
 //                   {type: "pagesRendered", request, pages: [{page, data (PNG, base64) | error}]} or {..., error}
 //   add-in -> page: {type: "convert", ticket, name, data (base64)}   a file attached from outside
 //                   {type: "renderPages", request, data (the PDF, base64), pages: [n], maxSide}
-//                   {type: "attachments", items: [{id, name, detail}]}
+//                   {type: "attachments", items: [{id, name, detail}]}   (detail: a message, see i18n.js)
 //                   {type: "busy", value}                             (also handled by taskpane.js)
 const host = window.chrome && window.chrome.webview;
 const $ = id => document.getElementById(id);
@@ -146,15 +146,15 @@ function showAttachments(items) {
   for (const it of items) {
     const chip = document.createElement("span");
     chip.className = "chip";
-    chip.title = it.detail || "";
+    chip.title = it.detail ? i18n.t(it.detail) : "";
     const label = document.createElement("span");
     label.className = "chip-name";
     label.textContent = it.id + " " + it.name;
     chip.appendChild(label);
     const x = document.createElement("button");
     x.className = "chip-remove";
-    x.title = "添付を外す";
-    x.setAttribute("aria-label", it.name + " の添付を外す");
+    x.title = i18n.t("DOC_REMOVE");
+    x.setAttribute("aria-label", i18n.fill("DOC_REMOVE_NAMED", it.name));
     x.textContent = "×";
     x.addEventListener("click", () => { if (!busy) host.postMessage({ type: "detach", id: it.id }); });
     chip.appendChild(x);
@@ -165,7 +165,7 @@ function showAttachments(items) {
 function updateState() {
   attachButton.disabled = busy;
   for (const b of chips.querySelectorAll(".chip-remove")) b.disabled = busy;
-  $("converting").textContent = converting > 0 ? "資料を読み取っています…" : "";
+  $("converting").textContent = converting > 0 ? i18n.t("DOC_CONVERTING") : "";
   area.classList.toggle("show", chips.children.length > 0 || converting > 0);
 }
 

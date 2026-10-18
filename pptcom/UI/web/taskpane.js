@@ -3,6 +3,7 @@
 //   page -> add-in: {type: "ready" | "send" | "cancel" | "retry" | "newChat" | "endpoint" | "chatModel" | "imageModel" | "apiKey", ...}
 //   page -> add-in also: {type: "saveProgress" | "externalControl", value: bool}
 //   add-in -> page: {type: "log" | "status" | "busy" | "retry" | "endpoint" | "models" | "apiKeyState" | "options", ...}
+//   ("log" and "status" carry a message: {code, args}, shown with the text of locales/<language>.json, see i18n.js)
 // Attached documents (drop, attach button, chips, PDF pages) have their own messages: see docs.js.
 const host = window.chrome && window.chrome.webview;
 const post = msg => { if (host) host.postMessage(msg); };
@@ -32,7 +33,7 @@ function startWork() {
   d.className = "work running";
   const s = document.createElement("summary");
   s.appendChild(div("dot"));
-  const title = div("work-title", "考えています…");
+  const title = div("work-title", i18n.t("WORK_THINKING"));
   s.appendChild(title);
   s.insertAdjacentHTML("beforeend", '<svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>');
   d.appendChild(s);
@@ -55,70 +56,82 @@ function finishWork(state, footer) {
   work.el.classList.remove("running");
   work.el.classList.add(state);
   const parts = [];
-  if (work.turns) parts.push(work.turns + " ターン");
-  if (work.tools) parts.push("ツール " + work.tools + " 回");
+  if (work.turns) parts.push(i18n.fill("WORK_TURNS", work.turns));
+  if (work.tools) parts.push(i18n.fill("WORK_TOOLS", work.tools));
   if (footer) parts.push(footer);
-  work.title.textContent = (state === "done" ? "処理の経過" : "処理の経過（途中で終了）") + (parts.length ? " · " + parts.join(" · ") : "");
+  const sep = i18n.t("PART_SEPARATOR");
+  work.title.textContent = i18n.t(state === "done" ? "WORK_DONE" : "WORK_STOPPED") + (parts.length ? sep + parts.join(sep) : "");
   work = null;
 }
 
-// One line from the add-in's log, placed by what it starts with (see ThisAddIn.cs).
-function onLog(text) {
-  let m;
-  if (text.startsWith("あなた: ")) {
-    if (work) finishWork("stopped");
-    add(div("msg user", text.slice(5)));
-    startWork();
-    return;
+// How a log message from the add-in is shown, by its code (ThisAddIn.cs). Any other code is a side note:
+// a row of the request in progress, or a note in parentheses between requests.
+const logKinds = {
+  USER_REQUEST: "user", TOOL_RESULT: "tool", TURN_SIZE: "turn", REQUEST_DONE: "done",
+  AI_REPLY: "reply", AI_DONE: "reply",
+  AI_ERROR: "stopped", AI_CANCELLED: "stopped", AI_SERVER_ERROR: "error", AI_TURN_LIMIT: "error",
+  HAND_EDITS: "handEdits", NEW_CONVERSATION: "reset", NEW_CONVERSATION_OTHER_DECK: "divider",
+  READY: "plain", NO_ENDPOINT_HELP: "plain",
+};
+
+function onLog(m) {
+  const args = m.args || [], text = i18n.t(m);
+  switch (logKinds[m.code]) {
+    case "user":
+      if (work) finishWork("stopped");
+      add(div("msg user", text));
+      startWork();
+      return;
+    case "tool": {
+      if (!work) startWork();
+      work.tools++;
+      const turn = args[0], tool = args[1], result = String(args[2] || "");
+      const failed = /\bfailed\b|FAILED|rejected|error/i.test(result) && !/^OK/.test(result);
+      workRow(failed ? "failed" : "", tool, result);
+      work.title.textContent = [i18n.fill("TURN", turn), tool, result.split("\n")[0]].join(i18n.t("PART_SEPARATOR"));
+      return;
+    }
+    case "turn":
+      if (!work) startWork();
+      work.turns = Math.max(work.turns, +args[0]);
+      workRow("turn", null, text);
+      return;
+    case "done":
+      if (work) finishWork("done", text);
+      else add(div("note", i18n.fill("NOTE", text)));
+      return;
+    case "reply":
+      add(div("msg assistant", text));
+      return;
+    case "stopped":   // the request ended with it
+      if (work) finishWork("stopped");
+      add(div("msg assistant error", text));
+      return;
+    case "error":
+      add(div("msg assistant error", text));
+      return;
+    case "handEdits": {
+      // what the user changed by hand since the last request: above this request's progress block
+      const note = div("note", i18n.fill("NOTE", text));
+      if (work) log.insertBefore(note, work.el); else add(note);
+      return;
+    }
+    case "reset":     // 新しい会話 pressed: start from an empty pane
+      work = null;
+      log.textContent = "";
+      add(div("divider", i18n.t("NEW_CHAT")));
+      return;
+    case "divider":   // the conversation ended because another presentation is active
+      if (work) finishWork("stopped");
+      add(div("divider", text));
+      return;
+    case "plain":
+      add(div("note", text));
+      return;
+    default:
+      if (work) workRow("extra", null, text);
+      else add(div("note", i18n.fill("NOTE", text)));
   }
-  if ((m = /^AI: \[(\d+)\] (\S+) -> ([\s\S]*)$/.exec(text))) {
-    if (!work) startWork();
-    work.tools++;
-    const result = m[3];
-    const failed = /\bfailed\b|FAILED|rejected|error/i.test(result) && !/^OK/.test(result);
-    workRow(failed ? "failed" : "", m[2], result);
-    work.title.textContent = "ターン" + m[1] + " · " + m[2] + " · " + result.split("\n")[0];
-    return;
-  }
-  if ((m = /^\(ターン(\d+): ([\s\S]*)\)$/.exec(text))) {
-    if (!work) startWork();
-    work.turns = Math.max(work.turns, +m[1]);
-    workRow("turn", null, "ターン" + m[1] + ": " + m[2]);
-    return;
-  }
-  if ((m = /^\((所要 [\s\S]*)\)$/.exec(text))) {
-    if (work) finishWork("done", m[1]);
-    else add(div("note", text));
-    return;
-  }
-  if (text.startsWith("AI: ")) {
-    const body = text.slice(4);
-    const bad = /^(エラーが発生しました|サーバ側のエラー|中止しました|ターン数の上限)/.test(body);
-    if (bad && /^(エラー|中止)/.test(body) && work) finishWork("stopped");
-    add(div("msg assistant" + (bad ? " error" : ""), body));
-    return;
-  }
-  // What the user changed by hand since the last request: shown above this request's progress block.
-  if (/^\(前回の依頼のあとに/.test(text)) {
-    const note = div("note", text);
-    if (work) log.insertBefore(note, work.el); else add(note);
-    return;
-  }
-  // 新しい会話 pressed: start from an empty pane. A conversation that ended because another
-  // presentation is active (the request just sent is already shown) gets a divider instead.
-  if (text === "(新しい会話を始めました)") {
-    work = null;
-    log.textContent = "";
-    add(div("divider", "新しい会話"));
-    return;
-  }
-  if ((m = /^\((新しい会話[\s\S]*)\)$/.exec(text))) {
-    if (work) finishWork("stopped");
-    add(div("divider", m[1]));
-    return;
-  }
-  if (work && /^\(/.test(text)) { workRow("extra", null, text.replace(/^\(|\)$/g, "")); return; }
-  add(div("note", text));
 }
 
 // ---- input, buttons -----------------------------------------------------------------------------
@@ -155,7 +168,7 @@ $("external-control").addEventListener("change", e => post({ type: "externalCont
 
 function updateSummary() {
   const host = endpoint.value.replace(/^https?:\/\//, "");
-  $("settings-summary").textContent = host ? (chatModel.value || "モデル未選択") + " · " + host : "接続設定（未設定）";
+  $("settings-summary").textContent = host ? (chatModel.value || i18n.t("SETTINGS_NO_MODEL")) + i18n.t("PART_SEPARATOR") + host : i18n.t("SETTINGS_NOT_SET");
 }
 function fill(select, items, selected) {
   select.textContent = "";
@@ -176,25 +189,29 @@ function setBusy(on) {
   cancelling = false;
   document.body.classList.toggle("busy", on);
   action.disabled = false;
-  action.title = on ? "中止" : "送信 (Ctrl+Enter)";
-  action.setAttribute("aria-label", on ? "中止" : "送信");
+  action.title = i18n.t(on ? "STOP" : "SEND_TITLE");
+  action.setAttribute("aria-label", i18n.t(on ? "STOP" : "SEND"));
   for (const el of [endpoint, $("fetch"), chatModel, imageModel, $("apikey"), $("new-chat"), $("save-progress"), $("external-control")]) el.disabled = on;
   if (!on) { $("status").textContent = ""; $("retry-bar").classList.remove("show"); if (work) finishWork("done"); }
 }
 
 const handlers = {
-  log: m => onLog(m.text),
-  status: m => { $("status").textContent = m.text || ""; },
+  log: m => onLog(m),
+  status: m => { $("status").textContent = m.code ? i18n.t(m) : ""; },
   busy: m => setBusy(!!m.value),
   retry: m => $("retry-bar").classList.toggle("show", !!m.value),
   // The settings stay folded once an endpoint is set; with none, they open so it can be entered.
   endpoint: m => { endpoint.value = m.value || ""; $("settings").open = !endpoint.value; updateSummary(); },
   models: m => { fill(chatModel, m.chat || [], m.chatSelected); fill(imageModel, m.image || [], m.imageSelected); updateSummary(); },
-  apiKeyState: m => { $("apikey-state").textContent = m.value ? "設定済み（Windows 資格情報）" : "未設定"; },
+  apiKeyState: m => { $("apikey-state").textContent = i18n.t(m.value ? "API_KEY_SET" : "API_KEY_NOT_SET"); },
   options: m => { $("save-progress").checked = !!m.saveProgress; $("external-control").checked = !!m.externalControl; },
 };
 if (host) host.addEventListener("message", e => { const h = handlers[e.data && e.data.type]; if (h) h(e.data); });
 
-updateSummary();
-input.focus();
-post({ type: "ready" });
+// The texts first, then "ready": the add-in sends nothing before it. Without them the codes show.
+i18n.load(new URLSearchParams(location.search).get("lang")).catch(() => {}).then(() => {
+  i18n.applyText(document);
+  updateSummary();
+  input.focus();
+  post({ type: "ready" });
+});

@@ -3,11 +3,14 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using Newtonsoft.Json.Linq;
+using Pptcom.ComProxy;
+using static System.FormattableString;
 
 namespace Pptcom.UI
 {
@@ -21,11 +24,13 @@ namespace Pptcom.UI
     // (.invalid never resolves, so a request that slipped through would fail too). Every response carries
     // the Content-Security-Policy below, which allows only this origin; any other navigation and every
     // new window is refused.
-    public class AiTaskPaneControl : UserControl
+    internal sealed class AiTaskPaneControl : UserControl
     {
         private const string Origin = "https://pptcom.invalid/";
-        private const string StartPage = Origin + "index.html";
+        // The page shows its text in the add-in's language (Texts.Language), from locales/<language>.json.
+        private static string StartPage => Origin + "index.html?lang=" + Uri.EscapeDataString(Texts.Language);
         private const string ResourcePrefix = "pptcom.web/";
+        private static readonly char[] QueryOrFragment = ['?', '#'];
         // 'wasm-unsafe-eval' lets the page compile WebAssembly (anydoc, PDF.js's image decoders); it does
         // not allow eval of JavaScript. blob: and data: images are pictures the page makes itself.
         private const string ContentSecurityPolicy =
@@ -34,32 +39,33 @@ namespace Pptcom.UI
 
         private readonly WebView2 _web;
         // Messages sent before the page has said "ready" wait here, in order.
-        private readonly List<string> _pending = new List<string>();
+        private readonly List<string> _pending = [];
         private bool _pageReady;
         private bool _navigated;
         private bool _initStarted;
 
-        public event Action<string> SendRequested;
-        public event Action CancelRequested;
+        // The request as typed.
+        public event EventHandler<TextEventArgs> SendRequested;
+        public event EventHandler CancelRequested;
         // Shown only while a request waits after a server-side error (5xx / dropped connection).
-        public event Action RetryRequested;
+        public event EventHandler RetryRequested;
         // Settings area: the endpoint is applied with the 取得 button (or Enter), models on selection.
-        public event Action<string> EndpointSubmitted;
-        public event Action<string> ChatModelSelected;
-        public event Action<string> ImageModelSelected;
+        public event EventHandler<TextEventArgs> EndpointSubmitted;
+        public event EventHandler<TextEventArgs> ChatModelSelected;
+        public event EventHandler<TextEventArgs> ImageModelSelected;
         // The API key typed into the masked dialog (never shown back; stored in Windows Credential Manager).
-        public event Action<string> ApiKeyEntered;
+        public event EventHandler<TextEventArgs> ApiKeyEntered;
         // 新しい会話: forget the earlier requests on this deck (their summary, variables and images).
-        public event Action NewConversationRequested;
+        public event EventHandler NewConversationRequested;
         // The two switches in the settings (AddinSettings.ExternalControl / SaveProgress).
-        public event Action<bool> ExternalControlChanged;
-        public event Action<bool> SaveProgressChanged;
+        public event EventHandler<SwitchEventArgs> ExternalControlChanged;
+        public event EventHandler<SwitchEventArgs> SaveProgressChanged;
         // A document the page converted (UI\web\docs.js): {ticket, name, size, format, text, images}.
-        public event Action<JObject> DocumentConverted;
+        public event EventHandler<DocumentConvertedEventArgs> DocumentConverted;
         // One it could not convert: ticket, file name, reason (docworker.js), detail.
-        public event Action<string, string, string, string> DocumentFailed;
+        public event EventHandler<DocumentFailedEventArgs> DocumentFailed;
         // The user removed an attached document (its id).
-        public event Action<string> DocumentRemoved;
+        public event EventHandler<TextEventArgs> DocumentRemoved;
 
         public AiTaskPaneControl()
         {
@@ -67,13 +73,28 @@ namespace Pptcom.UI
             _web = new WebView2 { Dock = DockStyle.Fill };
             Controls.Add(_web);
             // WebView2 needs a window handle; the custom task pane creates it when the pane is shown.
-            HandleCreated += async (s, e) => await InitializeAsync();
+            HandleCreated += async (s, e) => await InitializeAsync().ConfigureAwait(true);
+        }
+
+        // The WebView2 is disposed here, not only as one of Controls: ShowLoadError takes it out of them.
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _web.Dispose();
+            }
+
+            base.Dispose(disposing);
         }
 
         private async Task InitializeAsync()
         {
             // HandleCreated fires again if the pane's window is recreated; the WebView2 is set up once.
-            if (_initStarted) return;
+            if (_initStarted)
+            {
+                return;
+            }
+
             _initStarted = true;
             try
             {
@@ -84,11 +105,15 @@ namespace Pptcom.UI
                 // The native WebView2Loader.dll sits next to this add-in (runtimes\<rid>\native), not next
                 // to POWERPNT.EXE, which is where the SDK would look in this process.
                 string loader = Path.Combine(Path.GetDirectoryName(typeof(AiTaskPaneControl).Assembly.Location), "runtimes", LoaderRid(), "native");
-                if (Directory.Exists(loader)) CoreWebView2Environment.SetLoaderDllFolderPath(loader);
-                var env = await CoreWebView2Environment.CreateAsync(null, userData);
-                await _web.EnsureCoreWebView2Async(env);
-                var core = _web.CoreWebView2;
-                var settings = core.Settings;
+                if (Directory.Exists(loader))
+                {
+                    CoreWebView2Environment.SetLoaderDllFolderPath(loader);
+                }
+
+                CoreWebView2Environment env = await CoreWebView2Environment.CreateAsync(browserExecutableFolder: null, userData).ConfigureAwait(true);
+                await _web.EnsureCoreWebView2Async(env).ConfigureAwait(true);
+                CoreWebView2 core = _web.CoreWebView2;
+                CoreWebView2Settings settings = core.Settings;
 #if DEBUG
                 settings.AreDevToolsEnabled = true;
 #else
@@ -100,11 +125,15 @@ namespace Pptcom.UI
                 settings.AreHostObjectsAllowed = false;
                 settings.IsGeneralAutofillEnabled = false;
                 settings.IsPasswordAutosaveEnabled = false;
-                core.NewWindowRequested += (s, e) => e.Handled = true;
+                core.NewWindowRequested += static (s, e) => e.Handled = true;
                 core.NavigationStarting += (s, e) =>
                 {
                     // Only the page itself (the first navigation).
-                    if (_navigated || e.Uri != StartPage) e.Cancel = true;
+                    if (_navigated || e.Uri != StartPage)
+                    {
+                        e.Cancel = true;
+                    }
+
                     _navigated = true;
                 };
                 // All source kinds: PDF.js's worker loads its WebAssembly and character maps itself.
@@ -113,7 +142,8 @@ namespace Pptcom.UI
                 core.WebMessageReceived += OnWebMessage;
                 core.Navigate(StartPage);
             }
-            catch (Exception ex)
+            // No WebView2 Runtime, a profile folder that cannot be written, ...: the pane says so instead.
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
                 ShowLoadError(ex);
             }
@@ -122,12 +152,12 @@ namespace Pptcom.UI
         // PowerPoint's own architecture decides which loader fits (32-bit Office is common).
         private static string LoaderRid()
         {
-            switch (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture)
+            return System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
             {
-                case System.Runtime.InteropServices.Architecture.X86: return "win-x86";
-                case System.Runtime.InteropServices.Architecture.Arm64: return "win-arm64";
-                default: return "win-x64";
-            }
+                System.Runtime.InteropServices.Architecture.X86 => "win-x86",
+                System.Runtime.InteropServices.Architecture.Arm64 => "win-arm64",
+                _ => "win-x64",
+            };
         }
 
         // A file of the page from the DLL's resources, or 404. The resources are named pptcom.web/ and
@@ -135,12 +165,20 @@ namespace Pptcom.UI
         private static CoreWebView2WebResourceResponse Serve(CoreWebView2Environment env, string uri)
         {
             string path = uri.Substring(Origin.Length);
-            int end = path.IndexOfAny(new[] { '?', '#' });
-            if (end >= 0) path = path.Substring(0, end);
+            int end = path.IndexOfAny(QueryOrFragment);
+            if (end >= 0)
+            {
+                path = path.Substring(0, end);
+            }
+
             path = Uri.UnescapeDataString(path);
             Stream stream = path.Length == 0 || path.Contains("..") ? null
                 : typeof(AiTaskPaneControl).Assembly.GetManifestResourceStream(ResourcePrefix + path.Replace('/', '\\'));
-            if (stream == null) return env.CreateWebResourceResponse(null, 404, "Not Found", "");
+            if (stream is null)
+            {
+                return env.CreateWebResourceResponse(Content: null, 404, "Not Found", "");
+            }
+
             string headers = "Content-Type: " + ContentType(path) + "\r\n" +
                              "Content-Security-Policy: " + ContentSecurityPolicy + "\r\n" +
                              "X-Content-Type-Options: nosniff\r\n" +
@@ -150,16 +188,15 @@ namespace Pptcom.UI
 
         private static string ContentType(string path)
         {
-            switch (Path.GetExtension(path).ToLowerInvariant())
+            return Path.GetExtension(path).ToLowerInvariant() switch
             {
-                case ".html": return "text/html; charset=utf-8";
-                case ".css": return "text/css; charset=utf-8";
-                case ".js":
-                case ".mjs": return "text/javascript; charset=utf-8";
-                case ".json": return "application/json";
-                case ".wasm": return "application/wasm";
-                default: return "application/octet-stream";
-            }
+                ".html" => "text/html; charset=utf-8",
+                ".css" => "text/css; charset=utf-8",
+                ".js" or ".mjs" => "text/javascript; charset=utf-8",
+                ".json" => "application/json",
+                ".wasm" => "application/wasm",
+                _ => "application/octet-stream",
+            };
         }
 
         // Without the WebView2 Runtime the pane cannot work at all; say so in the pane.
@@ -171,7 +208,7 @@ namespace Pptcom.UI
                 Dock = DockStyle.Fill,
                 Padding = new Padding(12),
                 Font = new Font("Yu Gothic UI", 9F),
-                Text = "作業ウィンドウを表示できませんでした。Microsoft Edge WebView2 ランタイムが必要です。\r\n\r\n" + ex.Message,
+                Text = Texts.Get("LOAD_ERROR") + "\r\n\r\n" + ex.Message,
             });
         }
 
@@ -180,64 +217,94 @@ namespace Pptcom.UI
         private void OnWebMessage(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
             JObject m;
-            try { m = JObject.Parse(e.WebMessageAsJson); } catch { return; }
+            try
+            {
+                m = JObject.Parse(e.WebMessageAsJson);
+            }
+            catch (Newtonsoft.Json.JsonReaderException)
+            {
+                return;
+            }
             string value = (string)m["value"];
             switch ((string)m["type"])
             {
                 case "ready":
                     _pageReady = true;
-                    foreach (var json in _pending) _web.CoreWebView2.PostWebMessageAsJson(json);
+                    foreach (string json in _pending)
+                    {
+                        _web.CoreWebView2.PostWebMessageAsJson(json);
+                    }
+
                     _pending.Clear();
                     break;
                 case "send":
                     string text = ((string)m["text"] ?? "").Trim();
-                    if (text.Length == 0) return;
-                    AppendLog("あなた: " + text);
-                    SendRequested?.Invoke(text);
+                    if (text.Length == 0)
+                    {
+                        return;
+                    }
+
+                    Log("USER_REQUEST", text);
+                    SendRequested?.Invoke(this, new TextEventArgs(text));
                     break;
                 case "cancel":
-                    SetStatus("中止しています...");
-                    CancelRequested?.Invoke();
+                    SetStatus("STATUS_CANCELLING");
+                    CancelRequested?.Invoke(this, EventArgs.Empty);
                     break;
                 case "retry":
-                    ShowRetry(false);
-                    SetStatus("同じ内容を送り直しています...");
-                    RetryRequested?.Invoke();
+                    ShowRetry(show: false);
+                    SetStatus("STATUS_RESENDING");
+                    RetryRequested?.Invoke(this, EventArgs.Empty);
                     break;
                 case "endpoint":
-                    EndpointSubmitted?.Invoke((value ?? "").Trim());
+                    EndpointSubmitted?.Invoke(this, new TextEventArgs((value ?? "").Trim()));
                     break;
                 case "chatModel":
-                    if (!string.IsNullOrEmpty(value)) ChatModelSelected?.Invoke(value);
+                    if (!string.IsNullOrEmpty(value))
+                    {
+                        ChatModelSelected?.Invoke(this, new TextEventArgs(value));
+                    }
+
                     break;
                 case "imageModel":
-                    if (!string.IsNullOrEmpty(value)) ImageModelSelected?.Invoke(value);
+                    if (!string.IsNullOrEmpty(value))
+                    {
+                        ImageModelSelected?.Invoke(this, new TextEventArgs(value));
+                    }
+
                     break;
                 case "newChat":
-                    NewConversationRequested?.Invoke();
+                    NewConversationRequested?.Invoke(this, EventArgs.Empty);
                     break;
                 case "externalControl":
-                    ExternalControlChanged?.Invoke((bool?)m["value"] == true);
+                    ExternalControlChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
                     break;
                 case "saveProgress":
-                    SaveProgressChanged?.Invoke((bool?)m["value"] == true);
+                    SaveProgressChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
                     break;
                 case "attach":
-                    DocumentConverted?.Invoke(m);
+                    DocumentConverted?.Invoke(this, new DocumentConvertedEventArgs(m));
                     break;
                 case "attachFailed":
-                    DocumentFailed?.Invoke((string)m["ticket"], (string)m["name"], (string)m["reason"], (string)m["detail"]);
+                    DocumentFailed?.Invoke(this, new DocumentFailedEventArgs((string)m["ticket"], (string)m["name"], (string)m["reason"], (string)m["detail"]));
                     break;
                 case "pagesRendered":
-                    TaskCompletionSource<JObject> waiting;
-                    if (_renderRequests.TryGetValue((string)m["request"] ?? "", out waiting)) waiting.TrySetResult(m);
+                    if (_renderRequests.TryGetValue((string)m["request"] ?? "", out TaskCompletionSource<JObject> waiting))
+                    {
+                        waiting.TrySetResult(m);
+                    }
+
                     break;
                 case "detach":
-                    DocumentRemoved?.Invoke((string)m["id"]);
+                    DocumentRemoved?.Invoke(this, new TextEventArgs((string)m["id"]));
                     break;
                 case "apiKey":
                     string key = AskApiKey(FindForm());
-                    if (!string.IsNullOrWhiteSpace(key)) ApiKeyEntered?.Invoke(key.Trim());
+                    if (!string.IsNullOrWhiteSpace(key))
+                    {
+                        ApiKeyEntered?.Invoke(this, new TextEventArgs(key.Trim()));
+                    }
+
                     break;
             }
         }
@@ -246,11 +313,25 @@ namespace Pptcom.UI
 
         private void Post(JObject message)
         {
-            if (IsDisposed || _web.IsDisposed) return;
-            if (InvokeRequired) { BeginInvoke(new Action(() => Post(message))); return; }
+            if (IsDisposed || _web.IsDisposed)
+            {
+                return;
+            }
+
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => Post(message)));
+                return;
+            }
             string json = message.ToString(Newtonsoft.Json.Formatting.None);
-            if (_pageReady && _web.CoreWebView2 != null) _web.CoreWebView2.PostWebMessageAsJson(json);
-            else _pending.Add(json);
+            if (_pageReady && _web.CoreWebView2 is not null)
+            {
+                _web.CoreWebView2.PostWebMessageAsJson(json);
+            }
+            else
+            {
+                _pending.Add(json);
+            }
         }
 
         public void SetApiKeyState(bool isSet)
@@ -261,22 +342,51 @@ namespace Pptcom.UI
         // Small masked input dialog. Returns null when cancelled; the key is never displayed.
         private static string AskApiKey(IWin32Window owner)
         {
-            var font = new Font("Yu Gothic UI", 9F);
-            using (var form = new Form
+            Font font = new("Yu Gothic UI", 9F);
+            using Form form = new()
             {
-                Text = "API キーの設定", FormBorderStyle = FormBorderStyle.FixedDialog, StartPosition = FormStartPosition.CenterScreen,
-                MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false, ClientSize = new Size(360, 118), Font = font,
-            })
+                Text = Texts.Get("API_KEY_DIALOG_TITLE"),
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterScreen,
+                MinimizeBox = false,
+                MaximizeBox = false,
+                ShowInTaskbar = false,
+                ClientSize = new Size(360, 118),
+                Font = font,
+            };
+            Label note = new()
             {
-                var note = new Label { Text = "接続先の API キーを入力してください。Windows 資格情報に保存し、画面には表示しません。", Location = new Point(12, 10), Size = new Size(336, 34) };
-                var box = new TextBox { UseSystemPasswordChar = true, Location = new Point(12, 48), Size = new Size(336, 24) };
-                var ok = new Button { Text = "保存", DialogResult = DialogResult.OK, Location = new Point(192, 82), Size = new Size(75, 26) };
-                var cancel = new Button { Text = "キャンセル", DialogResult = DialogResult.Cancel, Location = new Point(273, 82), Size = new Size(75, 26) };
-                form.Controls.AddRange(new Control[] { note, box, ok, cancel });
-                form.AcceptButton = ok;
-                form.CancelButton = cancel;
-                return form.ShowDialog(owner) == DialogResult.OK ? box.Text : null;
-            }
+                Text = Texts.Get("API_KEY_DIALOG_NOTE"),
+                Location = new Point(12, 10),
+                Size = new Size(336, 34),
+            };
+            TextBox box = new()
+            {
+                UseSystemPasswordChar = true,
+                Location = new Point(12, 48),
+                Size = new Size(336, 24),
+            };
+            Button ok = new()
+            {
+                Text = Texts.Get("DIALOG_SAVE"),
+                DialogResult = DialogResult.OK,
+                Location = new Point(192, 82),
+                Size = new Size(75, 26),
+            };
+            Button cancel = new()
+            {
+                Text = Texts.Get("DIALOG_CANCEL"),
+                DialogResult = DialogResult.Cancel,
+                Location = new Point(273, 82),
+                Size = new Size(75, 26),
+            };
+            form.Controls.Add(note);
+            form.Controls.Add(box);
+            form.Controls.Add(ok);
+            form.Controls.Add(cancel);
+            form.AcceptButton = ok;
+            form.CancelButton = cancel;
+            return form.ShowDialog(owner) == DialogResult.OK ? box.Text : null;
         }
 
         // A file attached from outside (AddinAutomation.Attach): the page converts it like a dropped one and
@@ -288,44 +398,69 @@ namespace Pptcom.UI
 
         // Pages of a PDF drawn by the page (PDF.js), as PNG bytes per page number (null for a page it could not
         // draw, with the reason in errors). The PDF goes along with each request; the page keeps nothing.
-        private readonly Dictionary<string, TaskCompletionSource<JObject>> _renderRequests = new Dictionary<string, TaskCompletionSource<JObject>>();
+        private readonly Dictionary<string, TaskCompletionSource<JObject>> _renderRequests = new(StringComparer.Ordinal);
         private int _renderRequestCount;
 
         public async Task<Dictionary<int, byte[]>> RenderPdfPagesAsync(byte[] pdf, IList<int> pages, int maxSide, Dictionary<int, string> errors)
         {
-            string id = "r" + (++_renderRequestCount);
-            var done = new TaskCompletionSource<JObject>();
+            string id = Invariant($"r{++_renderRequestCount}");
+            TaskCompletionSource<JObject> done = new();
             _renderRequests[id] = done;
             try
             {
                 Post(new JObject
                 {
-                    ["type"] = "renderPages", ["request"] = id, ["data"] = Convert.ToBase64String(pdf),
-                    ["pages"] = new JArray(pages), ["maxSide"] = maxSide,
+                    ["type"] = "renderPages",
+                    ["request"] = id,
+                    ["data"] = Convert.ToBase64String(pdf),
+                    ["pages"] = new JArray(pages),
+                    ["maxSide"] = maxSide,
                 });
-                var finished = await Task.WhenAny(done.Task, Task.Delay(TimeSpan.FromSeconds(60)));
-                if (finished != done.Task) throw new TimeoutException("the task pane did not draw the PDF pages within 60 s");
-                JObject reply = done.Task.Result;
-                if (reply["error"] != null) throw new InvalidOperationException((string)reply["error"]);
-                var result = new Dictionary<int, byte[]>();
-                foreach (JObject p in (reply["pages"] as JArray ?? new JArray()).OfType<JObject>())
+                Task finished;
+                using (CancellationTokenSource timeout = new())
+                {
+                    finished = await Task.WhenAny(done.Task, Task.Delay(TimeSpan.FromSeconds(60), timeout.Token)).ConfigureAwait(true);
+                    timeout.Cancel();   // the page answered: no timer left running
+                }
+                if (finished != done.Task)
+                {
+                    throw new TimeoutException("the task pane did not draw the PDF pages within 60 s");
+                }
+
+                JObject reply = await done.Task.ConfigureAwait(true); // already finished
+                if (reply["error"] is not null)
+                {
+                    throw new InvalidOperationException((string)reply["error"]);
+                }
+
+                Dictionary<int, byte[]> result = [];
+                foreach (JObject p in (reply["pages"] as JArray ?? []).OfType<JObject>())
                 {
                     int n = (int?)p["page"] ?? 0;
-                    if (p["data"] != null) result[n] = Convert.FromBase64String((string)p["data"]);
-                    else errors[n] = (string)p["error"] ?? "not drawn";
+                    if (p["data"] is not null)
+                    {
+                        result[n] = Convert.FromBase64String((string)p["data"]);
+                    }
+                    else
+                    {
+                        errors[n] = (string)p["error"] ?? "not drawn";
+                    }
                 }
                 return result;
             }
-            finally { _renderRequests.Remove(id); }
+            finally
+            {
+                _renderRequests.Remove(id);
+            }
         }
 
         // The chips above the input: the conversation's attached documents (id, file name, a detail line).
-        public void SetAttachments(IEnumerable<Tuple<string, string, string>> documents)
+        internal void SetAttachments(IEnumerable<Tuple<string, string, PaneText>> documents)
         {
             Post(new JObject
             {
                 ["type"] = "attachments",
-                ["items"] = new JArray(documents.Select(d => new JObject { ["id"] = d.Item1, ["name"] = d.Item2, ["detail"] = d.Item3 })),
+                ["items"] = new JArray(documents.Select(static d => new JObject { ["id"] = d.Item1, ["name"] = d.Item2, ["detail"] = d.Item3.ToJson() })),
             });
         }
 
@@ -346,23 +481,34 @@ namespace Pptcom.UI
             Post(new JObject
             {
                 ["type"] = "models",
-                ["chat"] = new JArray(chatModels), ["chatSelected"] = chatSelected,
-                ["image"] = new JArray(imageModels), ["imageSelected"] = imageSelected,
+                ["chat"] = new JArray(chatModels),
+                ["chatSelected"] = chatSelected,
+                ["image"] = new JArray(imageModels),
+                ["imageSelected"] = imageSelected,
             });
         }
 
-        // One line of the conversation. The page places it by how it starts: "あなた: " (the request),
-        // "AI: [n] tool -> ..." and "(ターンn: ...)" (folded into the request's progress block),
-        // "(所要 ...)" (closes that block), "AI: ..." (the model's reply), "(新しい会話...)" (a divider),
-        // "(...)" (a note).
-        public void AppendLog(string line)
+        // One message of the conversation (a code of the language files, see PaneText). The page places it by
+        // its code (taskpane.js, logKinds): the request, the steps folded into its progress block, the model's
+        // reply, a divider, or a note.
+        public void Log(string code, params object[] args)
         {
-            Post(new JObject { ["type"] = "log", ["text"] = line ?? "" });
+            JObject message = PaneText.Of(code, args).ToJson();
+            message["type"] = "log";
+            Post(message);
         }
 
-        public void SetStatus(string text)
+        // The line under the conversation while something runs.
+        public void SetStatus(string code, params object[] args)
         {
-            Post(new JObject { ["type"] = "status", ["text"] = text ?? "" });
+            JObject message = PaneText.Of(code, args).ToJson();
+            message["type"] = "status";
+            Post(message);
+        }
+
+        public void ClearStatus()
+        {
+            Post(new JObject { ["type"] = "status" });
         }
 
         public void ShowRetry(bool show)

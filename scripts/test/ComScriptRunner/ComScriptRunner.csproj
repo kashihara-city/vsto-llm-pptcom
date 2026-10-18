@@ -11,6 +11,9 @@
     <OutputPath>bin\$(Configuration)\</OutputPath>
     <DebugType>full</DebugType>
     <DebugSymbols>true</DebugSymbols>
+    <!-- It compiles OpenAiCompatibleClient.cs for image generation only: the chat types in that file (SlideImage,
+         ChatMessage.Images), which the add-in uses, are never made or set here (CA1812, CS0649). -->
+    <NoWarn>$(NoWarn);CA1812;CS0649</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,19 +36,34 @@
   <!-- The exact ComProxy sources the add-in ships - not a copy - so the experiment measures the
        same parser/engine/policy the add-in actually runs. -->
   <ItemGroup>
-    <Compile Include="..\..\..\pptcom\ComProxy\ComOp.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ComOpAction.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\Guard.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\ComBatchResult.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ComOpResult.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ComLineStatus.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ComLineResult.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ComScriptResult.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\ComErrorText.cs" />
-    <Compile Include="..\..\..\pptcom\ComProxy\DeckProbe.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\EnumResolver.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\ComSecurityPolicy.cs" />
-    <Compile Include="..\..\..\pptcom\ComProxy\ComProxy.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\IDispatchMinimal.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ComProxyEngine.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\ComScriptParser.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\ComScriptScope.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\VbaOps.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\DeckProbe.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\DeckDefaults.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\DeckReader.cs" />
     <Compile Include="..\..\..\pptcom\AddinSettings.cs" />
+    <Compile Include="..\..\..\pptcom\CredentialStore.cs" />
     <Compile Include="..\..\..\pptcom\Agent\OpenAiCompatibleClient.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\ChatMessage.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\ChatReply.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\LlmServerException.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\SlideImage.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\StreamProgress.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\StreamedReply.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\ToolCall.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 

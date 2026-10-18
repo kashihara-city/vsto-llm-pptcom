@@ -3,34 +3,35 @@
 <head>
 <meta charset="utf-8">
 <!-- Served by the add-in from inside pptcom.dll (AiTaskPaneControl), with a Content-Security-Policy
-     header that allows only the add-in's own files: nothing is loaded from anywhere else. -->
+     header that allows only the add-in's own files: nothing is loaded from anywhere else.
+     The text comes from locales/<language>.json by the codes in the data-i18n attributes (i18n.js). -->
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI Assistant</title>
+<title data-i18n="PANE_TITLE"></title>
 <link rel="stylesheet" href="taskpane.css">
 </head>
 <body>
   <details id="settings">
     <summary>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-      <span id="settings-summary">接続設定</span>
+      <span id="settings-summary" data-i18n="SETTINGS_TITLE"></span>
       <svg class="chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
     </summary>
     <div class="grid">
-      <label for="endpoint">接続先</label>
+      <label for="endpoint" data-i18n="SETTINGS_ENDPOINT"></label>
       <input type="text" id="endpoint" placeholder="https://..." spellcheck="false" autocomplete="off">
-      <button class="btn" id="fetch">取得</button>
-      <label for="chat-model">モデル</label>
+      <button class="btn" id="fetch" data-i18n="SETTINGS_FETCH"></button>
+      <label for="chat-model" data-i18n="SETTINGS_CHAT_MODEL"></label>
       <select id="chat-model" class="span2"></select>
-      <label for="image-model">画像</label>
+      <label for="image-model" data-i18n="SETTINGS_IMAGE_MODEL"></label>
       <select id="image-model" class="span2"></select>
-      <label>APIキー</label>
-      <span id="apikey-state">未設定</span>
-      <button class="btn" id="apikey">設定</button>
-      <label>その他</label>
+      <label data-i18n="SETTINGS_API_KEY"></label>
+      <span id="apikey-state" data-i18n="API_KEY_NOT_SET"></span>
+      <button class="btn" id="apikey" data-i18n="SETTINGS_API_KEY_BUTTON"></button>
+      <label data-i18n="SETTINGS_OTHER"></label>
       <div class="span2 checks">
-        <label class="check"><input type="checkbox" id="save-progress"> 途中経過を保存する</label>
-        <label class="check" title="同じユーザーで動くほかのプログラムが、このアドインに依頼を送れるようになります（テスト用）">
-          <input type="checkbox" id="external-control"> 外部からの操作を許可する</label>
+        <label class="check"><input type="checkbox" id="save-progress"> <span data-i18n="SETTINGS_SAVE_PROGRESS"></span></label>
+        <label class="check" data-i18n-title="SETTINGS_EXTERNAL_CONTROL_HINT">
+          <input type="checkbox" id="external-control"> <span data-i18n="SETTINGS_EXTERNAL_CONTROL"></span></label>
       </div>
     </div>
   </details>
@@ -38,31 +39,32 @@
   <main id="log" aria-live="polite"></main>
 
   <div id="status"></div>
-  <div id="retry-bar"><span>サーバ側のエラーで止まっています。</span><button class="btn" id="retry">再試行</button></div>
+  <div id="retry-bar"><span data-i18n="RETRY_BAR"></span><button class="btn" id="retry" data-i18n="RETRY"></button></div>
 
   <div id="composer">
     <div id="attach-area"><div id="attachments"></div><span id="converting"></span></div>
-    <textarea id="input" placeholder="作りたいスライドの内容を入力（資料はドロップで添付できます）" spellcheck="false"></textarea>
+    <textarea id="input" data-i18n-placeholder="INPUT_PLACEHOLDER" spellcheck="false"></textarea>
     <div id="composer-bar">
-      <button id="attach" class="icon-btn" title="資料を添付（Word、Excel、PowerPoint、PDF、テキスト）" aria-label="資料を添付">
+      <button id="attach" class="icon-btn" data-i18n-title="ATTACH_HINT" data-i18n-label="ATTACH">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>
       </button>
       <input type="file" id="attach-file" multiple hidden>
-      <button id="new-chat" title="これまでの依頼を引き継がずに始める">
+      <button id="new-chat" data-i18n-title="NEW_CHAT_HINT">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-        新しい会話
+        <span data-i18n="NEW_CHAT"></span>
       </button>
       <span class="spacer"></span>
-      <span id="hint">Ctrl+Enter で送信</span>
-      <button id="action" title="送信 (Ctrl+Enter)" aria-label="送信">
+      <span id="hint" data-i18n="SEND_HINT"></span>
+      <button id="action" data-i18n-title="SEND_TITLE" data-i18n-label="SEND">
         <svg class="send" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg>
         <svg class="stop" width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><rect width="12" height="12" rx="2"/></svg>
       </button>
     </div>
   </div>
 
-  <div id="drop-overlay"><div>ここにドロップして資料を添付</div></div>
+  <div id="drop-overlay"><div data-i18n="DROP_HERE"></div></div>
 
+<script src="i18n.js"></script>
 <script src="taskpane.js"></script>
 <script type="module" src="docs.js"></script>
 </body>

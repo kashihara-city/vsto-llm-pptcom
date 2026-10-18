@@ -1,0 +1,101 @@
+# Code analysis of the C# code (pptcom and the test tools in scripts/test).
+# Directory.Build.props turns on every rule of NetAnalyzers, CodeStyle and Meziantou.Analyzer as a warning, and the
+# build treats warnings as errors. This file turns rules off, each with the reason, and lists the rules whose
+# warnings are not fixed yet.
+
+root = true
+
+[*.cs]
+
+# ---- How the code is written ----
+
+# Types written out, not var (IDE0008): the type a value has is visible where it is declared, a value read through
+# dynamic (COM) turns into a static type there, and a changed return type is a compile error rather than a silent
+# change. `new()` without the type where the declaration names it (IDE0090). var stays for anonymous types.
+csharp_style_var_for_built_in_types = false
+csharp_style_var_when_type_is_apparent = false
+csharp_style_var_elsewhere = false
+csharp_style_implicit_object_creation_when_type_is_apparent = true
+
+# Braces around every if/else/for/foreach/while body, on their own lines (IDE0011), one statement per line. (An
+# auto-property's { get; set; } stays on its line.)
+csharp_prefer_braces = true
+csharp_preserve_single_line_statements = false
+
+# Comparisons with constants stay `x == 1 || x == 2`, not `x is 1 or 2` (IDE0078; MA0148, MA0149 below).
+csharp_style_prefer_pattern_matching = false
+
+# A method may be up to 100 lines or 60 statements long (MA0051; 60 lines and 40 statements by default): the
+# parser's and the agent loop's steps read in order, and only the longest ones are worth splitting.
+MA0051.maximum_lines_per_method = 100
+MA0051.maximum_statements_per_method = 60
+
+# ---- Off, with the reason ----
+
+# CA1032: give an exception the standard constructors (none, message, message and inner exception). The add-in's
+# exceptions carry what they are about (LlmServerException the HTTP status, UnresolvedNameException the name,
+# RejectedException the cause); a constructor without it would make one that says less. They are internal.
+dotnet_diagnostic.CA1032.severity = none
+
+# CA1064: make exceptions public, so that other assemblies can catch them. Those exceptions are thrown and caught
+# inside pptcom.dll and never leave it (no other assembly calls into it; the automation object returns plain
+# values); they are internal like the rest of the add-in's types (CA1515).
+dotnet_diagnostic.CA1064.severity = none
+
+# CA1308: use ToUpperInvariant instead of ToLowerInvariant. Lower case is what is shown (words in messages to the
+# model) or what is compared against (file extensions, media types, VBA operators: all ASCII); nothing converts it
+# back.
+dotnet_diagnostic.CA1308.severity = none
+
+# IDE0010, IDE0072: list every value of the enum in a switch, even with a default. The default case is what the
+# code means for the values it does not name.
+dotnet_diagnostic.IDE0010.severity = none
+dotnet_diagnostic.IDE0072.severity = none
+
+# IDE0045, IDE0046: turn an if/else into a conditional expression. Kept a choice: a return or a throw in an if often
+# reads better than a nested ?: expression.
+dotnet_diagnostic.IDE0045.severity = none
+dotnet_diagnostic.IDE0046.severity = none
+
+# IDE0058: discard an unused return value with `_ =`. It would mark every list.Remove, TryGetValue or
+# Directory.CreateDirectory whose result is not needed.
+dotnet_diagnostic.IDE0058.severity = none
+
+# IDE0290: use a primary constructor. Its parameters stay mutable state of the whole class; the fields written out
+# say which of them are kept and that they are readonly.
+dotnet_diagnostic.IDE0290.severity = none
+
+# MA0006: use string.Equals instead of ==. In C#, == on strings is an ordinal comparison, the same as
+# string.Equals(a, b, StringComparison.Ordinal); any other comparison is written out where it is meant.
+dotnet_diagnostic.MA0006.severity = none
+
+# MA0023: use RegexOptions.ExplicitCapture or named groups. The code reads its groups by number (m.Groups[1]); the
+# patterns are short and parse model-written statements, where renaming every group would risk more than it saves.
+dotnet_diagnostic.MA0023.severity = none
+
+# MA0148, MA0149: compare with a constant by a pattern (`x is 1`, `status is not Applied`) instead of == / !=. == reads
+# the same and is what the code uses for constants; `is null` / `is not null` is used for null (MA0141, MA0142).
+dotnet_diagnostic.MA0148.severity = none
+dotnet_diagnostic.MA0149.severity = none
+
+# MA0181: do not use casts. Values arrive from COM (object, dynamic) and from JSON (JToken); a cast is how they are
+# read as the type they are.
+dotnet_diagnostic.MA0181.severity = none
+
+# MA0045: do not use blocking calls, make the calling method async. The add-in runs on PowerPoint's UI thread and
+# calls COM synchronously; the rule would also make a MemoryStream write async. Where waiting would block that
+# thread (the model, the network), the code is async already. ComScriptRunner waits on purpose, to keep its COM
+# calls on its STA thread.
+dotnet_diagnostic.MA0045.severity = none
+
+# MA0215: return the task instead of awaiting it. MA0214 asks the opposite, and that one is kept: an awaited task
+# keeps the method in the stack trace and its try/using blocks around the wait.
+dotnet_diagnostic.MA0215.severity = none
+
+# MA0176: build a Guid from its numbers rather than parse its text. The two GUIDs (ComSecurityPolicy) are type library
+# ids, written as they are documented; they are parsed once.
+dotnet_diagnostic.MA0176.severity = none
+
+[scripts/test/**.cs]
+# CA1303: pass literals as localized resources. The test tools print English for developers to the console.
+dotnet_diagnostic.CA1303.severity = none

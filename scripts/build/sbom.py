@@ -8,7 +8,8 @@ what built them, from the pinned records only - no network access.
                     release archive pinned in deps/web-sources.lock.json, with the parts it brings), anydoc (the
                     pinned source) and the Rust crates compiled into its WebAssembly build (cargo tree for the
                     wasm32 target, normal dependencies, as anydoc's Cargo.lock pins them, with their checksums)
-  metadata.tools    what built it: Rust, wasm-bindgen, wasm-opt (binaryen), ILRepack, the WiX SDK, this script
+  metadata.tools    what built it: Rust, wasm-bindgen, wasm-opt (binaryen), ILRepack, the analyzers, the WiX SDK,
+                    this script
 
 The same inputs give the same file: the serial number is derived from the MSI's hash and the timestamp is the
 commit's. scripts/test/sbom.py checks it against the official schema and against the records.
@@ -31,6 +32,13 @@ NUGET = {
     'Microsoft.Web.WebView2': ('Microsoft Corporation',
                                [{'license': {'name': 'Microsoft WebView2 SDK license (BSD-style; text in THIRD-PARTY-NOTICES.md)'}}],
                                'Core and WinForms merged into pptcom.dll; WebView2Loader.dll for x86 and x64 next to it'),
+}
+# NuGet packages that only build it (metadata.tools): nothing of them is in pptcom.dll or the MSI.
+BUILD_NUGET = {
+    'ILRepack': 'merges Newtonsoft.Json and the WebView2 SDK into pptcom.dll',
+    'Microsoft.CodeAnalysis.NetAnalyzers': 'code analysis in the build (Directory.Build.props)',
+    'Microsoft.CodeAnalysis.CSharp.CodeStyle': 'code style analysis in the build (Directory.Build.props)',
+    'Meziantou.Analyzer': 'code analysis in the build (Directory.Build.props)',
 }
 # The parts PDF.js's release archive brings that pptcom.dll embeds, with their own licenses.
 PDFJS_PARTS = [
@@ -229,7 +237,13 @@ def build(msi):
 
     # What built it
     wix = re.search(r'Sdk="WixToolset\.Sdk/([^"]+)"', WIXPROJ.read_text(encoding='utf-8'))[1]
-    ilrepack_key = next(k for k in assets['libraries'] if k.split('/')[0] == 'ILRepack')
+    build_nuget = []
+    for name, description in BUILD_NUGET.items():
+        key = next(k for k in assets['libraries'] if k.split('/')[0] == name)
+        ver = key.split('/')[1]
+        build_nuget.append({'type': 'application', 'name': name, 'version': ver, 'purl': f'pkg:nuget/{name}@{ver}',
+                            'hashes': [{'alg': 'SHA-512', 'content': base64.b64decode(assets['libraries'][key]['sha512']).hex()}],
+                            'description': description})
     tools = [
         {'type': 'application', 'name': 'rust', 'version': lock['rust']['toolchain'], 'purl': f"pkg:generic/rust@{lock['rust']['toolchain']}",
          'description': f"rustc and cargo, target {lock['rust']['target']}: build anydoc"},
@@ -239,9 +253,7 @@ def build(msi):
         {'type': 'application', 'name': 'binaryen', 'version': lock['binaryen']['version'],
          'purl': f"pkg:github/{lock['binaryen']['repository']}@{lock['binaryen']['version']}",
          'hashes': [{'alg': 'SHA-256', 'content': lock['binaryen']['sha256']}], 'description': "wasm-opt: optimizes anydoc's .wasm"},
-        {'type': 'application', 'name': 'ILRepack', 'version': ilrepack_key.split('/')[1], 'purl': f"pkg:nuget/ILRepack@{ilrepack_key.split('/')[1]}",
-         'hashes': [{'alg': 'SHA-512', 'content': base64.b64decode(assets['libraries'][ilrepack_key]['sha512']).hex()}],
-         'description': 'merges Newtonsoft.Json and the WebView2 SDK into pptcom.dll'},
+        *build_nuget,
         {'type': 'application', 'name': 'WixToolset.Sdk', 'version': wix, 'purl': f'pkg:nuget/WixToolset.Sdk@{wix}', 'description': 'builds the MSI'},
         {'type': 'application', 'name': f'{REPOSITORY} scripts/build/sbom.py', 'version': commit},
     ]

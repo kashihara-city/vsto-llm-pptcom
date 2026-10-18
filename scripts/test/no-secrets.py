@@ -18,7 +18,7 @@ DENYLIST = ROOT / "notes" / "secrets-denylist.txt"
 
 # 公開してよいのは手順だけ。接続先・API キー・モデル名はレジストリと資格情報から読む（README）。
 PATTERNS = [
-    ("私有IPアドレス", re.compile(r"\b(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}|192\.168\.\d{1,3})\.\d{1,3}\b")),
+    ("私有IPアドレス", re.compile(r"\b(?:10\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}|192\.168\.\d{1,3})\.\d{1,3}\b")),
     ("社内ホスト名", re.compile(r"\b[A-Za-z0-9][A-Za-z0-9-]*\.(?:local|lan|internal|intra|corp|home)\b")),
     ("32桁の秘密らしき文字列", re.compile(r"(?<![0-9a-fA-F])[0-9a-f]{32}(?![0-9a-fA-F])")),
     ("APIキーらしき文字列", re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}|\bBearer\s+[A-Za-z0-9._~+/-]{16,}=*")),
@@ -36,6 +36,7 @@ ALLOWED = [
     re.compile(r"\bpptcom\.invalid\b"),  # 作業ウィンドウの仮想ホスト（.invalid は名前解決されない予約名）
     re.compile(r"\bsigning\.local\.props\b|\bsigning\.local\b"),  # 署名の設定ファイルの名前（git 管理外）
     re.compile(r"Version[=>\"]\s*\d+(?:\.\d+){3}\b"),  # アセンブリの版（Version=10.0.0.0）
+    re.compile(r"\bPath\.home\(\)"),  # Python の pathlib（ホーム フォルダー）
 ]
 # ファイルを限って許すもの。公式の CycloneDX スキーマ（deps/cyclonedx、SHA-256 を schema.lock.json で
 # 固定）にある、ハッシュ値の例示（definitions.hash-content.examples）。値ごとに限るので、同じファイルの別の値は見逃さない。
@@ -90,6 +91,9 @@ def selftest():
     assert [r for r, _ in findings("model = Some-Model-Alias", ["some-model-alias"])] == ["禁止語リストの語"]
     assert findings(r'<Reference Include="X, Version=10.0.0.0, Culture=neutral">') == []
     assert [r for r, _ in findings("Version=10.0.0.0 at 10.0.0.5")] == ["私有IPアドレス"]
+    assert findings("Microsoft.CodeAnalysis.NetAnalyzers 10.0.401") == [], "a three-part version is not an address"
+    assert findings("cache = pathlib.Path.home() / '.nuget'") == []
+    assert [r for r, _ in findings("Path.home() and nas.home")] == ["社内ホスト名"]
     assert findings("pptcom/signing.local.props") == []
     assert [r for r, _ in findings("signing.local.props on build.local")] == ["社内ホスト名"]
     example = '"examples": ["3942447fac867ae5cdb3229b658f4d48"],'

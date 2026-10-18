@@ -64,12 +64,15 @@ def main():
         check(c is not None and c['hashes'][0]['content'] == entry['sha256'], f'{name}: the archive pinned in the lock')
 
     assets = json.loads((ROOT / 'pptcom/obj/project.assets.json').read_text(encoding='utf-8'))
+    # PrivateAssets="all" (suppressParent All): only builds it (ILRepack, the analyzers), listed under metadata.tools
+    build_only = {n for fw in assets['project']['frameworks'].values()
+                  for n, d in fw.get('dependencies', {}).items() if d.get('suppressParent') == 'All'}
+    tools = {t.get('purl'): t for t in bom['metadata'].get('tools', {}).get('components', [])}
     for key, lib in assets['libraries'].items():
         name, version = key.split('/')
-        if name == 'ILRepack':
-            continue   # build tool, listed under metadata.tools
-        c = by_ref.get(f'pkg:nuget/{name}@{version}')
-        check(c is not None and c['hashes'][0]['content'] == base64.b64decode(lib['sha512']).hex(), f'{name} {version}: the package NuGet restored')
+        c = (tools if name in build_only else by_ref).get(f'pkg:nuget/{name}@{version}')
+        check(c is not None and c['hashes'][0]['content'] == base64.b64decode(lib['sha512']).hex(),
+              f'{name} {version}: the package NuGet restored' + (' (a build tool)' if name in build_only else ''))
 
     # The crates cargo builds into anydoc's .wasm, read independently of sbom.py's parsing
     source = ROOT / 'pptcom/obj/sbom/anydoc'
