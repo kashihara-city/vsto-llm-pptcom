@@ -133,6 +133,7 @@ PowerPoint
 - Visual Studio Build Tools 2026 の 18.9 以降（「Office/SharePoint ビルド ツール」に、オプションの「Visual Studio Tools for Office (VSTO) ビルド ツール」と「.NET Framework 4.8 開発ツール」を足したもの）。C# 14 と静的解析（「テスト」を参照）のために、このコンパイラが要ります
 - Rust 1.99.0 と wasm32-unknown-unknown ターゲット（`rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown`）
 - .NET SDK 6 以降（MSI を組む WiX v5 を `dotnet build` で動かすため）
+- GAC にある Office の PIA（Office を入れた PC にはあります。Office のない PC では、VSTO のビルド タスクがアドインのリボンの型を読めずに止まるので、上の「Office/SharePoint ビルド ツール」が置く PIA を `gacutil /i` で入れます。CI はそうしています）
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\build\new-signing.ps1   # 初めてビルドする PC で 1 回だけ

@@ -1,8 +1,9 @@
 name: Prepare the build
 description: >-
   What building the add-in needs on the windows-2025 image, for both jobs of ci.yml: MSBuild (found and
-  written to MSBUILD), the Rust toolchain that builds anydoc, the VSTO runtime, the Office PIAs (checked) and a
-  throwaway signing certificate for the ClickOnce manifests. Run it after checking out the source.
+  written to MSBUILD), the Rust toolchain that builds anydoc, the VSTO runtime, the Office PIAs (checked, and put
+  in the GAC as Office does) and a throwaway signing certificate for the ClickOnce manifests. Run it after
+  checking out the source.
 runs:
   using: composite
   steps:
@@ -61,13 +62,21 @@ runs:
         if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "vstor_redist.exe failed" }
         if (-not (Test-Path $gac)) { throw "The VSTO runtime was installed but Hosting is not in the GAC" }
 
-    - name: Check the Office PIAs the build compiles against
+    - name: Check the Office PIAs the build compiles against, and put them in the GAC
       shell: pwsh
       run: |
         # OfficePia.props takes them from Visual Studio's Office workload. The add-in compiles against them
         # but does not ship them (Office has the same ones in the GAC); the parser tests and ComScriptRunner
         # copy them next to themselves.
+        # The runner has no Office, so they go in the GAC here, as on a developer's PC: the VSTO build task
+        # FindRibbons reads every type of pptcom.dll and finds what they refer to only next to it or in the GAC,
+        # and PaneRibbon implements Office.dll's IRibbonExtensibility. Without it the task fails with "Could not
+        # load file or assembly 'pptcom'".
         $ErrorActionPreference = "Stop"
+        $gacutil = Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\*\bin\NETFX * Tools\gacutil.exe" |
+          Sort-Object FullName | Select-Object -Last 1
+        if (-not $gacutil) { throw "gacutil.exe not found" }
+        "gacutil: $($gacutil.FullName)"
         $dir = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Shared\Visual Studio Tools for Office\PIA\Office15"
         foreach ($name in "Microsoft.Office.Interop.PowerPoint.dll", "Office.dll", "Microsoft.Vbe.Interop.dll") {
           $f = Join-Path $dir $name
@@ -77,6 +86,8 @@ runs:
             throw "$name signature: $($signature.Status), signer $($signature.SignerCertificate.Subject)"
           }
           "{0}  {1}  SHA256={2}" -f $name, ([Reflection.AssemblyName]::GetAssemblyName($f).Version), (Get-FileHash $f).Hash
+          & $gacutil.FullName /nologo /i $f
+          if ($LASTEXITCODE -ne 0) { throw "gacutil could not put $name in the GAC" }
         }
 
     - name: Make a throwaway signing certificate
