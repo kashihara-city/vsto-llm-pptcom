@@ -149,11 +149,15 @@ powershell -ExecutionPolicy Bypass -File scripts\build\build.ps1
 
 C# のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.NetAnalyzers、Microsoft.CodeAnalysis.CSharp.CodeStyle、Meziantou.Analyzer）にかけ、警告はエラーとして扱います。言語の版、解析器とその版は `Directory.Build.props` で決めています。止めている規則とその理由、書き方の決まり（型は `var` でなく名前で書く、`if` などには必ず波かっこを付ける、null とは `is null` / `is not null` で比べる、1 つのファイルに 1 つの型、メソッドは 100 行・60 文まで）は `.editorconfig` に書いてあります。null になりうる参照は C# の Nullable で型に書き、コンパイラが確かめます（`!` で黙らせることはしません）。古い形式の csproj には .NET SDK の「すべての規則」の一覧が渡らないため、NetAnalyzers の一覧はパッケージから `scripts/deps/netanalyzers-config.py` で作り、`deps/analyzers/` に置いています（CI で照合します）。ビルドの警告は、この解析器 1 つが読み込めないという既知の CS8032 だけを通し、ほかの警告が出ていないことを `scripts/test/build-warnings.py` が CI で確かめます。
 
-`scripts/test/ComScriptTests` は、PowerPoint なしで pptcom スクリプトの解析と実行を調べる構文テストです。式の値は VBScript で求めた値（`expected.tsv`、`make_expected.vbs` で作る）と照らし、VBA と VBScript で違うところは VBA の値で調べます。ほかに、受け付ける文と断る文、モデルに返す報告の文を調べます。MSBuild で組んで `scripts\test\ComScriptTests\bin\Debug\ComScriptTests.exe` を実行します（CI でも流します）。
+`scripts/test/ComScriptTests` は、PowerPoint なしで pptcom スクリプトの解析と実行を調べる構文テストです。式の値は VBScript で求めた値（`expected.tsv`、`make_expected.vbs` で作る）と照らし、VBA と VBScript で違うところは VBA の値で調べます。ほかに、受け付ける文と断る文、モデルに返す報告の文と、依頼の途中で利用者が別のプレゼンテーションに切り替えても、スライドの読み取りが依頼の始まったプレゼンテーションを読むことを調べます。MSBuild で組んで `scripts\test\ComScriptTests\bin\Debug\ComScriptTests.exe` を実行します（CI でも流します）。
 
-`scripts/test/ChatStreamTests` は、LLM の応答の読み取りを調べるテストです。ループバックのアドレスに立てた模擬サーバーが応答を返し、終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答やサーバー側の失敗（再試行の対象になるか）、送信の止まった応答が中止と待ち時間の上限で終わることを確かめます。実際の LLM には接続しません。組み方と実行のしかたは構文テストと同じです（CI でも流します）。
+`scripts/test/ChatStreamTests` は、LLM の応答の読み取りを調べるテストです。ループバックのアドレスに立てた模擬サーバーが応答を返し、終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答やサーバー側の失敗（再試行の対象になるか）、送信の止まった応答やエラーの本文が中止と待ち時間の上限で終わること、`mm_processor_kwargs` を受け付けないサーバーにはそれを外して送り直すことを確かめます。実際の LLM には接続しません。組み方と実行のしかたは構文テストと同じです（CI でも流します）。
 
 `python -X utf8 scripts/test/js-syntax.py` は、作業ウィンドウの自作の JavaScript（`pptcom/UI/web/*.js`）が構文として読めることを Node の `--check` で調べます（CI でも流します）。
+
+`node scripts/test/docs-queue.cjs` は、作業ウィンドウが添付の資料を受け取る `docs.js` を、ブラウザの代わりの最小限のオブジェクトの中でそのまま動かします。どのファイルも読み出す前にアドインへ知らせて「読み取り中」になること、読み出しや変換のどこで失敗しても、そのファイルは添付か失敗のどちらかで終わり、後のファイルは続けて読まれることを確かめます（CI でも流します）。
+
+`python -X utf8 scripts/test/rig-stream.py` は、実験用のリグ（`scripts/test/tool_loop.py`。アドインと同じ指示とツールで LLM を回し、ランナーで PowerPoint を動かす）について、ループバックの模擬サーバーで応答の読み取りと失敗の分け方を、模擬のランナーで、失敗で終わった回もデッキと `summary.json` を残すことを確かめます。サーバーの証明書とホスト名を検証することも確かめます。LLM にも PowerPoint にも接続しません（CI でも流します）。
 
 `python -X utf8 scripts/test/i18n.py` は、作業ウィンドウの文言について、使っているコードがすべて `ja.json` にあること、値の数が `{0}` などと合うこと、ほかの言語が同じコードを持つこと、コードに日本語の文が書かれていないことを調べます（CI でも流します）。
 

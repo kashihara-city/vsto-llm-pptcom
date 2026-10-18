@@ -13,11 +13,14 @@ environment-specific is built in. Set them once in the add-in's task pane.
 import ctypes
 import ctypes.wintypes
 import datetime
+import http.client
 import json
 import os
 import ssl
 import subprocess
 import sys
+import traceback
+import urllib.error
 import urllib.request
 
 
@@ -59,8 +62,6 @@ def load_settings() -> dict:
     except FileNotFoundError:
         pass
     settings["api_key"] = read_credential(CREDENTIAL_TARGET)
-    if not settings["endpoint"]:
-        sys.exit("endpoint is not set in HKCU\\" + REGISTRY_PATH + " (set it once in the add-in's task pane)")
     return settings
 
 
@@ -176,7 +177,7 @@ class Runner:
         self.p.stdin.flush()
         line = self.p.stdout.readline()
         if not line:
-            raise SystemExit("runner died")
+            raise RuntimeError("runner died")
         return json.loads(line)
 
     def close(self):
@@ -335,8 +336,41 @@ STREAM_IDLE_SEC = 60
 
 
 class StreamFailure(Exception):
-    """A failure on the server side while the reply streams (the add-in's LlmServerException): the run ends
+    """A failure on the server side (the add-in's LlmServerException): HTTP 5xx, a connection that failed or
+    dropped, an error event in the stream, a stream that stopped sending or was cut off. The run ends there,
+    with the deck and the summary saved."""
+
+
+class RequestRefused(Exception):
+    """HTTP 4xx: the server refused the request (the add-in ends the request, with no 再試行). The run ends
     there, with the deck and the summary saved."""
+
+
+def tls_context() -> ssl.SSLContext:
+    """The server's certificate and host name are checked, against the certificates Windows trusts (as the
+    add-in's HttpClient does). VERIFY_X509_STRICT, on by default since Python 3.13, is left off: Windows does not
+    apply it either, and it refuses an organization's own CA whose Basic Constraints are not marked critical."""
+    ctx = ssl.create_default_context()
+    ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    return ctx
+
+
+def wait_idle(resp) -> None:
+    """After the headers, a socket wait longer than STREAM_IDLE_SEC is a stall (urlopen's timeout is the long
+    one up to the headers)."""
+    sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
+    if sock is not None:
+        sock.settimeout(STREAM_IDLE_SEC)
+
+
+def error_body(err: urllib.error.HTTPError) -> str:
+    """An error's body, shown with its status, under the same limit as the stream: a gateway can send the
+    headers of a 503 and never finish the body (the add-in's ReadErrorBodyAsync)."""
+    wait_idle(err.fp)
+    try:
+        return err.read(4000).decode("utf-8", errors="replace").strip()
+    except (OSError, http.client.HTTPException):
+        return "(the body did not arrive within %d s)" % STREAM_IDLE_SEC
 
 
 def stream(payload: dict) -> dict:
@@ -345,22 +379,31 @@ def stream(payload: dict) -> dict:
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers=dict({"Content-Type": "application/json"}, **({"Authorization": "Bearer " + API_KEY} if API_KEY else {})),
     )
-    ctx = ssl._create_unverified_context()
     started = datetime.datetime.now()
     content, reasoning, tool_args = [], [], {}
     usage, finish = None, None
     first_token = first_output = None  # seconds; see ChatReply.FirstToken / FirstOutput
     done = False
-    with urllib.request.urlopen(req, context=ctx, timeout=1200) as resp:
-        sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
-        if sock is not None:
-            sock.settimeout(STREAM_IDLE_SEC)
+    try:
+        resp = urllib.request.urlopen(req, context=tls_context(), timeout=1200)
+    except urllib.error.HTTPError as ex:
+        detail = "LLM call failed: %d %s" % (ex.code, error_body(ex))
+        ex.close()
+        if ex.code >= 500:
+            raise StreamFailure(detail) from ex
+        raise RequestRefused(detail) from ex
+    except (OSError, http.client.HTTPException) as ex:  # URLError is an OSError
+        raise StreamFailure("LLM connection failed: %s" % ex) from ex
+    with resp:
+        wait_idle(resp)
         lines = iter(resp)
         while True:
             try:
                 raw = next(lines, None)
             except TimeoutError as ex:
                 raise StreamFailure("LLM stream stalled: nothing arrived for %d s" % STREAM_IDLE_SEC) from ex
+            except (OSError, http.client.HTTPException) as ex:
+                raise StreamFailure("LLM connection dropped: %s" % ex) from ex
             if raw is None:
                 break
             line = raw.decode("utf-8", errors="replace").strip()
@@ -419,6 +462,8 @@ def stream(payload: dict) -> dict:
 
 
 def main() -> int:
+    if not BASE_URL:
+        sys.exit("endpoint is not set in HKCU\\" + REGISTRY_PATH + " (set it once in the add-in's task pane)")
     run_name = sys.argv[1]
     request = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_REQUEST
     out_dir = os.path.join(GENERATED_DIR, run_name)
@@ -442,98 +487,18 @@ def main() -> int:
     messages[0]["content"] = system
     turns = []
     t0 = datetime.datetime.now()
-    outcome = "max_turns"  # unless the model stops calling tools before the limit (same as the add-in)
     try:
-        for turn in range(1, MAX_TURNS + 1):
-            payload = {"model": MODEL, "messages": strip_private(messages), "tools": TOOLS, "tool_choice": "auto",
-                       "max_tokens": 32000, "stream": True, "stream_options": {"include_usage": True},
-                       # same as the add-in: keep images at native resolution (server default upscales ~4x)
-                       "mm_processor_kwargs": {"min_pixels": 3136}}
-            try:
-                r = stream(payload)
-            except StreamFailure as ex:
-                # The add-in waits for 再試行 here; the rig has nobody to press it, so the run ends.
-                outcome = "server_error: " + str(ex)
-                print("   !!", outcome, flush=True)
-                break
-            rt = (r["usage"] or {}).get("completion_tokens_details", {}).get("reasoning_tokens")
-            info = {"turn": turn, "elapsed_sec": r["elapsed_sec"],
-                    "first_token_sec": r["first_token_sec"], "first_output_sec": r["first_output_sec"],
-                    "reasoning_chars": len(r["reasoning"]),
-                    "prompt_tokens": (r["usage"] or {}).get("prompt_tokens"),
-                    "reasoning_tokens": rt, "finish": r["finish_reason"],
-                    "tools": [(c["function"]["name"], len(c["function"]["arguments"])) for c in r["tool_calls"]],
-                    "content": r["content"][:200]}
-            print(json.dumps(info, ensure_ascii=False), flush=True)
-            with open(os.path.join(out_dir, "turn%02d.reasoning.txt" % turn), "w", encoding="utf-8") as f:
-                f.write(r["reasoning"])
-
-            assistant = {"role": "assistant", "content": r["content"] or None}
-            if r["tool_calls"]:
-                assistant["tool_calls"] = r["tool_calls"]
-            if PASS_REASONING and r["reasoning"]:
-                # both names, as the add-in: current vLLM reads "reasoning" and ignores "reasoning_content"
-                assistant["reasoning"] = r["reasoning"]
-                assistant["reasoning_content"] = r["reasoning"]
-            messages.append(assistant)
-            if (info["prompt_tokens"] or 0) > SCRIPT_ELISION_PROMPT_TOKENS:
-                n = elide_old_scripts(messages, KEEP_RECENT_SCRIPTS)
-                if n:
-                    print("   (prompt %d tok: %d older pptcom scripts replaced by a comment)" % (info["prompt_tokens"], n), flush=True)
-
-            results = []
-            images = []
-            for c in r["tool_calls"]:
-                try:
-                    args = json.loads(c["function"]["arguments"])
-                except Exception as ex:
-                    result, png = "Invalid JSON in tool arguments: " + str(ex), None
-                else:
-                    result, png = run_tool(runner, c["function"]["name"], args)
-                if png:
-                    images.extend(png)
-                results.append({"name": c["function"]["name"], "args": c["function"]["arguments"], "result": result})
-                messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
-                print("   ->", c["function"]["name"], ":", result.splitlines()[0][:160], flush=True)
-            if images:
-                # Tool messages carry text only on this gateway; the rendering rides on a user
-                # message right after them, as an OpenAI-style image_url part. Only the newest
-                # rendering per slide is kept (same rule as the add-in): older image parts of a
-                # re-rendered slide are replaced by a one-line note.
-                import base64
-                newest = {label: (png, inventory) for label, png, inventory in images}
-                for m in messages:
-                    if m.get("role") != "user" or not isinstance(m.get("content"), list):
-                        continue
-                    for i, part in enumerate(m["content"]):
-                        if part.get("type") == "image_url" and part.get("_label") in newest:
-                            m["content"][i] = {"type": "text", "text": SUPERSEDED_NOTE.format(part["_label"])}
-                    # the shape list goes with its image
-                    m["content"] = [part for part in m["content"] if part.get("_inventory") not in newest]
-                parts = [{"type": "text", "text": "Image(s) for the tool results above:"}]
-                for label, (png, inventory) in newest.items():
-                    b64 = base64.b64encode(open(png, "rb").read()).decode("ascii")
-                    parts.append({"type": "text", "text": label[0].upper() + label[1:] + ":"})
-                    parts.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + b64}, "_label": label})
-                    if inventory:
-                        parts.append({"type": "text", "text": inventory, "_inventory": label})
-                messages.append({"role": "user", "content": parts})
-            info["results"] = results
-            turns.append(info)
-            with open(os.path.join(out_dir, "transcript.json"), "w", encoding="utf-8") as f:
-                # images become a count; the text parts (labels, shape lists) are kept
-                slim = [m if not isinstance(m.get("content"), list) else
-                        {**m, "content": "\n".join(p["text"] for p in m["content"] if p.get("type") == "text") +
-                                         "\n[%d image(s)]" % sum(1 for p in m["content"] if p.get("type") == "image_url")}
-                        for m in messages]
-                json.dump(slim, f, ensure_ascii=False, indent=1)
-            if not r["tool_calls"]:
-                # max_tokens: the reply reached the output limit before it was done (same as the add-in)
-                outcome = "max_tokens" if r["finish_reason"] == "length" else "completed"
-                break
-        total = (datetime.datetime.now() - t0).total_seconds()
+        outcome = run_turns(runner, messages, turns, out_dir)
+    except Exception as ex:  # the deck and the summary are still saved, and say what ended the run
+        outcome = "error: %s: %s" % (type(ex).__name__, ex)
+        print("   !!", outcome, flush=True)
+        traceback.print_exc()
+    total = (datetime.datetime.now() - t0).total_seconds()
+    try:
         saved = runner.call({"save": os.path.join(out_dir, "deck.pptx")})
         print("saved:", json.dumps(saved, ensure_ascii=False), flush=True)
+    except Exception as ex:
+        print("   !! deck not saved: %s: %s" % (type(ex).__name__, ex), flush=True)
     finally:
         runner.close()
 
@@ -546,8 +511,106 @@ def main() -> int:
     with open(os.path.join(out_dir, "transcript.json"), "w", encoding="utf-8") as f:
         json.dump(messages, f, ensure_ascii=False, indent=1)
     print(json.dumps({k: v for k, v in summary.items() if k != "turn_details"}, ensure_ascii=False))
-    return 0
+    # A run the model ended (completed, max_turns, max_tokens) is a result; one a failure ended is not.
+    return 1 if outcome.startswith(("server_error", "error")) else 0
 
+
+def run_turns(runner: "Runner", messages: list, turns: list, out_dir: str) -> str:
+    """The turns of the run, until the model answers without a tool call, the turn limit, or a failure that
+    ends the run. Returns the outcome."""
+    outcome = "max_turns"  # unless the model stops calling tools before the limit (same as the add-in)
+    for turn in range(1, MAX_TURNS + 1):
+        payload = {"model": MODEL, "messages": strip_private(messages), "tools": TOOLS, "tool_choice": "auto",
+                   "max_tokens": 32000, "stream": True, "stream_options": {"include_usage": True},
+                   # same as the add-in: keep images at native resolution (server default upscales ~4x)
+                   "mm_processor_kwargs": {"min_pixels": 3136}}
+        try:
+            r = stream(payload)
+        except StreamFailure as ex:
+            # The add-in waits for 再試行 here; the rig has nobody to press it, so the run ends.
+            outcome = "server_error: " + str(ex)
+            print("   !!", outcome, flush=True)
+            break
+        except RequestRefused as ex:
+            outcome = "error: " + str(ex)
+            print("   !!", outcome, flush=True)
+            break
+        rt = (r["usage"] or {}).get("completion_tokens_details", {}).get("reasoning_tokens")
+        info = {"turn": turn, "elapsed_sec": r["elapsed_sec"],
+                "first_token_sec": r["first_token_sec"], "first_output_sec": r["first_output_sec"],
+                "reasoning_chars": len(r["reasoning"]),
+                "prompt_tokens": (r["usage"] or {}).get("prompt_tokens"),
+                "reasoning_tokens": rt, "finish": r["finish_reason"],
+                "tools": [(c["function"]["name"], len(c["function"]["arguments"])) for c in r["tool_calls"]],
+                "content": r["content"][:200]}
+        print(json.dumps(info, ensure_ascii=False), flush=True)
+        with open(os.path.join(out_dir, "turn%02d.reasoning.txt" % turn), "w", encoding="utf-8") as f:
+            f.write(r["reasoning"])
+
+        assistant = {"role": "assistant", "content": r["content"] or None}
+        if r["tool_calls"]:
+            assistant["tool_calls"] = r["tool_calls"]
+        if PASS_REASONING and r["reasoning"]:
+            # both names, as the add-in: current vLLM reads "reasoning" and ignores "reasoning_content"
+            assistant["reasoning"] = r["reasoning"]
+            assistant["reasoning_content"] = r["reasoning"]
+        messages.append(assistant)
+        if (info["prompt_tokens"] or 0) > SCRIPT_ELISION_PROMPT_TOKENS:
+            n = elide_old_scripts(messages, KEEP_RECENT_SCRIPTS)
+            if n:
+                print("   (prompt %d tok: %d older pptcom scripts replaced by a comment)" % (info["prompt_tokens"], n), flush=True)
+
+        results = []
+        images = []
+        for c in r["tool_calls"]:
+            try:
+                args = json.loads(c["function"]["arguments"])
+            except Exception as ex:
+                result, png = "Invalid JSON in tool arguments: " + str(ex), None
+            else:
+                result, png = run_tool(runner, c["function"]["name"], args)
+            if png:
+                images.extend(png)
+            results.append({"name": c["function"]["name"], "args": c["function"]["arguments"], "result": result})
+            messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
+            print("   ->", c["function"]["name"], ":", result.splitlines()[0][:160], flush=True)
+        if images:
+            # Tool messages carry text only on this gateway; the rendering rides on a user
+            # message right after them, as an OpenAI-style image_url part. Only the newest
+            # rendering per slide is kept (same rule as the add-in): older image parts of a
+            # re-rendered slide are replaced by a one-line note.
+            import base64
+            newest = {label: (png, inventory) for label, png, inventory in images}
+            for m in messages:
+                if m.get("role") != "user" or not isinstance(m.get("content"), list):
+                    continue
+                for i, part in enumerate(m["content"]):
+                    if part.get("type") == "image_url" and part.get("_label") in newest:
+                        m["content"][i] = {"type": "text", "text": SUPERSEDED_NOTE.format(part["_label"])}
+                # the shape list goes with its image
+                m["content"] = [part for part in m["content"] if part.get("_inventory") not in newest]
+            parts = [{"type": "text", "text": "Image(s) for the tool results above:"}]
+            for label, (png, inventory) in newest.items():
+                b64 = base64.b64encode(open(png, "rb").read()).decode("ascii")
+                parts.append({"type": "text", "text": label[0].upper() + label[1:] + ":"})
+                parts.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + b64}, "_label": label})
+                if inventory:
+                    parts.append({"type": "text", "text": inventory, "_inventory": label})
+            messages.append({"role": "user", "content": parts})
+        info["results"] = results
+        turns.append(info)
+        with open(os.path.join(out_dir, "transcript.json"), "w", encoding="utf-8") as f:
+            # images become a count; the text parts (labels, shape lists) are kept
+            slim = [m if not isinstance(m.get("content"), list) else
+                    {**m, "content": "\n".join(p["text"] for p in m["content"] if p.get("type") == "text") +
+                                     "\n[%d image(s)]" % sum(1 for p in m["content"] if p.get("type") == "image_url")}
+                    for m in messages]
+            json.dump(slim, f, ensure_ascii=False, indent=1)
+        if not r["tool_calls"]:
+            # max_tokens: the reply reached the output limit before it was done (same as the add-in)
+            outcome = "max_tokens" if r["finish_reason"] == "length" else "completed"
+            break
+    return outcome
 
 if __name__ == "__main__":
     sys.exit(main())

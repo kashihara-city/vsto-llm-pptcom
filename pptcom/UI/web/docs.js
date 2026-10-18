@@ -5,7 +5,7 @@
 // list; this page shows what it says (the chips above the input) and asks it to remove one. It also draws
 // PDF pages for docread page; the add-in sends the PDF along each time, so this page keeps no documents.
 //
-//   page -> add-in: {type: "attachStarted", ticket, name}                   converting starts (the add-in ties it to the conversation)
+//   page -> add-in: {type: "attachStarted", ticket, name}                   a file is taken, before it is read (the add-in ties it to the conversation)
 //                   {type: "attach", ticket, name, size, format, text, pages, images: [{index, mediaType, data (base64)}],
 //                    source (the PDF itself, base64; PDFs only)}
 //                   {type: "attachFailed", ticket, name, reason, detail}
@@ -32,34 +32,44 @@ picker.accept = Accept.join(",");
 
 // ---- one conversion at a time, in order --------------------------------------------------------------
 
+// A file is announced (attachStarted) and counted as converting as soon as it is taken, before it is read:
+// reading one from a network or cloud drive can take a while, and meanwhile the request must not go without it
+// nor the conversation change under it. Its bytes are read when its turn in the queue comes. Every ticket ends
+// with attach or attachFailed, whatever fails on the way, and the queue goes on with the next file.
+// read: () => a Promise of the file's bytes (a Uint8Array).
 let queue = Promise.resolve();
-function enqueue(ticket, name, bytes) {
+function enqueue(ticket, name, read) {
   host.postMessage({ type: "attachStarted", ticket, name });
   converting++;
   updateState();
-  queue = queue.then(() => convert(ticket, name, bytes)).finally(() => { converting--; updateState(); });
+  queue = queue
+    .then(() => attach(ticket, name, read))
+    .finally(() => { converting--; updateState(); })
+    .catch(e => console.error(e));
+}
+
+async function attach(ticket, name, read) {
+  let msg;
+  try {
+    msg = await convert(ticket, name, await read());
+  } catch (e) {
+    msg = { type: "attachFailed", ticket, name, reason: "error", detail: String((e && e.message) || e) };
+  }
+  host.postMessage(msg);
 }
 
 const isPdf = bytes => bytes.length > 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46; // %PDF
 
+// The message for the add-in: attach, or attachFailed when the converter says why it could not.
 async function convert(ticket, name, bytes) {
   const size = bytes.byteLength;
-  let r;
-  try {
-    if (isPdf(bytes)) r = await (await import("./pdfdoc.js")).convertPdf(bytes);
-    else r = await inWorker(name, bytes.slice());
-  } catch (e) {
-    r = { ok: false, reason: "error", detail: String((e && e.message) || e) };
-  }
-  if (!r.ok) {
-    host.postMessage({ type: "attachFailed", ticket, name, reason: r.reason, detail: r.detail || "" });
-    return;
-  }
+  const r = isPdf(bytes) ? await (await import("./pdfdoc.js")).convertPdf(bytes) : await inWorker(name, bytes.slice());
+  if (!r.ok) return { type: "attachFailed", ticket, name, reason: r.reason, detail: r.detail || "" };
   const images = [];
   for (const img of r.images) images.push({ index: img.index, mediaType: img.mediaType, data: await base64(img.data) });
   const msg = { type: "attach", ticket, name, size, format: r.format, text: r.text, images };
   if (r.format === "pdf") { msg.pages = r.pages; msg.source = await base64(bytes); }
-  host.postMessage(msg);
+  return msg;
 }
 
 function inWorker(name, bytes) {
@@ -100,7 +110,7 @@ function fromBase64(s) {
   return bytes;
 }
 
-async function addFiles(files) {
+function addFiles(files) {
   if (busy) return;
   for (const file of files) {
     const ticket = "p" + nextTicket++;
@@ -108,7 +118,7 @@ async function addFiles(files) {
       host.postMessage({ type: "attachFailed", ticket, name: file.name, reason: "tooLarge", detail: String(file.size) });
       continue;
     }
-    enqueue(ticket, file.name, new Uint8Array(await file.arrayBuffer()));
+    enqueue(ticket, file.name, async () => new Uint8Array(await file.arrayBuffer()));
   }
 }
 
@@ -178,7 +188,7 @@ if (host) {
     const m = e.data || {};
     if (m.type === "attachments") { showAttachments(m.items || []); updateState(); }
     else if (m.type === "busy") { busy = !!m.value; updateState(); }
-    else if (m.type === "convert") enqueue(m.ticket, m.name, fromBase64(m.data));
+    else if (m.type === "convert") enqueue(m.ticket, m.name, async () => fromBase64(m.data));
     else if (m.type === "renderPages") renderPages(m);
   });
 }

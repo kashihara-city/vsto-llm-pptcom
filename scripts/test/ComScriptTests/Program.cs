@@ -23,6 +23,7 @@ namespace ComScriptTests
     //    in (folded by the parser) - and both must match VBScript.
     // 2. Cases where VBScript is not VBA, checked against VBA's documented behavior.
     // 3. Statements: which ones are accepted, and what a rejected one is told.
+    // 4. The deck a request edits: what the engine binds as ActivePresentation, and what DeckReader reads.
     internal static class Program
     {
         private static int _pass, _fail;
@@ -45,6 +46,7 @@ namespace ComScriptTests
             ExpressionTests(Path.Combine(dir, "expected.tsv"));
             VbaOnlyTests();
             StatementTests();
+            DeckTests();
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -371,6 +373,71 @@ namespace ComScriptTests
                 return;
             }
             Report(name, error.IndexOf(expectedText, StringComparison.Ordinal) >= 0, "expected the message to contain \"" + expectedText + "\", got: " + error);
+        }
+
+        // The engine binds ActivePresentation once, as the request starts; the pptread text, the renderings, the
+        // shape lists and the fingerprint read that deck (ComProxyEngine.Presentation) even after the user has
+        // switched to another one while the model was thinking.
+        private static void DeckTests()
+        {
+            StubDeck a = new(720);
+            StubApp app = new() { Active = a };
+            ComProxyEngine engine = new(app);
+            app.Active = new StubDeck(960);
+            Report("deck: the engine keeps the deck the request started on", ReferenceEquals(engine.Presentation, a), "engine.Presentation is another deck");
+            string read = DeckReader.Read(engine.Presentation, "", out _);
+            Report("deck: pptread reads that deck after a switch", read == "Presentation: 0 slide(s), 720x540 pt.", read);
+
+            ComProxyEngine none = new(new StubApp());
+            string? error = null;
+            try
+            {
+                DeckReader.Read(none.Presentation, "", out _);
+            }
+            catch (InvalidOperationException ex)
+            {
+                error = ex.Message;
+            }
+            Report("deck: a request that started without a deck has none", none.Presentation is null && error == "No presentation is open.",
+                   error ?? "no error");
+        }
+
+        // An Application whose active deck the test switches, as the user does with the windows. DeckReader and the
+        // engine reach these members late-bound, as they do PowerPoint's.
+        internal sealed class StubApp
+        {
+            public StubDeck? Active;
+
+            public StubDeck ActivePresentation => Active ?? throw new InvalidOperationException("no presentation is open");
+        }
+
+        internal sealed class StubDeck
+        {
+            public StubDeck(int width)
+            {
+                PageSetup = new StubPageSetup(width);
+            }
+
+            public StubSlides Slides { get; } = new();
+
+            public StubPageSetup PageSetup { get; }
+        }
+
+        internal sealed class StubSlides
+        {
+            public int Count { get; }
+        }
+
+        internal sealed class StubPageSetup
+        {
+            public StubPageSetup(int width)
+            {
+                SlideWidth = width;
+            }
+
+            public int SlideWidth { get; }
+
+            public int SlideHeight { get; } = 540;
         }
 
         private static void Report(string name, bool ok, string? detail)

@@ -12,6 +12,9 @@ namespace Pptcom.ComProxy
     // of properties - not a path for the model to invoke arbitrary members - so it sits beside
     // ComProxy rather than inside it. Everything is late-bound (`dynamic`) so it works both
     // in-process (add-in) and out-of-process (ComScriptRunner), see Program.cs for why.
+    // Each view takes the presentation the request edits (ComProxyEngine.Presentation), never
+    // Application.ActivePresentation: the user may switch to another deck while the model thinks,
+    // and the model would then see one deck while its scripts change another.
     internal static class DeckReader
     {
         // Same as the renderings after a pptcom call.
@@ -20,10 +23,10 @@ namespace Pptcom.ComProxy
         // pptread: `slides` is "3", "4-7", or empty for all. Returns the tool result text, and in
         // `toRender` the slides whose rendering and shape list go with it (at most MaxSlidesPerRead;
         // the text names the rest so the model can ask for them).
-        public static string Read(object application, string slides, out List<int> toRender)
+        public static string Read(object? presentation, string slides, out List<int> toRender)
         {
             toRender = [];
-            dynamic pres = ((dynamic)application).ActivePresentation;
+            dynamic pres = Deck(presentation);
             int count = (int)pres.Slides.Count;
             string head = Invariant($"Presentation: {count} slide(s), {(int)pres.PageSetup.SlideWidth}x{(int)pres.PageSetup.SlideHeight} pt.");
             if (count == 0)
@@ -72,15 +75,20 @@ namespace Pptcom.ComProxy
             return text;
         }
 
+        // The request has no deck when none was open as it started.
+        private static object Deck(object? presentation)
+        {
+            return presentation ?? throw new InvalidOperationException("No presentation is open.");
+        }
+
         private static string SlideRange(int from, int to)
         {
             return from == to ? from.ToString(CultureInfo.InvariantCulture) : Invariant($"{from}-{to}");
         }
 
-        public static string ExportSlidePng(object application, int slideIndex, int width = 1280, int height = 720)
+        public static string ExportSlidePng(object? presentation, int slideIndex, int width = 1280, int height = 720)
         {
-            dynamic app = application;
-            dynamic pres = app.ActivePresentation;
+            dynamic pres = Deck(presentation);
             int count = (int)pres.Slides.Count;
             if (slideIndex < 1 || slideIndex > count)
             {
@@ -173,9 +181,9 @@ namespace Pptcom.ComProxy
         //   [13] = d2 RoundedRectangle L340 T412 W280 H100 fill RGB(255,255,255) "品種は500以上" & vbCr & "..." | font 16pt RGB(40,40,40)
         // Names PowerPoint made up ("Rounded Rectangle 15") are left out, as the type says the same;
         // names a script gave are kept ('card1'). The text is complete, as a VBA literal.
-        public static string Brief(object application, int slideIndex, IDictionary<string, List<string>>? variables = null)
+        public static string Brief(object? presentation, int slideIndex, IDictionary<string, List<string>>? variables = null)
         {
-            dynamic slide = ((dynamic)application).ActivePresentation.Slides(slideIndex);
+            dynamic slide = ((dynamic)Deck(presentation)).Slides(slideIndex);
             int shapeCount = (int)slide.Shapes.Count;
             StringBuilder sb = new();
             sb.Append("Slide ").Append(slideIndex).Append(" (").Append(shapeCount).Append(" shapes):\n");
@@ -340,9 +348,9 @@ namespace Pptcom.ComProxy
             public string Variables = ""; // "= card1 " when a script variable held it at the time
         }
 
-        public static Fingerprint TakeFingerprint(object application, IDictionary<string, List<string>> variables)
+        public static Fingerprint TakeFingerprint(object? presentation, IDictionary<string, List<string>> variables)
         {
-            dynamic pres = ((dynamic)application).ActivePresentation;
+            dynamic pres = Deck(presentation);
             Fingerprint fp = new();
             int slideCount = (int)pres.Slides.Count;
             for (int n = 1; n <= slideCount; n++)

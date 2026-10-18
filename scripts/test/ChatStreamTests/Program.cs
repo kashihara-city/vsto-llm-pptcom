@@ -18,10 +18,13 @@ namespace ChatStreamTests
 {
     // How the add-in reads a chat reply's stream (OpenAiCompatibleClient.ChatAsync, StreamedReply): what counts
     // as a whole reply, how the parts of a tool call come together, which failures may be sent again (再試行),
-    // and that 中止 and the idle limit end a stream that stopped sending. A server on the loopback address
-    // answers each request as the test needs; no LLM is called.
+    // and that 中止 and the idle limit end a stream or an error body that stopped sending. A server on the loopback
+    // address answers each request as the test needs; no LLM is called.
     internal static class Program
     {
+        // How a server that does not know mm_processor_kwargs answers.
+        private const string Rejected = "{\"error\":\"unknown field: mm_processor_kwargs\"}";
+
         private static int _pass, _fail;
 
         private static async Task<int> Main()
@@ -29,6 +32,8 @@ namespace ChatStreamTests
             await CompleteRepliesAsync().ConfigureAwait(true);
             await FailedRepliesAsync().ConfigureAwait(true);
             await StalledRepliesAsync().ConfigureAwait(true);
+            await UnfinishedErrorsAsync().ConfigureAwait(true);
+            await RejectedFieldAsync().ConfigureAwait(true);
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -73,33 +78,57 @@ namespace ChatStreamTests
         private static async Task StalledRepliesAsync()
         {
             Console.WriteLine("== a stream that stops sending");
-            // 中止 while the server holds the connection open and sends nothing more.
-            using (FakeServer server = new(Streaming(Sse(Content("partial"))), stall: true))
-            using (CancellationTokenSource cancel = new())
-            {
-                OpenAiCompatibleClient client = new(server.Url, "", "test-model");
-                Task<ChatReply> chat = client.ChatAsync([new ChatMessage("user", "hi")], cancellationToken: cancel.Token);
-                await server.Sent.ConfigureAwait(true);
-                await Task.Delay(200, CancellationToken.None).ConfigureAwait(true);
-                cancel.Cancel();
-                Exception? ex = await EndingAsync(chat, TimeSpan.FromSeconds(3)).ConfigureAwait(true);
-                Check("中止 ends the read", ex is OperationCanceledException, Describe(ex));
-            }
+            string[] stalled = [Streaming(200, Sse(Content("partial")))];
+            Exception? ex = await StalledAsync(stalled, cancel: true).ConfigureAwait(true);
+            Check("中止 ends the read", ex is OperationCanceledException, Describe(ex));
+            ex = await StalledAsync(stalled, cancel: false).ConfigureAwait(true);
+            Check("the idle limit ends the read (再試行)", ex is LlmServerException { Failure: LlmServerFailure.Stalled }, Describe(ex));
+        }
 
-            // Nobody stops it: the idle limit does.
-            using (FakeServer server = new(Streaming(Sse(Content("partial"))), stall: true))
-            {
-                OpenAiCompatibleClient client = new(server.Url, "", "test-model") { StreamIdleLimit = TimeSpan.FromSeconds(1) };
-                Task<ChatReply> chat = client.ChatAsync([new ChatMessage("user", "hi")], cancellationToken: CancellationToken.None);
-                Exception? ex = await EndingAsync(chat, TimeSpan.FromSeconds(5)).ConfigureAwait(true);
-                Check("the idle limit ends the read (再試行)", ex is LlmServerException { Failure: LlmServerFailure.Stalled }, Describe(ex));
-            }
+        // An error's headers, then a body that does not finish. The first request carries mm_processor_kwargs, so
+        // its error body is read to see whether the server rejected that field; after the request is sent again
+        // without it, an error body is read where the stream would be.
+        private static async Task UnfinishedErrorsAsync()
+        {
+            Console.WriteLine("== an error whose body does not finish");
+            string[] busy = [Streaming(503, "busy")];
+            Exception? ex = await StalledAsync(busy, cancel: true).ConfigureAwait(true);
+            Check("503: 中止 ends the read", ex is OperationCanceledException, Describe(ex));
+            ex = await StalledAsync(busy, cancel: false).ConfigureAwait(true);
+            Check("503: the idle limit ends the read (再試行)", ex is LlmServerException { StatusCode: 503 }, Describe(ex));
+
+            string[] bad = [Streaming(400, "bad")];
+            ex = await StalledAsync(bad, cancel: true).ConfigureAwait(true);
+            Check("400: 中止 ends the read", ex is OperationCanceledException, Describe(ex));
+            ex = await StalledAsync(bad, cancel: false).ConfigureAwait(true);
+            Check("400: the idle limit ends the read", ex is InvalidOperationException, Describe(ex));
+
+            string[] busyAfterRetry = [Http(400, Rejected), Streaming(503, "busy")];
+            ex = await StalledAsync(busyAfterRetry, cancel: true).ConfigureAwait(true);
+            Check("503 after the retry: 中止 ends the read", ex is OperationCanceledException, Describe(ex));
+            ex = await StalledAsync(busyAfterRetry, cancel: false).ConfigureAwait(true);
+            Check("503 after the retry: the idle limit ends the read (再試行)", ex is LlmServerException { StatusCode: 503 }, Describe(ex));
+        }
+
+        // A server that does not know mm_processor_kwargs gets the request again without it.
+        private static async Task RejectedFieldAsync()
+        {
+            Console.WriteLine("== a server that rejects mm_processor_kwargs");
+            using FakeServer server = new([Http(400, Rejected), Http(200, Sse(Content("Hello"), Finish("stop")))], stall: false);
+            OpenAiCompatibleClient client = new(server.Url, "", "test-model");
+            ChatReply r = await client.ChatAsync([new ChatMessage("user", "hi")], cancellationToken: CancellationToken.None).ConfigureAwait(true);
+            await server.Done.ConfigureAwait(true);
+            bool sentAgainWithout = server.Requests.Count == 2 && server.Requests[0].IndexOf("mm_processor_kwargs", StringComparison.Ordinal) >= 0 &&
+                                    server.Requests[1].IndexOf("mm_processor_kwargs", StringComparison.Ordinal) < 0;
+            Check("sent again without it", r.Content == "Hello" && sentAgainWithout,
+                  Show(r) + Invariant($" requests={server.Requests.Count}"));
         }
 
         // ---- the server ---------------------------------------------------------------------------------
 
-        // One HTTP exchange on the loopback address: reads the request, writes the response, and closes the
-        // connection - or, with `stall`, keeps it open and sends nothing more until the test is over.
+        // HTTP exchanges on the loopback address, one connection each: reads a request, writes the next response,
+        // and closes the connection - or, with `stall`, keeps the last one open and sends nothing more until the
+        // test is over.
         private sealed class FakeServer : IDisposable
         {
             private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
@@ -107,35 +136,49 @@ namespace ChatStreamTests
             private readonly TaskCompletionSource<bool> _sent = new();
 
             public FakeServer(string response, bool stall)
+                : this([response], stall)
+            {
+            }
+
+            public FakeServer(string[] responses, bool stall)
             {
                 _listener.Start();
                 Url = "http://127.0.0.1:" + ((IPEndPoint)_listener.LocalEndpoint).Port.ToString(CultureInfo.InvariantCulture);
-                Done = ServeAsync(response, stall);
+                Done = ServeAsync(responses, stall);
             }
 
             public string Url { get; }
 
             public Task Done { get; }
 
-            // The response is out (for the tests that act on a stream that has started).
+            // The last response is out (for the tests that act on a response that has started).
             public Task Sent => _sent.Task;
 
-            private async Task ServeAsync(string response, bool stall)
+            // The bodies of the requests, in the order they came.
+            public List<string> Requests { get; } = [];
+
+            private async Task ServeAsync(string[] responses, bool stall)
             {
-                using TcpClient peer = await _listener.AcceptTcpClientAsync().ConfigureAwait(true);
-                using NetworkStream stream = peer.GetStream();
-                await ReadRequestAsync(stream).ConfigureAwait(true);
-                byte[] bytes = Encoding.UTF8.GetBytes(response);
-                await stream.WriteAsync(bytes, 0, bytes.Length, CancellationToken.None).ConfigureAwait(true);
-                _sent.TrySetResult(true);
-                if (stall)
+                for (int i = 0; i < responses.Length; i++)
                 {
-                    await _release.Task.ConfigureAwait(true);
+                    using TcpClient peer = await _listener.AcceptTcpClientAsync().ConfigureAwait(true);
+                    using NetworkStream stream = peer.GetStream();
+                    Requests.Add(await ReadRequestAsync(stream).ConfigureAwait(true));
+                    byte[] bytes = Encoding.UTF8.GetBytes(responses[i]);
+                    await stream.WriteAsync(bytes, 0, bytes.Length, CancellationToken.None).ConfigureAwait(true);
+                    if (i == responses.Length - 1)
+                    {
+                        _sent.TrySetResult(true);
+                        if (stall)
+                        {
+                            await _release.Task.ConfigureAwait(true);
+                        }
+                    }
                 }
             }
 
-            // The head up to the blank line, then as many bytes as Content-Length says.
-            private static async Task ReadRequestAsync(NetworkStream stream)
+            // The head up to the blank line, then as many bytes as Content-Length says. Returns the body.
+            private static async Task<string> ReadRequestAsync(NetworkStream stream)
             {
                 List<byte> head = [];
                 byte[] one = new byte[1];
@@ -143,7 +186,7 @@ namespace ChatStreamTests
                 {
                     if (await stream.ReadAsync(one, 0, 1, CancellationToken.None).ConfigureAwait(true) == 0)
                     {
-                        return;
+                        return "";
                     }
 
                     head.Add(one[0]);
@@ -162,11 +205,13 @@ namespace ChatStreamTests
                     int n = await stream.ReadAsync(body, read, length - read, CancellationToken.None).ConfigureAwait(true);
                     if (n == 0)
                     {
-                        return;
+                        break;
                     }
 
                     read += n;
                 }
+
+                return Encoding.UTF8.GetString(body);
             }
 
             public void Dispose()
@@ -183,9 +228,9 @@ namespace ChatStreamTests
         }
 
         // The start of a response that goes on: chunked, one chunk so far, no end.
-        private static string Streaming(string first)
+        private static string Streaming(int status, string first)
         {
-            return "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n" +
+            return Invariant($"HTTP/1.1 {status} Status\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n") +
                    Encoding.UTF8.GetByteCount(first).ToString("X", CultureInfo.InvariantCulture) + "\r\n" + first + "\r\n";
         }
 
@@ -233,6 +278,29 @@ namespace ChatStreamTests
                 ex = e;
             }
             Check(name, ex is not null && expected(ex), Describe(ex));
+        }
+
+        // The server holds the last response open and sends nothing more. With `cancel`, 中止 comes once that response
+        // is out; without, nobody stops the chat and only the idle limit (1 s here) can.
+        private static async Task<Exception?> StalledAsync(string[] responses, bool cancel)
+        {
+            using FakeServer server = new(responses, stall: true);
+            using CancellationTokenSource source = new();
+            OpenAiCompatibleClient client = new(server.Url, "", "test-model");
+            if (!cancel)
+            {
+                client.StreamIdleLimit = TimeSpan.FromSeconds(1);
+            }
+
+            Task<ChatReply> chat = client.ChatAsync([new ChatMessage("user", "hi")], cancellationToken: source.Token);
+            if (cancel)
+            {
+                await server.Sent.ConfigureAwait(true);
+                await Task.Delay(200, CancellationToken.None).ConfigureAwait(true);
+                source.Cancel();
+            }
+
+            return await EndingAsync(chat, TimeSpan.FromSeconds(cancel ? 3 : 5)).ConfigureAwait(true);
         }
 
         // What ended the chat within `limit`: its exception, or a TimeoutException when it was still running.

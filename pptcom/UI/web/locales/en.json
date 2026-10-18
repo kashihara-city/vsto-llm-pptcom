@@ -97,6 +97,7 @@
   "AI_SERVER_ERROR": "Stopped by an error on the server ({0}). The work so far stays as it is. Press Retry to send the same request again, or Stop to end it.",
   "AI_TURN_LIMIT": "Reached the limit of {0} turns; ending.",
   "AI_REPLY_CUT": "The model's reply reached the output limit ({0} tokens) and was cut off, so the request ends here.",
+  "AI_DECK_CLOSED": "The presentation this request was working on was closed, so the request ends here.",
   "HTTP_STATUS": "HTTP {0}",
   "CONNECTION_DROPPED": "The connection dropped",
   "STREAM_STALLED": "nothing arrived for {0} minute(s)",

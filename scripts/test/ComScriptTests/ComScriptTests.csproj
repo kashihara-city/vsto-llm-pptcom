@@ -41,6 +41,7 @@
     <Compile Include="..\..\..\pptcom\ComProxy\ComSecurityPolicy.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\IDispatchMinimal.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\ComProxyEngine.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\DeckReader.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\ComScriptParser.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\ComScriptScope.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\VbaOps.cs" />

@@ -8,8 +8,10 @@
 
   Version: <ApplicationVersion> in pptcom.csproj (e.g. 0.0.1.0 -> MSI 0.0.1).
 
-  usage: powershell -ExecutionPolicy Bypass -File scripts\build\build.ps1
+  usage: powershell -ExecutionPolicy Bypass -File scripts\build\build.ps1 [-WarningsLog <file>]
+         -WarningsLog: the add-in build's warnings also go to <file>, for scripts\test\build-warnings.py.
 #>
+param([string]$WarningsLog)
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $csproj = Join-Path $root "pptcom\pptcom.csproj"
@@ -30,7 +32,9 @@ if (-not $msbuild) { throw "MSBuild (Visual Studio or Build Tools) not found" }
 #    output folder; put back whatever was registered before (usually the developer's bin\Debug).
 $addinKey = "HKCU:\Software\Microsoft\Office\PowerPoint\Addins\pptcom"
 $before = if (Test-Path $addinKey) { (Get-ItemProperty $addinKey).Manifest } else { $null }
-& $msbuild $csproj -p:Configuration=Release -p:Platform=AnyCPU -nologo -v:minimal
+$log = @()
+if ($WarningsLog) { $log += "-flp:logfile=$WarningsLog;warningsonly" }
+& $msbuild $csproj -p:Configuration=Release -p:Platform=AnyCPU -nologo -v:minimal @log
 $buildExit = $LASTEXITCODE
 if ($before) { Set-ItemProperty $addinKey -Name Manifest -Value $before }
 elseif (Test-Path $addinKey) { Remove-Item $addinKey -Recurse }

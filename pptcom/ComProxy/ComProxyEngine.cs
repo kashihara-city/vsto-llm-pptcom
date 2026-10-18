@@ -59,6 +59,9 @@ namespace Pptcom.ComProxy
             return _handles.TryGetValue(id, out value);
         }
 
+        // The deck that ActivePresentation stands for in the scripts (BindPresentation); null when none was open.
+        public object? Presentation => _handles.TryGetValue(PresentationId, out object? pres) ? pres : null;
+
         // A picture file the host wrote itself (an image from a document the user attached), bound to id
         // the way a generated image is: AddPicture accepts it through that variable, and a script still
         // cannot point AddPicture at any other file. The file is deleted with the generated ones.

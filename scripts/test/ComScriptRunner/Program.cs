@@ -411,21 +411,21 @@ namespace ComScriptRunner
             if (req["read"] is JToken read)
             {
                 // pptread: the tool text and the slides to render (each then fetched with export + brief).
-                string text = DeckReader.Read((object)app, read.ToString(), out List<int> toRender);
+                string text = DeckReader.Read(engine.Presentation, read.ToString(), out List<int> toRender);
                 return new JObject { ["text"] = text, ["slides"] = new JArray(toRender) };
             }
 
             if (req["fingerprint"] is not null)
             {
                 // The add-in's check for edits made between two requests: remember the deck now ...
-                fingerprint = DeckReader.TakeFingerprint((object)app, engine.ShapeVariables());
+                fingerprint = DeckReader.TakeFingerprint(engine.Presentation, engine.ShapeVariables());
                 return new JObject { ["slides"] = fingerprint.Slides.Count };
             }
 
             if (req["compare"] is not null)
             {
                 // ... and list what changed since.
-                DeckReader.DeckChanges changes = DeckReader.Compare(fingerprint, DeckReader.TakeFingerprint((object)app, engine.ShapeVariables()));
+                DeckReader.DeckChanges changes = DeckReader.Compare(fingerprint, DeckReader.TakeFingerprint(engine.Presentation, engine.ShapeVariables()));
                 return new JObject
                 {
                     ["lines"] = new JArray(changes.Lines),
@@ -438,7 +438,7 @@ namespace ComScriptRunner
             if (req["brief"] is JToken brief)
             {
                 // The shape list the add-in sends with each slide rendering.
-                return new JObject { ["text"] = DeckReader.Brief((object)app, (int)brief, engine.ShapeVariables()) };
+                return new JObject { ["text"] = DeckReader.Brief(engine.Presentation, (int)brief, engine.ShapeVariables()) };
             }
 
             if (req["image"] is JToken image)
@@ -454,7 +454,7 @@ namespace ComScriptRunner
 
             if (req["export"] is JToken export)
             {
-                return new JObject { ["png"] = DeckReader.ExportSlidePng((object)app, (int)export) };
+                return new JObject { ["png"] = DeckReader.ExportSlidePng(engine.Presentation, (int)export) };
             }
 
             if (req["open"] is JToken open)

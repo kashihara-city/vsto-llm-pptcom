@@ -70,6 +70,22 @@ jobs:
           python -X utf8 scripts/test/js-syntax.py
           if ($LASTEXITCODE -ne 0) { throw "a script of the task pane does not parse" }
 
+      - name: Run the attachment tests
+        shell: pwsh
+        run: |
+          # The task pane's docs.js, in a stand-in for the browser: every file is announced before it is read, and
+          # ends with attach or attachFailed whatever fails, while the next ones go on.
+          node scripts/test/docs-queue.cjs
+          if ($LASTEXITCODE -ne 0) { throw "attachment tests failed" }
+
+      - name: Run the rig tests
+        shell: pwsh
+        run: |
+          # How the rig (tool_loop.py) reads a reply and ends a run that failed, against a server on the loopback
+          # address; no LLM, no PowerPoint.
+          python -X utf8 scripts/test/rig-stream.py
+          if ($LASTEXITCODE -ne 0) { throw "rig tests failed" }
+
       - name: Prepare the build
         # MSBuild, Rust, the VSTO runtime, the PIAs and a throwaway signing certificate: .github/actions/build-setup.
         uses: ./.github/actions/build-setup
@@ -99,7 +115,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          & $env:MSBUILD scripts\test\ComScriptTests\ComScriptTests.csproj -restore -p:Configuration=Debug -p:Platform=AnyCPU -nologo -v:minimal
+          & $env:MSBUILD scripts\test\ComScriptTests\ComScriptTests.csproj -restore -p:Configuration=Debug -p:Platform=AnyCPU -nologo -v:minimal "-flp:logfile=$env:RUNNER_TEMP\tests.log;warningsonly"
           if ($LASTEXITCODE -ne 0) { throw "ComScriptTests build failed" }
           scripts\test\ComScriptTests\bin\Debug\ComScriptTests.exe
           if ($LASTEXITCODE -ne 0) { throw "parser tests failed" }
@@ -107,10 +123,10 @@ jobs:
       - name: Build and run the chat stream tests
         shell: pwsh
         run: |
-          # How a reply's stream is read (whole replies, tool calls in pieces, failures, 中止 and the idle limit),
-          # against a server on the loopback address; no LLM is called.
+          # How a reply's stream is read (whole replies, tool calls in pieces, failures, 中止 and the idle limit on a
+          # stream or an error's body), against a server on the loopback address; no LLM is called.
           $ErrorActionPreference = "Stop"
-          & $env:MSBUILD scripts\test\ChatStreamTests\ChatStreamTests.csproj -restore -p:Configuration=Debug -p:Platform=AnyCPU -nologo -v:minimal
+          & $env:MSBUILD scripts\test\ChatStreamTests\ChatStreamTests.csproj -restore -p:Configuration=Debug -p:Platform=AnyCPU -nologo -v:minimal "-flp:logfile=$env:RUNNER_TEMP\stream.log;warningsonly"
           if ($LASTEXITCODE -ne 0) { throw "ChatStreamTests build failed" }
           scripts\test\ChatStreamTests\bin\Debug\ChatStreamTests.exe
           if ($LASTEXITCODE -ne 0) { throw "chat stream tests failed" }
@@ -126,7 +142,7 @@ jobs:
       - name: Build ComScriptRunner
         shell: pwsh
         run: |
-          & $env:MSBUILD scripts\test\ComScriptRunner\ComScriptRunner.csproj -restore -p:Configuration=Debug -p:Platform=AnyCPU -nologo -v:minimal
+          & $env:MSBUILD scripts\test\ComScriptRunner\ComScriptRunner.csproj -restore -p:Configuration=Debug -p:Platform=AnyCPU -nologo -v:minimal "-flp:logfile=$env:RUNNER_TEMP\runner.log;warningsonly"
           if ($LASTEXITCODE -ne 0) { throw "ComScriptRunner build failed" }
 
       - name: Build the MSI
@@ -137,7 +153,7 @@ jobs:
           # build.ps1 builds the add-in (Release) itself; restore its NuGet packages first.
           & $env:MSBUILD pptcom\pptcom.csproj -t:Restore -p:Configuration=Release -p:Platform=AnyCPU -nologo -v:minimal
           if ($LASTEXITCODE -ne 0) { throw "restore failed" }
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build\build.ps1
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build\build.ps1 -WarningsLog "$env:RUNNER_TEMP\addin.log"
           if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed" }
           Get-ChildItem pptcom\bin\Release -File | ForEach-Object { "{0,-55} {1,10:N0}" -f $_.Name, $_.Length }
           $msi = Get-ChildItem release -Filter *.msi | Select-Object -First 1
@@ -149,6 +165,15 @@ jobs:
           [IO.File]::WriteAllText("$($msi.FullName).sha256", "$hash  $($msi.Name)`n", [Text.Encoding]::ASCII)
           "msi=$($msi.FullName)" >> $env:GITHUB_OUTPUT
           "msi_sha256=$hash" >> $env:GITHUB_OUTPUT
+
+      - name: Check the build warnings
+        shell: pwsh
+        run: |
+          # As in check.yml, before anything is attested or published: warnings are errors, except CS8032 (an
+          # analyzer that cannot be created) for the one known analyzer; another one would be an analyzer whose
+          # rules silently stopped running.
+          python -X utf8 scripts/test/build-warnings.py "$env:RUNNER_TEMP\tests.log" "$env:RUNNER_TEMP\stream.log" "$env:RUNNER_TEMP\runner.log" "$env:RUNNER_TEMP\addin.log"
+          if ($LASTEXITCODE -ne 0) { throw "a build had a warning other than the known CS8032" }
 
       - name: Make and check the SBOM
         id: sbom

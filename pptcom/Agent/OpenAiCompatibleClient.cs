@@ -256,30 +256,50 @@ namespace Pptcom.Agent
             CancellationToken cancellationToken)
         {
             HttpResponseMessage first = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(true);
-            if (!first.IsSuccessStatusCode && payload["mm_processor_kwargs"] is not null)
+            if (first.IsSuccessStatusCode || payload["mm_processor_kwargs"] is null)
             {
-                string body = await first.Content.ReadAsStringAsync().ConfigureAwait(true);
-                if (body.IndexOf("mm_processor_kwargs", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    first.Dispose();
-                    _sendMmProcessorKwargs = false;
-                    payload.Remove("mm_processor_kwargs");
-                    using HttpRequestMessage retry = makeRequest();
-                    first = await Http.SendAsync(retry, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(true);
-                }
-                else
-                {
-                    HttpStatusCode status = first.StatusCode;
-                    first.Dispose();
-                    if (IsServerError(status))
-                    {
-                        throw new LlmServerException((int)status, Invariant($"LLM call failed: {(int)status} {body}"));
-                    }
-
-                    throw new InvalidOperationException(Invariant($"LLM call failed: {(int)status} {body}"));
-                }
+                return first;
             }
-            return first;
+
+            HttpStatusCode status = first.StatusCode;
+            string body;
+            using (first)
+            {
+                body = await ReadErrorBodyAsync(first, cancellationToken).ConfigureAwait(true);
+            }
+            if (body.IndexOf("mm_processor_kwargs", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                _sendMmProcessorKwargs = false;
+                payload.Remove("mm_processor_kwargs");
+                using HttpRequestMessage retry = makeRequest();
+                return await Http.SendAsync(retry, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(true);
+            }
+
+            if (IsServerError(status))
+            {
+                throw new LlmServerException((int)status, Invariant($"LLM call failed: {(int)status} {body}"));
+            }
+
+            throw new InvalidOperationException(Invariant($"LLM call failed: {(int)status} {body}"));
+        }
+
+        // An error's body, shown with its status. 中止 and StreamIdleLimit apply as they do to the stream (ReadChatAsync):
+        // a gateway can send the headers of a 503 and never finish the body. A body that does not arrive within the
+        // limit is left out, and the status alone says what failed.
+        private async Task<string> ReadErrorBodyAsync(HttpResponseMessage resp, CancellationToken cancellationToken)
+        {
+            using CancellationTokenSource idle = new(StreamIdleLimit);
+            using CancellationTokenRegistration onCancel = cancellationToken.Register(resp.Dispose);
+            using CancellationTokenRegistration onIdle = idle.Token.Register(resp.Dispose);
+            try
+            {
+                return await resp.Content.ReadAsStringAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex) && (cancellationToken.IsCancellationRequested || idle.IsCancellationRequested))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Invariant($"(the body did not arrive within {StreamIdleLimit.TotalMinutes} min)");
+            }
         }
 
         // The reply, read as it streams. 中止 (the token) and a stream that sends nothing for StreamIdleLimit both
@@ -292,7 +312,7 @@ namespace Pptcom.Agent
             {
                 if (!resp.IsSuccessStatusCode)
                 {
-                    string body = await resp.Content.ReadAsStringAsync().ConfigureAwait(true);
+                    string body = await ReadErrorBodyAsync(resp, cancellationToken).ConfigureAwait(true);
                     string message = Invariant($"LLM call failed: {(int)resp.StatusCode} {resp.ReasonPhrase}\n{body}");
                     if (IsServerError(resp.StatusCode))
                     {

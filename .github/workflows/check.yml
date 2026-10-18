@@ -52,6 +52,22 @@ jobs:
           python -X utf8 scripts/test/js-syntax.py
           if ($LASTEXITCODE -ne 0) { throw "a script of the task pane does not parse" }
 
+      - name: Run the attachment tests
+        shell: pwsh
+        run: |
+          # The task pane's docs.js, in a stand-in for the browser: every file is announced before it is read, and
+          # ends with attach or attachFailed whatever fails, while the next ones go on.
+          node scripts/test/docs-queue.cjs
+          if ($LASTEXITCODE -ne 0) { throw "attachment tests failed" }
+
+      - name: Run the rig tests
+        shell: pwsh
+        run: |
+          # How the rig (tool_loop.py) reads a reply and ends a run that failed, against a server on the loopback
+          # address; no LLM, no PowerPoint.
+          python -X utf8 scripts/test/rig-stream.py
+          if ($LASTEXITCODE -ne 0) { throw "rig tests failed" }
+
       - name: Prepare the build
         # MSBuild, Rust, the VSTO runtime, the PIAs and a throwaway signing certificate: .github/actions/build-setup.
         uses: ./.github/actions/build-setup
@@ -68,8 +84,8 @@ jobs:
       - name: Build and run the chat stream tests
         shell: pwsh
         run: |
-          # How a reply's stream is read (whole replies, tool calls in pieces, failures, 中止 and the idle limit),
-          # against a server on the loopback address; no LLM is called.
+          # How a reply's stream is read (whole replies, tool calls in pieces, failures, 中止 and the idle limit on a
+          # stream or an error's body), against a server on the loopback address; no LLM is called.
           $ErrorActionPreference = "Stop"
           & $env:MSBUILD scripts\test\ChatStreamTests\ChatStreamTests.csproj -restore -p:Configuration=Debug -p:Platform=AnyCPU -nologo -v:minimal "-flp:logfile=$env:RUNNER_TEMP\stream.log;warningsonly"
           if ($LASTEXITCODE -ne 0) { throw "ChatStreamTests build failed" }

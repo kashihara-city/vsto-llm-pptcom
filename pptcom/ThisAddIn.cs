@@ -642,7 +642,7 @@ namespace Pptcom
             {
                 try
                 {
-                    DeckReader.Fingerprint now = DeckReader.TakeFingerprint(this.Application, c.Engine.ShapeVariables());
+                    DeckReader.Fingerprint now = DeckReader.TakeFingerprint(c.Engine.Presentation, c.Engine.ShapeVariables());
                     DeckReader.DeckChanges changes = DeckReader.Compare(c.LastSeen, now);
                     if (changes.Lines.Count > 0)
                     {
@@ -661,7 +661,7 @@ namespace Pptcom
             int slides = 0;
             try
             {
-                slides = Application.ActivePresentation.Slides.Count;
+                slides = c.Engine.Presentation is Microsoft.Office.Interop.PowerPoint.Presentation pres ? pres.Slides.Count : 0;
             }
             catch (COMException)
             {
@@ -882,7 +882,7 @@ namespace Pptcom
                 await RunAgentAsync(userMessage, run).ConfigureAwait(true);
                 // max_turns: the model was still calling tools when the turn limit stopped it. max_tokens: a reply
                 // reached the output limit before it said anything to do (see RunAgentAsync).
-                run.Outcome = run.HitTurnLimit ? "max_turns" : run.HitTokenLimit ? "max_tokens" : "completed";
+                run.Outcome = run.DeckClosed ? "deck_closed" : run.HitTurnLimit ? "max_turns" : run.HitTokenLimit ? "max_tokens" : "completed";
             }
             catch (OperationCanceledException)
             {
@@ -904,7 +904,7 @@ namespace Pptcom
 
         // For the requests after this one: its part of the conversation, shortened; how it ended if it
         // did not finish; and the deck as it left it (to tell them what the user changes in between).
-        private void RememberForLater(RunRecord run)
+        private static void RememberForLater(RunRecord run)
         {
             Conversation? c = run.Conversation;
             if (c is null || run.Messages is null)
@@ -916,7 +916,7 @@ namespace Pptcom
             {
                 c.Earlier.AddRange(ShortenForLater(run.Messages, run.FirstOwnMessage, (run.HandEdits is not null ? run.HandEdits + "\n" : "") + run.Request));
                 c.LastEnding = DescribeEnding(run);
-                c.LastSeen = DeckReader.TakeFingerprint(this.Application, c.Engine.ShapeVariables());
+                c.LastSeen = DeckReader.TakeFingerprint(c.Engine.Presentation, c.Engine.ShapeVariables());
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
@@ -935,6 +935,7 @@ namespace Pptcom
             public int ServerErrors;
             public bool HitTurnLimit;
             public bool HitTokenLimit;
+            public bool DeckClosed;
             public string? FinalReply;
             public Conversation? Conversation; // null until the request has one (it may fail before)
             public ComProxyEngine? Engine;
@@ -1064,13 +1065,13 @@ namespace Pptcom
             }
         }
 
-        // A copy of the deck and PNGs of its slides; the open deck keeps its own name and unsaved state.
-        private void SaveDeck(RunRecord run, string dir)
+        // A copy of the deck the request edited and PNGs of its slides; the open deck keeps its own name and
+        // unsaved state.
+        private static void SaveDeck(RunRecord run, string dir)
         {
             try
             {
-                Microsoft.Office.Interop.PowerPoint.Presentation pres = this.Application.ActivePresentation;
-                if (pres.Slides.Count > 0)
+                if (run.Engine?.Presentation is Microsoft.Office.Interop.PowerPoint.Presentation pres && pres.Slides.Count > 0)
                 {
                     pres.SaveCopyAs(Path.Combine(dir, "deck.pptx"));
                     pres.Export(Path.Combine(dir, "deck_slides"), "PNG", 1280, 720);
@@ -1308,6 +1309,16 @@ namespace Pptcom
                     break;
                 }
 
+                // The user may close the deck while the model thinks: its scripts would then fail, and the
+                // model would go on trying until the turn limit.
+                if (WasClosed(engine.Presentation))
+                {
+                    run.DeckClosed = true;
+                    _paneControl.Log("AI_DECK_CLOSED");
+                    LogToFile("!!! the presentation this request works on was closed");
+                    return;
+                }
+
                 // run.ScriptLines kept current: a cancelled request's summary says whether anything ran.
                 await RunToolCallsAsync(engine, knownIds, reply, turn, run, messages, r =>
                 {
@@ -1325,6 +1336,27 @@ namespace Pptcom
             run.ScriptLines = totalLines;
             TimeSpan elapsed = DateTime.Now - requestStart;
             _paneControl.Log("REQUEST_DONE", elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture), Chars(totalReasoningChars), totalLines);
+        }
+
+        // The presentation was closed: its object then answers every call with an error (0x80048010). It is not
+        // looked up in Application.Presentations: in the add-in, the objects that list hands out are not the same
+        // RCW as the one ActivePresentation gave. A request that started without a deck has none to lose.
+        private static bool WasClosed(object? presentation)
+        {
+            if (presentation is null)
+            {
+                return false;
+            }
+
+            try
+            {
+                _ = ((dynamic)presentation).Name;
+                return false;
+            }
+            catch (COMException)
+            {
+                return true;
+            }
         }
 
         // The model's reply for this turn. A failure on the server side (5xx, a dropped connection) is not resent by
@@ -1473,7 +1505,7 @@ namespace Pptcom
         private const int MaxAutoRendersPerCall = 20;
 
         // Renders the slides the last pptcom call changed and notes it in the tool result.
-        private ToolOutcome WithAutoRenders(ComProxyEngine engine, ToolOutcome outcome)
+        private static ToolOutcome WithAutoRenders(ComProxyEngine engine, ToolOutcome outcome)
         {
             List<int> touched = engine.TakeTouchedSlideIndexes();
             if (touched.Count == 0)
@@ -1492,9 +1524,9 @@ namespace Pptcom
 
                 try
                 {
-                    outcome.Renders.Add(new KeyValuePair<string, string>(Invariant($"slide {n}"), DeckReader.ExportSlidePng(this.Application, n)));
+                    outcome.Renders.Add(new KeyValuePair<string, string>(Invariant($"slide {n}"), DeckReader.ExportSlidePng(engine.Presentation, n)));
                     rendered.Add(n);
-                    AddInventory(outcome, n, variables);
+                    AddInventory(engine, outcome, n, variables);
                 }
                 catch (Exception ex) when (Guard.IsRecoverable(ex))
                 {
@@ -1516,11 +1548,11 @@ namespace Pptcom
         }
 
         // The shape list that goes with a slide rendering (what a For Each over its Shapes would print).
-        private void AddInventory(ToolOutcome outcome, int slide, IDictionary<string, List<string>> variables)
+        private static void AddInventory(ComProxyEngine engine, ToolOutcome outcome, int slide, IDictionary<string, List<string>> variables)
         {
             try
             {
-                outcome.Inventories[Invariant($"slide {slide}")] = DeckReader.Brief(this.Application, slide, variables);
+                outcome.Inventories[Invariant($"slide {slide}")] = DeckReader.Brief(engine.Presentation, slide, variables);
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
@@ -1588,19 +1620,19 @@ namespace Pptcom
         }
 
         // pptread: renderings and shape lists of slides of the open deck.
-        private ToolOutcome ReadSlidesTool(ComProxyEngine engine, JObject args)
+        private static ToolOutcome ReadSlidesTool(ComProxyEngine engine, JObject args)
         {
             // "3", "4-7" or a bare number; missing = all slides.
             JToken? slideArg = args["slide"];
             string slides = slideArg is null || slideArg.Type == JTokenType.Null ? "" : slideArg.ToString();
             try
             {
-                ToolOutcome o = new(DeckReader.Read(this.Application, slides, out List<int> toRender));
+                ToolOutcome o = new(DeckReader.Read(engine.Presentation, slides, out List<int> toRender));
                 Dictionary<string, List<string>> variables = engine.ShapeVariables();
                 foreach (int n in toRender)
                 {
-                    o.Renders.Add(new KeyValuePair<string, string>(Invariant($"slide {n}"), DeckReader.ExportSlidePng(this.Application, n)));
-                    AddInventory(o, n, variables);
+                    o.Renders.Add(new KeyValuePair<string, string>(Invariant($"slide {n}"), DeckReader.ExportSlidePng(engine.Presentation, n)));
+                    AddInventory(engine, o, n, variables);
                 }
                 return o;
             }
@@ -1688,7 +1720,7 @@ namespace Pptcom
         }
 
         // pptcom: a script run statement by statement.
-        private async Task<ToolOutcome> ScriptToolAsync(ComProxyEngine engine, List<string> knownIds, JObject args, Action<int> countLines)
+        private static async Task<ToolOutcome> ScriptToolAsync(ComProxyEngine engine, List<string> knownIds, JObject args, Action<int> countLines)
         {
             string script = (string?)args["script"] ?? "";
             ComScriptParser.ParseResult parsed = ComScriptParser.Parse(script, knownIds, MaxScriptLinesPerCall);
