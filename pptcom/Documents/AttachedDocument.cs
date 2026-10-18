@@ -16,16 +16,16 @@ namespace Pptcom.Documents
     // it embeds; the model reads it with the docread tool (DocRead). Kept in memory with the conversation.
     internal sealed class AttachedDocument
     {
-        public string Id;          // "d1", "d2", ... in the order attached, never reused within a conversation
-        public string Name;        // the file name
-        public string Format;      // anydoc's format name (docx, xlsx, pdf, ...) or "text"
-        public long Size;          // bytes of the file
-        public string[] Lines;
+        public required string Id;     // "d1", "d2", ... in the order attached, never reused within a conversation
+        public required string Name;   // the file name
+        public required string Format; // anydoc's format name (docx, xlsx, pdf, ...) or "text"
+        public long Size;              // bytes of the file
+        public string[] Lines = [];
         public readonly List<AttachedImage> Images = [];
         // PDFs: the page count, and the file itself - the task pane draws pages from it for docread page.
         // The text has a "[page N]" line where each page starts.
         public int Pages;
-        public byte[] Source;
+        public byte[]? Source;
 
         // Each image becomes a file in the temp folder and a pptcom variable: a document with more keeps the
         // first ones (the rest stay marked [image] in the text).
@@ -41,8 +41,8 @@ namespace Pptcom.Documents
             AttachedDocument doc = new()
             {
                 Id = id,
-                Name = (string)m["name"] ?? "document",
-                Format = (string)m["format"] ?? "",
+                Name = (string?)m["name"] ?? "document",
+                Format = (string?)m["format"] ?? "",
                 Size = (long?)m["size"] ?? 0,
             };
             Dictionary<int, AttachedImage> byIndex = [];
@@ -56,7 +56,7 @@ namespace Pptcom.Documents
                 byte[] data;
                 try
                 {
-                    data = Convert.FromBase64String((string)img["data"] ?? "");
+                    data = Convert.FromBase64String((string?)img["data"] ?? "");
                 }
                 catch (FormatException)
                 {
@@ -70,13 +70,13 @@ namespace Pptcom.Documents
                 AttachedImage image = new()
                 {
                     Name = Invariant($"{id}_img{doc.Images.Count + 1}"),
-                    MediaType = (string)img["mediaType"] ?? "",
+                    MediaType = (string?)img["mediaType"] ?? "",
                     Data = data,
                 };
                 byIndex[(int?)img["index"] ?? -1] = image;
                 doc.Images.Add(image);
             }
-            string text = ((string)m["text"] ?? "").Replace("\r\n", "\n").Replace('\r', '\n');
+            string text = ((string?)m["text"] ?? "").Replace("\r\n", "\n").Replace('\r', '\n');
             string[] lines = text.Length == 0 ? [] : text.Split('\n');
             for (int i = 0; i < lines.Length; i++)
             {
@@ -98,8 +98,8 @@ namespace Pptcom.Documents
             }
             doc.Lines = lines;
             doc.Pages = (int?)m["pages"] ?? 0;
-            string source = (string)m["source"];
-            if (!string.IsNullOrEmpty(source))
+            string source = (string?)m["source"] ?? "";
+            if (source.Length > 0)
             {
                 try
                 {

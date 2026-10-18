@@ -45,27 +45,27 @@ namespace Pptcom.UI
         private bool _initStarted;
 
         // The request as typed.
-        public event EventHandler<TextEventArgs> SendRequested;
-        public event EventHandler CancelRequested;
+        public event EventHandler<TextEventArgs>? SendRequested;
+        public event EventHandler? CancelRequested;
         // Shown only while a request waits after a server-side error (5xx / dropped connection).
-        public event EventHandler RetryRequested;
+        public event EventHandler? RetryRequested;
         // Settings area: the endpoint is applied with the 取得 button (or Enter), models on selection.
-        public event EventHandler<TextEventArgs> EndpointSubmitted;
-        public event EventHandler<TextEventArgs> ChatModelSelected;
-        public event EventHandler<TextEventArgs> ImageModelSelected;
+        public event EventHandler<TextEventArgs>? EndpointSubmitted;
+        public event EventHandler<TextEventArgs>? ChatModelSelected;
+        public event EventHandler<TextEventArgs>? ImageModelSelected;
         // The API key typed into the masked dialog (never shown back; stored in Windows Credential Manager).
-        public event EventHandler<TextEventArgs> ApiKeyEntered;
+        public event EventHandler<TextEventArgs>? ApiKeyEntered;
         // 新しい会話: forget the earlier requests on this deck (their summary, variables and images).
-        public event EventHandler NewConversationRequested;
+        public event EventHandler? NewConversationRequested;
         // The two switches in the settings (AddinSettings.ExternalControl / SaveProgress).
-        public event EventHandler<SwitchEventArgs> ExternalControlChanged;
-        public event EventHandler<SwitchEventArgs> SaveProgressChanged;
+        public event EventHandler<SwitchEventArgs>? ExternalControlChanged;
+        public event EventHandler<SwitchEventArgs>? SaveProgressChanged;
         // A document the page converted (UI\web\docs.js): {ticket, name, size, format, text, images}.
-        public event EventHandler<DocumentConvertedEventArgs> DocumentConverted;
+        public event EventHandler<DocumentConvertedEventArgs>? DocumentConverted;
         // One it could not convert: ticket, file name, reason (docworker.js), detail.
-        public event EventHandler<DocumentFailedEventArgs> DocumentFailed;
+        public event EventHandler<DocumentFailedEventArgs>? DocumentFailed;
         // The user removed an attached document (its id).
-        public event EventHandler<TextEventArgs> DocumentRemoved;
+        public event EventHandler<TextEventArgs>? DocumentRemoved;
 
         public AiTaskPaneControl()
         {
@@ -172,7 +172,7 @@ namespace Pptcom.UI
             }
 
             path = Uri.UnescapeDataString(path);
-            Stream stream = path.Length == 0 || path.Contains("..") ? null
+            Stream? stream = path.Length == 0 || path.Contains("..") ? null
                 : typeof(AiTaskPaneControl).Assembly.GetManifestResourceStream(ResourcePrefix + path.Replace('/', '\\'));
             if (stream is null)
             {
@@ -225,8 +225,8 @@ namespace Pptcom.UI
             {
                 return;
             }
-            string value = (string)m["value"];
-            switch ((string)m["type"])
+            string value = (string?)m["value"] ?? "";
+            switch ((string?)m["type"])
             {
                 case "ready":
                     _pageReady = true;
@@ -238,7 +238,7 @@ namespace Pptcom.UI
                     _pending.Clear();
                     break;
                 case "send":
-                    string text = ((string)m["text"] ?? "").Trim();
+                    string text = ((string?)m["text"] ?? "").Trim();
                     if (text.Length == 0)
                     {
                         return;
@@ -257,17 +257,17 @@ namespace Pptcom.UI
                     RetryRequested?.Invoke(this, EventArgs.Empty);
                     break;
                 case "endpoint":
-                    EndpointSubmitted?.Invoke(this, new TextEventArgs((value ?? "").Trim()));
+                    EndpointSubmitted?.Invoke(this, new TextEventArgs(value.Trim()));
                     break;
                 case "chatModel":
-                    if (!string.IsNullOrEmpty(value))
+                    if (value.Length > 0)
                     {
                         ChatModelSelected?.Invoke(this, new TextEventArgs(value));
                     }
 
                     break;
                 case "imageModel":
-                    if (!string.IsNullOrEmpty(value))
+                    if (value.Length > 0)
                     {
                         ImageModelSelected?.Invoke(this, new TextEventArgs(value));
                     }
@@ -286,23 +286,23 @@ namespace Pptcom.UI
                     DocumentConverted?.Invoke(this, new DocumentConvertedEventArgs(m));
                     break;
                 case "attachFailed":
-                    DocumentFailed?.Invoke(this, new DocumentFailedEventArgs((string)m["ticket"], (string)m["name"], (string)m["reason"], (string)m["detail"]));
+                    DocumentFailed?.Invoke(this, new DocumentFailedEventArgs((string?)m["ticket"] ?? "", (string?)m["name"] ?? "", (string?)m["reason"] ?? "", (string?)m["detail"] ?? ""));
                     break;
                 case "pagesRendered":
-                    if (_renderRequests.TryGetValue((string)m["request"] ?? "", out TaskCompletionSource<JObject> waiting))
+                    if (_renderRequests.TryGetValue((string?)m["request"] ?? "", out TaskCompletionSource<JObject> waiting))
                     {
                         waiting.TrySetResult(m);
                     }
 
                     break;
                 case "detach":
-                    DocumentRemoved?.Invoke(this, new TextEventArgs((string)m["id"]));
+                    DocumentRemoved?.Invoke(this, new TextEventArgs((string?)m["id"] ?? ""));
                     break;
                 case "apiKey":
-                    string key = AskApiKey(FindForm());
-                    if (!string.IsNullOrWhiteSpace(key))
+                    string key = (AskApiKey(FindForm()) ?? "").Trim();
+                    if (key.Length > 0)
                     {
-                        ApiKeyEntered?.Invoke(this, new TextEventArgs(key.Trim()));
+                        ApiKeyEntered?.Invoke(this, new TextEventArgs(key));
                     }
 
                     break;
@@ -340,7 +340,8 @@ namespace Pptcom.UI
         }
 
         // Small masked input dialog. Returns null when cancelled; the key is never displayed.
-        private static string AskApiKey(IWin32Window owner)
+        // The key typed, or null when the dialog was cancelled.
+        private static string? AskApiKey(IWin32Window owner)
         {
             Font font = new("Yu Gothic UI", 9F);
             using Form form = new()
@@ -430,20 +431,21 @@ namespace Pptcom.UI
                 JObject reply = await done.Task.ConfigureAwait(true); // already finished
                 if (reply["error"] is not null)
                 {
-                    throw new InvalidOperationException((string)reply["error"]);
+                    throw new InvalidOperationException((string?)reply["error"]);
                 }
 
                 Dictionary<int, byte[]> result = [];
                 foreach (JObject p in (reply["pages"] as JArray ?? []).OfType<JObject>())
                 {
                     int n = (int?)p["page"] ?? 0;
-                    if (p["data"] is not null)
+                    string? data = (string?)p["data"];
+                    if (data is not null)
                     {
-                        result[n] = Convert.FromBase64String((string)p["data"]);
+                        result[n] = Convert.FromBase64String(data);
                     }
                     else
                     {
-                        errors[n] = (string)p["error"] ?? "not drawn";
+                        errors[n] = (string?)p["error"] ?? "not drawn";
                     }
                 }
                 return result;

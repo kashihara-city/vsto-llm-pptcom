@@ -14,7 +14,7 @@ namespace Pptcom.ComProxy
     // Results that are whole numbers come back as int (what COM properties expect), others as double.
     internal static class VbaOps
     {
-        public static object Binary(object a, string op, object b)
+        public static object Binary(object? a, string op, object? b)
         {
             if (op == "&")
             {
@@ -82,18 +82,18 @@ namespace Pptcom.ComProxy
             }
         }
 
-        public static object Negate(object a)
+        public static object Negate(object? a)
         {
             return Result(-ToNumber(a));
         }
 
         // VBA's RGB: each part rounded to a whole number; above 255 counts as 255, below 0 is an error.
-        public static object Rgb(object r, object g, object b)
+        public static object Rgb(object? r, object? g, object? b)
         {
             return Part(r) | (Part(g) << 8) | (Part(b) << 16);
         }
 
-        private static int Part(object v)
+        private static int Part(object? v)
         {
             long n = Whole(ToNumber(v));
             if (n < 0)
@@ -106,7 +106,7 @@ namespace Pptcom.ComProxy
 
         // Chr / ChrW. A line feed or carriage return becomes CR, PowerPoint's paragraph break (as
         // vbCr / vbLf do); Chr(11) is the soft line break.
-        public static string Chr(object code)
+        public static string Chr(object? code)
         {
             long n = Whole(ToNumber(code));
             if (n <= 0 || n > 0xFFFF)
@@ -117,7 +117,7 @@ namespace Pptcom.ComProxy
             return n == 10 || n == 13 ? "\r" : ((char)n).ToString();
         }
 
-        public static double ToNumber(object v)
+        public static double ToNumber(object? v)
         {
             if (v is bool)
             {
@@ -151,7 +151,7 @@ namespace Pptcom.ComProxy
             throw new InvalidOperationException("arithmetic needs a number, not " + v.GetType().Name);
         }
 
-        public static string ToText(object v)
+        public static string ToText(object? v)
         {
             if (v is null)
             {

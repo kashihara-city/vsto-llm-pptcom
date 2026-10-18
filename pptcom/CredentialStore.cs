@@ -43,7 +43,7 @@ namespace Pptcom
         [DllImport("advapi32.dll")]
         private static extern void CredFree(IntPtr buffer);
 
-        public static string Read(string target)
+        public static string? Read(string target)
         {
             if (!CredRead(target, CRED_TYPE_GENERIC, 0, out IntPtr p))
             {

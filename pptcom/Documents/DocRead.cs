@@ -31,7 +31,7 @@ namespace Pptcom.Documents
         private static readonly char[] ImageSeparators = [',', ' ', ';'];
 
         // "3", "3-5", "3,7" -> page numbers (at most MaxPagesPerRead; null when it does not parse).
-        public static List<int> ParsePages(string spec)
+        public static List<int>? ParsePages(string spec)
         {
             List<int> pages = [];
             foreach (string part in spec.Split(PageSeparators, StringSplitOptions.RemoveEmptyEntries))
@@ -65,22 +65,22 @@ namespace Pptcom.Documents
         // in the next message, like slide renderings.
         public static string Run(IList<AttachedDocument> docs, JObject args, List<KeyValuePair<string, string>> renders)
         {
-            string images = ((string)args["image"] ?? "").Trim();
+            string images = ((string?)args["image"] ?? "").Trim();
             if (images.Length > 0)
             {
                 return Images(docs, images, renders);
             }
 
-            string id = ((string)args["doc"] ?? "").Trim();
-            AttachedDocument doc = docs.FirstOrDefault(d => string.Equals(d.Id, id, StringComparison.OrdinalIgnoreCase));
+            string id = ((string?)args["doc"] ?? "").Trim();
+            AttachedDocument? doc = docs.FirstOrDefault(d => string.Equals(d.Id, id, StringComparison.OrdinalIgnoreCase));
             if (doc is null)
             {
                 return docs.Count == 0 ? "No documents are attached."
                     : "No document " + (id.Length > 0 ? "'" + id + "'" : "given") + ". Attached: " + string.Join("; ", docs.Select(static d => d.Describe())) + ".";
             }
 
-            string lines = ((string)args["lines"] ?? "").Trim();
-            string find = ((string)args["find"] ?? "").Trim();
+            string lines = ((string?)args["lines"] ?? "").Trim();
+            string find = ((string?)args["find"] ?? "").Trim();
             if (find.Length > 0)
             {
                 return Find(doc, find);
@@ -284,19 +284,20 @@ namespace Pptcom.Documents
             int shown = 0;
             foreach (string name in wanted)
             {
-                AttachedDocument doc = docs.FirstOrDefault(d => d.Images.Exists(i => string.Equals(i.Name, name, StringComparison.OrdinalIgnoreCase)));
-                AttachedImage img = doc?.Images.First(i => string.Equals(i.Name, name, StringComparison.OrdinalIgnoreCase));
-                if (img is null)
+                AttachedDocument? doc = docs.FirstOrDefault(d => d.Images.Exists(i => string.Equals(i.Name, name, StringComparison.OrdinalIgnoreCase)));
+                if (doc is null)
                 {
                     sb.Append(name).Append(": no such image (the overview of a document lists its images).\n");
                     continue;
                 }
+
+                AttachedImage img = doc.Images.First(i => string.Equals(i.Name, name, StringComparison.OrdinalIgnoreCase));
                 if (shown >= MaxImagesPerRead)
                 {
                     sb.Append(img.Name).Append(Invariant($": not shown, at most {MaxImagesPerRead} images per call.\n"));
                     continue;
                 }
-                string preview = DocumentImages.Preview(img);
+                string? preview = DocumentImages.Preview(img);
                 sb.Append(img.Describe().Replace(img.Name + " (", img.Name + " from " + doc.Id + " " + doc.Name + " ("));
                 if (preview is not null)
                 {
@@ -321,7 +322,7 @@ namespace Pptcom.Documents
         }
 
         // "12| text\n", cut to max characters (around `focus` when given).
-        private static string Numbered(AttachedDocument doc, int index, int max, string focus = null)
+        private static string Numbered(AttachedDocument doc, int index, int max, string? focus = null)
         {
             string line = doc.Lines[index];
             if (line.Length > max)

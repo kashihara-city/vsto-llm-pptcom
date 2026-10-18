@@ -17,10 +17,12 @@ namespace Pptcom
 {
     public partial class ThisAddIn
     {
+        // _paneControl, _pane, _llm and _settings are set in ThisAddIn_Startup, before anything uses them. The
+        // constructor is VSTO's (ThisAddIn.Designer.cs, generated code), so the compiler does not check them.
         private AiTaskPaneControl _paneControl;
         private Microsoft.Office.Tools.CustomTaskPane _pane;
         private OpenAiCompatibleClient _llm;
-        private CancellationTokenSource _cancel;
+        private CancellationTokenSource _cancel = new(); // replaced by a new one at each request
 
         // Endpoint and models live in HKCU\Software\KashiharaCity\pptcom, the API key in Windows Credential
         // Manager (AddinSettings);
@@ -57,7 +59,7 @@ namespace Pptcom
             JArray tools = (JArray)ToolsTemplate.DeepClone();
             if (!withDocuments)
             {
-                foreach (JToken tool in tools.Where(static x => (string)x["function"]["name"] == "docread").ToList())
+                foreach (JToken tool in tools.Where(static x => (string?)x["function"]?["name"] == "docread").ToList())
                 {
                     tool.Remove();
                 }
@@ -78,7 +80,7 @@ namespace Pptcom
 
             _paneControl = new AiTaskPaneControl();
             _paneControl.SendRequested += (s, e) => _ = SendAsync(e.Text);
-            _paneControl.CancelRequested += (s, e) => _cancel?.Cancel();
+            _paneControl.CancelRequested += (s, e) => _cancel.Cancel();
             _paneControl.RetryRequested += (s, e) => _retryWait?.TrySetResult(true);
             _paneControl.NewConversationRequested += (s, e) => OnNewConversationRequested();
             _paneControl.ExternalControlChanged += (s, e) => OnExternalControlChanged(e.On);
@@ -162,7 +164,7 @@ namespace Pptcom
             try
             {
                 OpenAiCompatibleClient probe = new(endpoint, _settings.ApiKey, _settings.ChatModel);
-                List<KeyValuePair<string, string>> models = await probe.ListModelsAsync(CancellationToken.None).ConfigureAwait(true); // not the request's 中止
+                List<KeyValuePair<string, string?>> models = await probe.ListModelsAsync(CancellationToken.None).ConfigureAwait(true); // not the request's 中止
                 bool modesKnown = models.Exists(static m => m.Value is not null);
                 List<string> chat = [.. models.Where(m => !modesKnown || m.Value == "chat").Select(static m => m.Key)];
                 List<string> image = [.. models.Where(m => !modesKnown || m.Value == "image_generation").Select(static m => m.Key)];
@@ -301,7 +303,7 @@ namespace Pptcom
 
         // ---- driven from another program (AddinAutomation; off unless 外部からの操作を許可 is on) ----
 
-        private AddinAutomation _automation;
+        private AddinAutomation? _automation;
 
         // What COMAddIns("pptcom").Object returns. Asked for once, possibly before Startup.
         protected override object RequestComAddInAutomationService()
@@ -332,7 +334,7 @@ namespace Pptcom
             }
 
             _paneControl.SetStatus("STATUS_CANCELLING");
-            _cancel?.Cancel();
+            _cancel.Cancel();
         }
 
         internal void NewConversationFromOutside()
@@ -374,19 +376,26 @@ namespace Pptcom
         // memory only.
         private sealed class Conversation
         {
-            public object Presentation;     // the deck it belongs to (the same COM object, so the same RCW)
-            public ComProxyEngine Engine;
+            // `makeEngine` gets the conversation, whose ImageModel the engine's image generator reads.
+            public Conversation(object? presentation, Func<Conversation, ComProxyEngine> makeEngine)
+            {
+                Presentation = presentation;
+                Engine = makeEngine(this);
+            }
+
+            public readonly object? Presentation; // the deck it belongs to (the same COM object, so the same RCW); null: none was open
+            public readonly ComProxyEngine Engine;
             public readonly List<string> KnownIds = [];
             // The earlier requests, shortened; sent between the system prompt and the new request.
             public readonly List<ChatMessage> Earlier = [];
             // How the last request ended, when it did not finish ("stopped by the user after 3 s ...").
-            public string LastEnding;
+            public string? LastEnding;
             // The deck as the last request left it, to tell the next one what the user changed since.
-            public DeckReader.Fingerprint LastSeen;
+            public DeckReader.Fingerprint? LastSeen;
             // Generated images already copied into a run folder. The temp files themselves stay until
             // the conversation ends: later requests may still place them by their variable.
             public readonly HashSet<string> SavedImages = new(StringComparer.OrdinalIgnoreCase);
-            public string ImageModel;       // set at each request, fixed for that request
+            public string ImageModel = "";  // set at each request, fixed for that request
             // The documents the user attached (d1, d2, ...), read by the model with docread.
             public readonly List<AttachedDocument> Documents = [];
             public int DocumentsAttached;   // for the next id; ids are not reused after a removal
@@ -395,11 +404,11 @@ namespace Pptcom
             public readonly List<string> TempFiles = [];
         }
 
-        private Conversation _conversation;
+        private Conversation? _conversation;
 
         private Conversation CurrentConversation()
         {
-            object pres = null;
+            object? pres = null;
             try
             {
                 pres = this.Application.ActivePresentation;
@@ -415,11 +424,8 @@ namespace Pptcom
             }
             if (_conversation is null)
             {
-                Conversation c = new()
-                {
-                    Presentation = pres,
-                };
-                c.Engine = new ComProxyEngine(this.Application, async (prompt, size) => await _llm.GenerateImageAsync(c.ImageModel, prompt, size).ConfigureAwait(true));
+                Conversation c = new(pres, conversation =>
+                    new ComProxyEngine(this.Application, async (prompt, size) => await _llm.GenerateImageAsync(conversation.ImageModel, prompt, size).ConfigureAwait(true)));
                 Action<JObject> usage = ComProxyEngine.FileUsageSink("addin");
                 c.Engine.UsageSink = rec => { if (_saveProgress) { usage(rec); } };
                 _conversation = c;
@@ -469,7 +475,7 @@ namespace Pptcom
 
         private void OnDocumentConverted(JObject m)
         {
-            string ticket = (string)m["ticket"] ?? "";
+            string ticket = (string?)m["ticket"] ?? "";
             _pendingAttachments.Remove(ticket);
             Conversation c = CurrentConversation();
             AttachedDocument doc = AttachedDocument.FromPage(m, Invariant($"d{++c.DocumentsAttached}"));
@@ -496,7 +502,7 @@ namespace Pptcom
 
         private void OnDocumentFailed(string ticket, string name, string reason, string detail)
         {
-            _pendingAttachments.Remove(ticket ?? "");
+            _pendingAttachments.Remove(ticket);
             _failedAttachments.Add(name + ": " + reason + (string.IsNullOrEmpty(detail) ? "" : " (" + detail + ")"));
             if (_failedAttachments.Count > 20)
             {
@@ -509,9 +515,9 @@ namespace Pptcom
 
         private void OnDocumentRemoved(string id)
         {
-            Conversation c = _conversation;
-            AttachedDocument doc = c?.Documents.Find(d => d.Id == id);
-            if (doc is null)
+            Conversation? c = _conversation;
+            AttachedDocument? doc = c?.Documents.Find(d => d.Id == id);
+            if (c is null || doc is null)
             {
                 return;
             }
@@ -660,7 +666,7 @@ namespace Pptcom
                 {
                     string[] lines = (m.Content ?? "").Split('\n');
                     string kept = lines[0] + string.Concat(lines.Skip(1).Where(static l => l.StartsWith("Changed:", StringComparison.Ordinal)).Select(static l => "\n" + l));
-                    shortened.Add(ChatMessage.ToolResult(m.ToolCallId, kept));
+                    shortened.Add(ChatMessage.ToolResult(m.ToolCallId ?? "", kept));
                     continue;
                 }
                 ChatMessage a = new(m.Role, m.Content);
@@ -699,12 +705,13 @@ namespace Pptcom
             List<ChatMessage> ordered = [];
             for (int i = 0; i < list.Count; i++)
             {
-                if (list[i].Role != "assistant" || list[i].ToolCalls is null)
+                ChatMessage m = list[i];
+                if (m.Role != "assistant" || m.ToolCalls is null)
                 {
-                    ordered.Add(list[i]);
+                    ordered.Add(m);
                     continue;
                 }
-                ordered.Add(list[i]);
+                ordered.Add(m);
                 int j = i + 1;
                 List<ChatMessage> results = [];
                 while (j < list.Count && list[j].Role == "tool")
@@ -712,9 +719,9 @@ namespace Pptcom
                     results.Add(list[j++]);
                 }
 
-                foreach (ToolCall call in list[i].ToolCalls)
+                foreach (ToolCall call in m.ToolCalls)
                 {
-                    ChatMessage r = results.Find(x => x.ToolCallId == call.Id);
+                    ChatMessage? r = results.Find(x => x.ToolCallId == call.Id);
                     if (r is not null)
                     {
                         ordered.Add(r);
@@ -738,7 +745,7 @@ namespace Pptcom
             }
             if (call.Name == "pptcom")
             {
-                string script = (string)args["script"] ?? "";
+                string script = (string?)args["script"] ?? "";
                 if (!script.StartsWith(ElidedScriptMark, StringComparison.Ordinal))
                 {
                     args["script"] = Invariant($"{ElidedScriptMark}{script.Split('\n').Length} lines, already run - left out of this conversation to keep it short)");
@@ -752,7 +759,7 @@ namespace Pptcom
         }
 
         // "stopped by the user after 3 s; 12 pptcom lines had run." - for the next request.
-        private static string DescribeEnding(RunRecord run)
+        private static string? DescribeEnding(RunRecord run)
         {
             if (run.Outcome == "completed")
             {
@@ -857,7 +864,7 @@ namespace Pptcom
         // did not finish; and the deck as it left it (to tell them what the user changes in between).
         private void RememberForLater(RunRecord run)
         {
-            Conversation c = run.Conversation;
+            Conversation? c = run.Conversation;
             if (c is null || run.Messages is null)
             {
                 return;
@@ -877,7 +884,7 @@ namespace Pptcom
 
         private sealed class RunRecord
         {
-            public string Request;
+            public required string Request;
             public DateTime Started;
             public string Outcome = "unknown";
             public int Turns;
@@ -885,22 +892,22 @@ namespace Pptcom
             public int ScriptLines;
             public int ServerErrors;
             public bool HitTurnLimit;
-            public string FinalReply;
-            public Conversation Conversation;
-            public ComProxyEngine Engine;
+            public string? FinalReply;
+            public Conversation? Conversation; // null until the request has one (it may fail before)
+            public ComProxyEngine? Engine;
             public int MissingSetBefore;    // the engine lives across requests; count this request's only
             public int EarlierMessages;      // how many shortened messages of earlier requests it was sent after
-            public List<ChatMessage> Messages; // this request's conversation, as sent
+            public List<ChatMessage>? Messages; // this request's conversation, as sent
             public int FirstOwnMessage;      // index in Messages of this request's user message
-            public string HandEdits;         // what the user had changed by hand before it (ContextBeforeRequest)
+            public string? HandEdits;        // what the user had changed by hand before it (ContextBeforeRequest)
             public readonly List<string> ToolLines = []; // "[2] pptcom -> OK: ..." as the pane shows them
-            public DeckDefaults DeckDefaults;
+            public DeckDefaults? DeckDefaults;
             public readonly List<string> Renders = [];
             public readonly System.Text.StringBuilder Log = new();
         }
 
         // One request runs at a time (the send button is disabled while busy), on the UI thread.
-        private static RunRecord _currentRun;
+        private static RunRecord? _currentRun;
 
         // The run folders, with 途中経過を保存 on: %LOCALAPPDATA%\KashiharaCity\pptcom\generated-pptx.
         private static string OutputRoot()
@@ -1114,17 +1121,17 @@ namespace Pptcom
         }
 
         // The last finished request (see RunSummary); null before the first one.
-        internal JObject LastRunSummary { get; private set; }
+        internal JObject? LastRunSummary { get; private set; }
 
         // The cheat sheet's deck-dependent numbers (%SLIDE_W% ... in SystemPrompt), measured on a copy
         // of the active deck by DeckProbe. Re-measured only when the deck, its size or its design
         // changes, so the system prompt stays byte-identical (prefix cache) while you work on one deck.
-        private static string _deckKey;
-        private static DeckDefaults _deckDefaults;
+        private static string? _deckKey;
+        private static DeckDefaults? _deckDefaults;
 
         private DeckDefaults CurrentDeckDefaults(RunRecord run)
         {
-            object pres = null;
+            object? pres = null;
             try
             {
                 pres = this.Application.ActivePresentation;
@@ -1138,7 +1145,7 @@ namespace Pptcom
                 return _deckDefaults ?? new DeckDefaults();
             }
 
-            string key = null;
+            string? key = null;
             try
             {
                 key = DeckProbe.KeyOf(pres);
@@ -1172,7 +1179,7 @@ namespace Pptcom
         }
 
         // Completed by the task pane's 再試行 button; cancelled by 中止 (the request's token).
-        private TaskCompletionSource<bool> _retryWait;
+        private TaskCompletionSource<bool>? _retryWait; // set while a request waits for 再試行
 
         private async Task WaitForRetryAsync(CancellationToken ct)
         {
@@ -1517,7 +1524,7 @@ namespace Pptcom
         private ToolOutcome ReadSlidesTool(ComProxyEngine engine, JObject args)
         {
             // "3", "4-7" or a bare number; missing = all slides.
-            JToken slideArg = args["slide"];
+            JToken? slideArg = args["slide"];
             string slides = slideArg is null || slideArg.Type == JTokenType.Null ? "" : slideArg.ToString();
             try
             {
@@ -1541,10 +1548,10 @@ namespace Pptcom
         {
             List<AttachedDocument> docs = _conversation is not null ? _conversation.Documents : [];
             ToolOutcome o = new("");
-            string pageSpec = ((string)args["page"] ?? "").Trim();
+            string pageSpec = ((string?)args["page"] ?? "").Trim();
             if (pageSpec.Length > 0)
             {
-                o.Text = await ReadPdfPagesAsync(docs, (string)args["doc"], pageSpec, o.Renders).ConfigureAwait(true);
+                o.Text = await ReadPdfPagesAsync(docs, (string?)args["doc"] ?? "", pageSpec, o.Renders).ConfigureAwait(true);
             }
             else
             {
@@ -1565,10 +1572,10 @@ namespace Pptcom
         // zimage: an image generated and bound to a variable.
         private static async Task<ToolOutcome> ImageToolAsync(ComProxyEngine engine, List<string> knownIds, JObject args)
         {
-            string name = (string)args["name"];
-            string prompt = (string)args["prompt"];
-            string size = (string)args["size"] ?? "1024x1024";
-            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(prompt))
+            string name = (string?)args["name"] ?? "";
+            string prompt = (string?)args["prompt"] ?? "";
+            string size = (string?)args["size"] ?? "1024x1024";
+            if (name.Trim().Length == 0 || prompt.Trim().Length == 0)
             {
                 return new ToolOutcome("zimage needs both name and prompt.");
             }
@@ -1605,9 +1612,9 @@ namespace Pptcom
             // (run18) the model discovered the background-tint mismatch only after placement and spent more
             // turns regenerating and cropping; the zimage rules (7)/(8) tell it to frame images instead of
             // chasing an exact background match and not to generate small icons.
-            if (engine.TryGetHandle(name, out object imgPath) && imgPath is string)
+            if (engine.TryGetHandle(name, out object? handle) && handle is string imgPath)
             {
-                generated.Renders.Add(new KeyValuePair<string, string>("image " + name, (string)imgPath));
+                generated.Renders.Add(new KeyValuePair<string, string>("image " + name, imgPath));
                 generated.Text += "\nThe image is attached in the next message.";
             }
             return generated;
@@ -1616,7 +1623,7 @@ namespace Pptcom
         // pptcom: a script run statement by statement.
         private async Task<ToolOutcome> ScriptToolAsync(ComProxyEngine engine, List<string> knownIds, JObject args, Action<int> countLines)
         {
-            string script = (string)args["script"] ?? "";
+            string script = (string?)args["script"] ?? "";
             ComScriptParser.ParseResult parsed = ComScriptParser.Parse(script, knownIds, MaxScriptLinesPerCall);
             if (!parsed.Success)
             {
@@ -1626,7 +1633,7 @@ namespace Pptcom
             // A failing statement no longer stops the script: only the statements that depend
             // on what it should have set are skipped (see ComProxyEngine.ExecuteScriptAsync).
             ComScriptResult result = await engine.ExecuteScriptAsync(parsed).ConfigureAwait(true);
-            knownIds.AddRange(parsed.DefinedIds.Where(id => !knownIds.Contains(id) && engine.TryGetHandle(id, out object bound)));
+            knownIds.AddRange(parsed.DefinedIds.Where(id => !knownIds.Contains(id) && engine.TryGetHandle(id, out _)));
             countLines(result.Count(ComLineStatus.Applied));
             // Defined: what this call made; Changed: what it did to objects from earlier calls (or
             // earlier requests). Both are what a later request's shortened history keeps of the call.
@@ -1651,7 +1658,7 @@ namespace Pptcom
 
         private async Task<string> ReadPdfPagesAsync(IList<AttachedDocument> docs, string id, string spec, List<KeyValuePair<string, string>> renders)
         {
-            AttachedDocument doc = docs.FirstOrDefault(d => string.Equals(d.Id, (id ?? "").Trim(), StringComparison.OrdinalIgnoreCase));
+            AttachedDocument? doc = docs.FirstOrDefault(d => string.Equals(d.Id, id.Trim(), StringComparison.OrdinalIgnoreCase));
             if (doc is null)
             {
                 return "No document '" + id + "'. Attached: " + string.Join("; ", docs.Select(static d => d.Describe())) + ".";
@@ -1662,7 +1669,7 @@ namespace Pptcom
                 return doc.Id + " is not a PDF: page works for PDFs only. Read it with lines or find, and its images with image.";
             }
 
-            List<int> pages = DocRead.ParsePages(spec);
+            List<int>? pages = DocRead.ParsePages(spec);
             if (pages is null)
             {
                 return Invariant($"page must be a page number, a range or a list, e.g. \"3\", \"3-5\" or \"2,7\" (at most {DocRead.MaxPagesPerRead} per call).");
@@ -1738,11 +1745,11 @@ namespace Pptcom
                     string script;
                     try
                     {
-                        script = (string)JObject.Parse(call.Arguments)["script"] ?? "";
+                        script = (string?)JObject.Parse(call.Arguments)["script"] ?? "";
                     }
                     catch (Exception ex) when (ex is Newtonsoft.Json.JsonException or ArgumentException)
                     {
-                        script = call.Arguments ?? "";
+                        script = call.Arguments;
                     }
                     if (script.StartsWith(ElidedScriptMark, StringComparison.Ordinal))
                     {
@@ -1767,7 +1774,7 @@ namespace Pptcom
         {
             HashSet<string> ids = new(messages.Where(static m => m.ToolCalls is not null)
                 .SelectMany(static m => m.ToolCalls).Where(static c => c.Name == "docread").Select(static c => c.Id), StringComparer.Ordinal);
-            List<ChatMessage> results = [.. messages.Where(m => m.Role == "tool" && ids.Contains(m.ToolCallId))];
+            List<ChatMessage> results = [.. messages.Where(m => m.Role == "tool" && m.ToolCallId is not null && ids.Contains(m.ToolCallId))];
             int replaced = 0;
             foreach (ChatMessage m in results.Take(Math.Max(0, results.Count - keep)))
             {

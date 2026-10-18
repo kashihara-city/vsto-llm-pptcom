@@ -26,7 +26,7 @@ namespace Pptcom.ComProxy
         internal sealed class Token
         {
             public TokenKind Kind;
-            public string Value;
+            public required string Value;
             public int Start;
         }
 
@@ -136,7 +136,7 @@ namespace Pptcom.ComProxy
             for (int i = first; i < tokens.Count; i++)
             {
                 Token t = tokens[i];
-                Token prev = i > first ? tokens[i - 1] : null;
+                Token? prev = i > first ? tokens[i - 1] : null;
                 switch (t.Kind)
                 {
                     case TokenKind.Open:

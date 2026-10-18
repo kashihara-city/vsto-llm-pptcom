@@ -39,7 +39,7 @@ namespace Pptcom.ComProxy
             Try(() => { d.SlideWidth = (float)pres.PageSetup.SlideWidth; d.SlideHeight = (float)pres.PageSetup.SlideHeight; }, "slide size", missing);
 
             string copy = ComProxyEngine.TempPath("pptcom_probe_" + Guid.NewGuid().ToString("N") + ".pptx");
-            dynamic tmp = null;
+            dynamic? tmp = null;
             try
             {
                 pres.SaveCopyAs(copy, PpSaveAsOpenXMLPresentation);

@@ -41,7 +41,7 @@ namespace Pptcom.UI
                     return;
                 }
 
-                Dictionary<string, string> table = Read(candidate);
+                Dictionary<string, string>? table = Read(candidate);
                 if (table is null)
                 {
                     continue;
@@ -76,7 +76,7 @@ namespace Pptcom.UI
         }
 
         // The embedded file (pptcom.csproj: LogicalName pptcom.web/<path under UI\web>), or null.
-        private static Dictionary<string, string> Read(string language)
+        private static Dictionary<string, string>? Read(string language)
         {
             if (!Regex.IsMatch(language, "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$", RegexOptions.None, Guard.RegexTimeout))
             {
@@ -93,7 +93,10 @@ namespace Pptcom.UI
             Dictionary<string, string> table = new(StringComparer.Ordinal);
             foreach (JProperty p in JObject.Parse(reader.ReadToEnd()).Properties())
             {
-                table[p.Name] = (string)p.Value;
+                if (p.Value is JValue { Value: string text })
+                {
+                    table[p.Name] = text;
+                }
             }
 
             return table;

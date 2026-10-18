@@ -10,7 +10,7 @@ namespace Pptcom.Agent
     {
         public int? StatusCode { get; private set; }
 
-        public LlmServerException(int? statusCode, string message, Exception inner = null)
+        public LlmServerException(int? statusCode, string message, Exception? inner = null)
             : base(message, inner)
         {
             StatusCode = statusCode;

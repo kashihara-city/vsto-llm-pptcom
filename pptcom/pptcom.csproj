@@ -145,6 +145,8 @@
     <Compile Include="CredentialStore.cs" />
     <Compile Include="AddinAutomation.cs" />
     <Compile Include="IPptAiAutomation.cs" />
+    <Compile Include="Polyfills\RequiredMemberAttribute.cs" />
+    <Compile Include="Polyfills\CompilerFeatureRequiredAttribute.cs" />
     <Compile Include="Documents\AttachedDocument.cs" />
     <Compile Include="Documents\AttachedImage.cs" />
     <Compile Include="Documents\DocRead.cs" />

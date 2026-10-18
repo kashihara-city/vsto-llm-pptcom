@@ -6,6 +6,10 @@
          compiler of Visual Studio (Build Tools) 2026. On .NET Framework 4.8, features that need runtime
          support (default interface members, static abstract members, ref fields) are still unavailable. -->
     <LangVersion>14</LangVersion>
+    <!-- Nullable reference types, so the compiler checks every use of a value that may be null. .NET Framework's
+         own libraries carry no null annotations (string.IsNullOrEmpty does not tell the compiler anything), so
+         the code checks with `is null` / `.Length` instead; `required` needs the attributes in pptcom\Polyfills. -->
+    <Nullable>enable</Nullable>
     <!-- Every rule of the three analyzers below is a warning unless .editorconfig says otherwise. -->
     <AnalysisLevel>10.0</AnalysisLevel>
     <AnalysisMode>All</AnalysisMode>

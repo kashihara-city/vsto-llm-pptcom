@@ -8,7 +8,7 @@ namespace Pptcom.Agent
         public string Content = "";
         public string Reasoning = "";
         public List<ToolCall> ToolCalls = [];
-        public string FinishReason;
+        public string? FinishReason;
         public int ReasoningTokens;
         public int PromptTokens;
         public int CompletionTokens; // reasoning + content + tool-call arguments

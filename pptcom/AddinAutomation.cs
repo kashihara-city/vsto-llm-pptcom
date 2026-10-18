@@ -97,7 +97,7 @@ namespace Pptcom
             get
             {
                 RequireEnabled();
-                Newtonsoft.Json.Linq.JObject summary = _addin.LastRunSummary;
+                Newtonsoft.Json.Linq.JObject? summary = _addin.LastRunSummary;
                 return summary is not null ? summary.ToString(Newtonsoft.Json.Formatting.None) : "";
             }
         }

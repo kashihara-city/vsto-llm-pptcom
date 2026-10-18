@@ -32,7 +32,7 @@ namespace Pptcom.ComProxy
             }
 
             int from = 1, to = count;
-            string s = (slides ?? "").Trim();
+            string s = slides.Trim();
             if (s.Length > 0)
             {
                 System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(s, @"^(\d{1,4})\s*(?:[-~–〜]\s*(\d{1,4}))?$", System.Text.RegularExpressions.RegexOptions.None, Guard.RegexTimeout);
@@ -173,7 +173,7 @@ namespace Pptcom.ComProxy
         //   [13] = d2 RoundedRectangle L340 T412 W280 H100 fill RGB(255,255,255) "品種は500以上" & vbCr & "..." | font 16pt RGB(40,40,40)
         // Names PowerPoint made up ("Rounded Rectangle 15") are left out, as the type says the same;
         // names a script gave are kept ('card1'). The text is complete, as a VBA literal.
-        public static string Brief(object application, int slideIndex, IDictionary<string, List<string>> variables = null)
+        public static string Brief(object application, int slideIndex, IDictionary<string, List<string>>? variables = null)
         {
             dynamic slide = ((dynamic)application).ActivePresentation.Slides(slideIndex);
             int shapeCount = (int)slide.Shapes.Count;
@@ -233,7 +233,7 @@ namespace Pptcom.ComProxy
         }
 
         // "= d2 " when the script holds this shape in a variable (or several: "= card, c1 ").
-        private static string VariablesOf(IDictionary<string, List<string>> variables, dynamic slide, dynamic shape)
+        private static string VariablesOf(IDictionary<string, List<string>>? variables, dynamic slide, dynamic shape)
         {
             if (variables is null)
             {
@@ -336,8 +336,8 @@ namespace Pptcom.ComProxy
         internal sealed class ShapeState
         {
             public int Left, Top, Width, Height, Fill = -1;
-            public string Text;
-            public string Variables;   // "= card1 " when a script variable held it at the time
+            public string? Text;       // null: the shape has no text frame
+            public string Variables = ""; // "= card1 " when a script variable held it at the time
         }
 
         public static Fingerprint TakeFingerprint(object application, IDictionary<string, List<string>> variables)
@@ -460,7 +460,7 @@ namespace Pptcom.ComProxy
 
                     if (what.Count > 0)
                     {
-                        items.Add(Invariant($"[{i + 1}] ") + (cur.Variables ?? "") + string.Join(", ", what));
+                        items.Add(Invariant($"[{i + 1}] ") + cur.Variables + string.Join(", ", what));
                     }
                 }
                 List<ShapeState> gone = [.. then.Order.Where(id => !now.Shapes.ContainsKey(id)).Select(id => then.Shapes[id])];
@@ -478,7 +478,7 @@ namespace Pptcom.ComProxy
 
                 if (gone.Count > 0)
                 {
-                    List<string> named = [.. gone.Where(static g => !string.IsNullOrEmpty(g.Variables)).Select(static g => g.Variables.Trim())];
+                    List<string> named = [.. gone.Where(static g => g.Variables.Length > 0).Select(static g => g.Variables.Trim())];
                     parts.Add(Invariant($"{gone.Count} shape(s) deleted") + (named.Count > 0 ? " (" + string.Join("; ", named) + ")" : ""));
                 }
                 if (parts.Count > 0)

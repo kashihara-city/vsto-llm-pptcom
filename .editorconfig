@@ -99,3 +99,8 @@ dotnet_diagnostic.MA0176.severity = none
 [scripts/test/**.cs]
 # CA1303: pass literals as localized resources. The test tools print English for developers to the console.
 dotnet_diagnostic.CA1303.severity = none
+
+[pptcom/Polyfills/**.cs]
+# MA0182: an internal type that is never used. These are the attributes the compiler needs for C# features that
+# .NET Framework 4.8 lacks (`required`); the compiler emits them, the code never names them.
+dotnet_diagnostic.MA0182.severity = none

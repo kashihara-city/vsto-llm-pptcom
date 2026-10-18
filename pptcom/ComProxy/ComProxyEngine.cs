@@ -25,8 +25,8 @@ namespace Pptcom.ComProxy
     // "msoTrue") is resolved to that enum's underlying value.
     internal sealed class ComProxyEngine
     {
-        private readonly Dictionary<string, object> _handles = new(StringComparer.OrdinalIgnoreCase); // VBA: names ignore case
-        private readonly Func<string, string, Task<byte[]>> _imageGenerator; // (prompt, "WxH")
+        private readonly Dictionary<string, object?> _handles = new(StringComparer.OrdinalIgnoreCase); // VBA: names ignore case; a value may be Nothing
+        private readonly Func<string, string, Task<byte[]>>? _imageGenerator; // (prompt, "WxH"); null: no image generation
         // Files this engine itself produced via the image action. Picture-inserting members
         // only accept these, so a script can't pull arbitrary local files into the deck.
         private readonly HashSet<string> _generatedFiles = new(StringComparer.OrdinalIgnoreCase);
@@ -54,7 +54,7 @@ namespace Pptcom.ComProxy
         // English member names of the object model go with.
         private static readonly CultureInfo ComCulture = CultureInfo.GetCultureInfo("en-US");
 
-        public bool TryGetHandle(string id, out object value)
+        public bool TryGetHandle(string id, out object? value)
         {
             return _handles.TryGetValue(id, out value);
         }
@@ -77,12 +77,12 @@ namespace Pptcom.ComProxy
             List<string> parts = [];
             foreach (string id in ids)
             {
-                if (!_handles.TryGetValue(id, out object v) || v is null)
+                if (!_handles.TryGetValue(id, out object? v) || v is null)
                 {
                     continue;
                 }
                 // Generated-image handles hold a temp file path; the model only ever gets $name.
-                if (v is string && _generatedFiles.Contains((string)v))
+                if (v is string path && _generatedFiles.Contains(path))
                 {
                     continue;
                 }
@@ -109,8 +109,8 @@ namespace Pptcom.ComProxy
         // Usage observation: every executed op (and every refused one) is reported here as one
         // small JSON object - {type, member, action, ok, blocked, error}. The host appends it to
         // a JSONL file; scripts/test/usage_report.py aggregates. Null = no recording.
-        public Action<JObject> UsageSink { get; set; }
-        private string _lastTargetType;
+        public Action<JObject>? UsageSink { get; set; }
+        private string? _lastTargetType;
 
         public static readonly string UsageLogPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KashiharaCity", "pptcom", "com_usage.jsonl");
@@ -150,7 +150,7 @@ namespace Pptcom.ComProxy
             };
         }
 
-        private void RecordUsage(string action, string member, bool ok, string error)
+        private void RecordUsage(string? action, string? member, bool ok, string? error)
         {
             if (UsageSink is null)
             {
@@ -181,8 +181,11 @@ namespace Pptcom.ComProxy
             }
         }
 
-        public ComProxyEngine(object rootApplication, Func<string, string, Task<byte[]>> imageGenerator = null)
+        private readonly object _application;
+
+        public ComProxyEngine(object rootApplication, Func<string, string, Task<byte[]>>? imageGenerator = null)
         {
+            _application = rootApplication;
             _handles[ApplicationId] = rootApplication;
             _imageGenerator = imageGenerator;
             BindPresentation();
@@ -199,7 +202,7 @@ namespace Pptcom.ComProxy
         {
             try
             {
-                _handles[PresentationId] = ((dynamic)_handles[ApplicationId]).ActivePresentation;
+                _handles[PresentationId] = ((dynamic)_application).ActivePresentation;
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
@@ -217,7 +220,7 @@ namespace Pptcom.ComProxy
                 JToken parsed = JToken.Parse(batchJson);
                 // Accept either a bare [...] array or a {"ops": [...]}-wrapped object, since LLMs
                 // asked for "a JSON object" tend to wrap arrays even when told not to.
-                ops = (parsed.Type == JTokenType.Object ? (JArray)((JObject)parsed)["ops"] : (JArray)parsed) ?? throw new InvalidOperationException("no 'ops' array found");
+                ops = (parsed.Type == JTokenType.Object ? (JArray?)((JObject)parsed)["ops"] : (JArray)parsed) ?? throw new InvalidOperationException("no 'ops' array found");
             }
             catch (Exception ex) when (ex is Newtonsoft.Json.JsonException or InvalidCastException or InvalidOperationException)
             {
@@ -229,10 +232,10 @@ namespace Pptcom.ComProxy
             foreach (JToken token in ops)
             {
                 JObject op = (JObject)token;
-                string id = (string)op["id"];
-                string action = (string)op["action"];
-                string target = (string)op["target"];
-                string member = (string)op["member"];
+                string? id = (string?)op["id"];
+                string? action = (string?)op["action"];
+                string? target = (string?)op["target"];
+                string? member = (string?)op["member"];
 
                 ComOpResult opResult = new()
                 {
@@ -241,7 +244,7 @@ namespace Pptcom.ComProxy
                     Target = target,
                     Member = member,
                 };
-                string error = await TryRunOpAsync(op).ConfigureAwait(true);
+                string? error = await TryRunOpAsync(op).ConfigureAwait(true);
                 if (error is not null)
                 {
                     opResult.Success = false;
@@ -259,9 +262,9 @@ namespace Pptcom.ComProxy
         }
 
         // Runs one op; returns null on success or the model-facing error text (with hints).
-        private async Task<string> TryRunOpAsync(JObject op)
+        private async Task<string?> TryRunOpAsync(JObject op)
         {
-            OpFailure failure = await TryRunOpWithCauseAsync(op).ConfigureAwait(true);
+            OpFailure? failure = await TryRunOpWithCauseAsync(op).ConfigureAwait(true);
             return failure?.Text;
         }
 
@@ -278,17 +281,17 @@ namespace Pptcom.ComProxy
 
         private sealed class OpFailure
         {
-            public string Text;   // model-facing error with hints
-            public string Cause;  // ComErrorText.CauseOf: same key = same mistake
-            public string Member;
+            public required string Text; // model-facing error with hints
+            public required string Cause; // ComErrorText.CauseOf: same key = same mistake
+            public string? Member;
         }
 
-        private async Task<OpFailure> TryRunOpWithCauseAsync(JObject op)
+        private async Task<OpFailure?> TryRunOpWithCauseAsync(JObject op)
         {
-            string id = (string)op["id"];
-            string action = (string)op["action"];
-            string target = (string)op["target"];
-            string member = (string)op["member"];
+            string? id = (string?)op["id"];
+            string? action = (string?)op["action"];
+            string? target = (string?)op["target"];
+            string? member = (string?)op["member"];
             _lastTargetType = null;
             try
             {
@@ -338,17 +341,17 @@ namespace Pptcom.ComProxy
                     lineOps = [];
                 }
 
-                parsed.LineErrors.TryGetValue(line, out ComScriptParser.LineError parseError);
+                parsed.LineErrors.TryGetValue(line, out ComScriptParser.LineError? parseError);
 
                 ComLineResult lr = new()
                 {
                     Line = line,
                     Text = parsed.Lines[line - 1],
                 };
-                List<string> writes = [.. lineOps.Select(static o => (string)o["id"]).Where(static x => !string.IsNullOrEmpty(x))];
-                if (parseError is not null && parseError.Assigns is not null)
+                List<string> writes = [.. lineOps.Select(static o => (string?)o["id"] ?? "").Where(static x => x.Length > 0)];
+                if (parseError?.Assigns is string assigns)
                 {
-                    writes.Add(parseError.Assigns);
+                    writes.Add(assigns);
                 }
 
                 lr.Assigns.AddRange(writes.Where(static x => !IsSyntheticId(x)).Distinct(StringComparer.OrdinalIgnoreCase));
@@ -369,12 +372,12 @@ namespace Pptcom.ComProxy
                     lr.Error = "not run (could not be read): " + parseError.Message;
                     lr.Cause = parseError.Cause;
                     failures++;
-                    causes.Add(lr.Cause);
+                    causes.Add(parseError.Cause);
                     poisoned.UnionWith(writes);
                     continue;
                 }
 
-                string blocker = BlockerOf(lineOps, poisoned);
+                string? blocker = BlockerOf(lineOps, poisoned);
                 if (blocker is not null)
                 {
                     lr.Status = ComLineStatus.Skipped;
@@ -383,11 +386,11 @@ namespace Pptcom.ComProxy
                     continue;
                 }
 
-                await RunLineAsync(lr, lineOps).ConfigureAwait(true);
-                if (lr.Status == ComLineStatus.Failed)
+                string? cause = await RunLineAsync(lr, lineOps).ConfigureAwait(true);
+                if (cause is not null)
                 {
                     failures++;
-                    causes.Add(lr.Cause);
+                    causes.Add(cause);
                     poisoned.UnionWith(writes);
                 }
                 else
@@ -419,7 +422,7 @@ namespace Pptcom.ComProxy
 
         // The poisoned variable (one a failed/skipped statement should have set in this call) that the statement
         // reads, if any: such a statement is skipped. Ids bound earlier on the same line don't count.
-        private static string BlockerOf(List<JObject> lineOps, HashSet<string> poisoned)
+        private static string? BlockerOf(List<JObject> lineOps, HashSet<string> poisoned)
         {
             HashSet<string> local = new(StringComparer.OrdinalIgnoreCase);
             foreach (JObject o in lineOps)
@@ -432,8 +435,8 @@ namespace Pptcom.ComProxy
                     }
                 }
 
-                string w = (string)o["id"];
-                if (!string.IsNullOrEmpty(w))
+                string w = (string?)o["id"] ?? "";
+                if (w.Length > 0)
                 {
                     local.Add(w);
                 }
@@ -443,20 +446,22 @@ namespace Pptcom.ComProxy
         }
 
         // Runs the statement's ops in order up to the first that fails: `lr` ends Applied or Failed (with the
-        // error, and the objects the line had already made).
-        private async Task RunLineAsync(ComLineResult lr, List<JObject> lineOps)
+        // error, and the objects the line had already made). Returns the failure's cause, null when it applied.
+        private async Task<string?> RunLineAsync(ComLineResult lr, List<JObject> lineOps)
         {
             lr.Status = ComLineStatus.Applied;
             _missingSetHit = false;
             List<string> done = [];
+            string? cause = null;
             foreach (JObject o in lineOps)
             {
-                OpFailure failure = await TryRunOpWithCauseAsync(o).ConfigureAwait(true);
+                OpFailure? failure = await TryRunOpWithCauseAsync(o).ConfigureAwait(true);
                 if (failure is not null)
                 {
+                    cause = failure.Cause;
                     lr.Status = ComLineStatus.Failed;
                     lr.Error = failure.Text;
-                    lr.Cause = failure.Cause ?? failure.Text;
+                    lr.Cause = cause;
                     lr.Member = failure.Member;
                     if (done.Count > 0)
                     {
@@ -467,8 +472,8 @@ namespace Pptcom.ComProxy
 
                     break;
                 }
-                string m = (string)o["member"];
-                if ((string)o["action"] == ComOpAction.Call && m is not null && (m.StartsWith("Add", StringComparison.OrdinalIgnoreCase) || m == "Duplicate"))
+                string? m = (string?)o["member"];
+                if ((string?)o["action"] == ComOpAction.Call && m is not null && (m.StartsWith("Add", StringComparison.OrdinalIgnoreCase) || m == "Duplicate"))
                 {
                     done.Add(m + "(...)");
                 }
@@ -478,6 +483,8 @@ namespace Pptcom.ComProxy
                 lr.MissingSet = true;
                 MissingSetStatements.Add(lr.Text);
             }
+
+            return cause;
         }
 
         // The script's variables that hold a shape (or a table, by its shape), keyed by ShapeKey -
@@ -487,14 +494,14 @@ namespace Pptcom.ComProxy
         public Dictionary<string, List<string>> ShapeVariables()
         {
             Dictionary<string, List<string>> map = new(StringComparer.Ordinal);
-            foreach (KeyValuePair<string, object> kv in _handles)
+            foreach (KeyValuePair<string, object?> kv in _handles)
             {
                 if (IsSyntheticId(kv.Key) || kv.Value is null || !System.Runtime.InteropServices.Marshal.IsComObject(kv.Value))
                 {
                     continue;
                 }
 
-                string type = ComSecurityPolicy.TryGetTypeName(kv.Value);
+                string? type = ComSecurityPolicy.TryGetTypeName(kv.Value);
                 if (type != "Shape" && type != "Table")
                 {
                     continue;
@@ -539,8 +546,8 @@ namespace Pptcom.ComProxy
         private static List<string> ReadsOf(JObject op)
         {
             List<string> reads = [];
-            string target = (string)op["target"];
-            if (!string.IsNullOrEmpty(target))
+            string target = (string?)op["target"] ?? "";
+            if (target.Length > 0)
             {
                 reads.Add(target);
             }
@@ -550,7 +557,7 @@ namespace Pptcom.ComProxy
             return reads;
         }
 
-        private static void CollectRefs(JToken token, List<string> into)
+        private static void CollectRefs(JToken? token, List<string> into)
         {
             if (token is null)
             {
@@ -560,7 +567,7 @@ namespace Pptcom.ComProxy
             switch (token.Type)
             {
                 case JTokenType.String:
-                    string s = (string)token;
+                    string s = (string?)token ?? "";
                     if (s.Length > 1 && s[0] == '$')
                     {
                         into.Add(s.Substring(1));
@@ -589,9 +596,9 @@ namespace Pptcom.ComProxy
 
         // ---- helpers for ComErrorText (type/member lookups for error hints) ----------------------
 
-        internal string TypeNameOfHandle(string id)
+        internal string? TypeNameOfHandle(string? id)
         {
-            if (id is null || !_handles.TryGetValue(id, out object v) || v is null)
+            if (id is null || !_handles.TryGetValue(id, out object? v) || v is null)
             {
                 return null;
             }
@@ -599,7 +606,7 @@ namespace Pptcom.ComProxy
             return System.Runtime.InteropServices.Marshal.IsComObject(v) ? ComSecurityPolicy.TryGetTypeName(v) : null;
         }
 
-        internal static Type InteropTypeFor(string comTypeName)
+        internal static Type? InteropTypeFor(string? comTypeName)
         {
             return FindInteropType(comTypeName);
         }
@@ -611,14 +618,14 @@ namespace Pptcom.ComProxy
         {
             return TypeLabel(t);
         }
-        internal string ArgumentHint(JObject op, Exception ex)
+        internal string? ArgumentHint(JObject op, Exception ex)
         {
-            return SignatureHint(op, (string)op["action"], (string)op["target"], (string)op["member"], ex);
+            return SignatureHint(op, (string?)op["action"], (string?)op["target"], (string?)op["member"], ex);
         }
 
-        private async Task ExecuteOneAsync(JObject op, string id, string action, string target, string member)
+        private async Task ExecuteOneAsync(JObject op, string? id, string? action, string? target, string? member)
         {
-            if (string.IsNullOrEmpty(action))
+            if (action is null || action.Length == 0)
             {
                 throw new InvalidOperationException("action is required");
             }
@@ -635,12 +642,12 @@ namespace Pptcom.ComProxy
                 return;
             }
 
-            if (string.IsNullOrEmpty(target))
+            if (target is null || target.Length == 0)
             {
                 throw new InvalidOperationException("target is required");
             }
 
-            if (!_handles.TryGetValue(target, out object targetObj))
+            if (!_handles.TryGetValue(target, out object? targetObj))
             {
                 throw new InvalidOperationException("unknown target handle: " + target);
             }
@@ -653,21 +660,26 @@ namespace Pptcom.ComProxy
                 throw new InvalidOperationException("member is blocked by policy: " + member);
             }
 
-            string typedBlock = ComSecurityPolicy.CheckMemberOnTarget(targetObj, member);
+            string? typedBlock = ComSecurityPolicy.CheckMemberOnTarget(targetObj, member);
             if (typedBlock is not null)
             {
                 throw new InvalidOperationException("member is blocked by policy: " + typedBlock);
             }
 
-            object resultValue = Invoke(op, action, member, targetObj);
+            if (targetObj is null)
+            {
+                throw new InvalidOperationException(target + " holds Nothing");
+            }
+
+            object? resultValue = Invoke(op, action, member, targetObj);
             if (resultValue is not null && !ComSecurityPolicy.IsReturnValueAllowed(resultValue))
             {
                 throw new InvalidOperationException(
                     "result type not allowed outside the Office object model: " + resultValue.GetType().FullName);
             }
 
-            object resultSlide = TrackSlides(action, target, resultValue);
-            if (!string.IsNullOrEmpty(id) && !TryLetIntoDefault(op, id, resultValue))
+            object? resultSlide = TrackSlides(action, target, resultValue);
+            if (id is not null && id.Length > 0 && !TryLetIntoDefault(op, id, resultValue))
             {
                 NoteMissingSet(op, resultValue);
                 _handles[id] = resultValue;
@@ -677,18 +689,18 @@ namespace Pptcom.ComProxy
         }
 
         // `x = value` with no COM call: a plain value, or another variable under a second name.
-        private void Let(JObject op, string id)
+        private void Let(JObject op, string? id)
         {
-            if (string.IsNullOrEmpty(id))
+            if (id is null || id.Length == 0)
             {
                 throw new InvalidOperationException("let needs a name");
             }
 
-            object v = ResolveArg(op["value"]);
+            object? v = ResolveArg(op["value"]);
             // Objects only arrive here as an alias of an existing handle (`hero = broccoli_hero`),
             // which already passed the policy checks when it was fetched.
-            string sv = op["value"]?.Type == JTokenType.String ? (string)op["value"] : null;
-            string src = sv is not null && sv.StartsWith("$", StringComparison.Ordinal) ? sv.Substring(1) : null;
+            string? sv = op["value"]?.Type == JTokenType.String ? (string?)op["value"] : null;
+            string? src = sv is not null && sv.StartsWith("$", StringComparison.Ordinal) ? sv.Substring(1) : null;
             if (v is not (null or string) && !v.GetType().IsPrimitive && src is null)
             {
                 throw new InvalidOperationException("only plain values or existing variables can be assigned this way");
@@ -700,7 +712,7 @@ namespace Pptcom.ComProxy
             }
 
             NoteMissingSet(op, v);
-            object srcSlide = null;
+            object? srcSlide = null;
             if (src is not null)
             {
                 _handleSlide.TryGetValue(src, out srcSlide);
@@ -722,20 +734,20 @@ namespace Pptcom.ComProxy
         }
 
         // An image from the image model, saved to a temporary file whose path the variable holds.
-        private async Task GenerateImageAsync(JObject op, string id)
+        private async Task GenerateImageAsync(JObject op, string? id)
         {
             if (_imageGenerator is null)
             {
                 throw new InvalidOperationException("image generation is not configured");
             }
 
-            string prompt = (string)op["prompt"];
-            if (string.IsNullOrEmpty(prompt))
+            string prompt = (string?)op["prompt"] ?? "";
+            if (prompt.Length == 0)
             {
                 throw new InvalidOperationException("prompt is required for action: image");
             }
 
-            string size = (string)op["size"] ?? "1024x1024";
+            string size = (string?)op["size"] ?? "1024x1024";
             if (!IsAllowedImageSize(size))
             {
                 throw new InvalidOperationException("image size must be WxH with each side 512, 768 or 1024 (e.g. 1024x768): " + size);
@@ -746,57 +758,56 @@ namespace Pptcom.ComProxy
             File.WriteAllBytes(tempPath, bytes);
             _generatedFiles.Add(tempPath);
 
-            if (!string.IsNullOrEmpty(id))
+            if (id is not null && id.Length > 0)
             {
                 _handles[id] = tempPath;
             }
         }
 
         // The COM call of a get, set, call or item op on its target; null for a set.
-        private object Invoke(JObject op, string action, string member, object targetObj)
+        private object? Invoke(JObject op, string action, string? member, object targetObj)
         {
             switch (action)
             {
                 case ComOpAction.Get:
-                    RequireMember(member, "get");
                     // GetProperty|InvokeMethod together (the VB late-binding convention): a
                     // bare `x.Member` in VBA is either a property get or a parameterless method
                     // call (e.g. `Set p = Application.Presentations.Add`), and models write both.
                     return targetObj.GetType().InvokeMember(
-                        member, BindingFlags.GetProperty | BindingFlags.InvokeMethod | BindingFlags.Public | BindingFlags.Instance,
+                        RequireMember(member, "get"), BindingFlags.GetProperty | BindingFlags.InvokeMethod | BindingFlags.Public | BindingFlags.Instance,
                         binder: null, targetObj, args: null, ComCulture);
 
                 case ComOpAction.Set:
-                    RequireMember(member, "set");
-                    object setValue = ResolveArg(op["value"]);
+                    string property = RequireMember(member, "set");
+                    object? setValue = ResolveArg(op["value"]);
                     // For an indexed property put (`Adjustments(1) = 0.1`) COM wants the index
                     // args first and the new value last.
-                    object[] indexArgs = ResolveArgs(op["args"] as JArray);
-                    object[] putArgs = new object[indexArgs.Length + 1];
+                    object?[] indexArgs = ResolveArgs(op["args"] as JArray);
+                    object?[] putArgs = new object?[indexArgs.Length + 1];
                     Array.Copy(indexArgs, putArgs, indexArgs.Length);
                     putArgs[indexArgs.Length] = setValue;
                     targetObj.GetType().InvokeMember(
-                        member, BindingFlags.SetProperty | BindingFlags.Public | BindingFlags.Instance,
+                        property, BindingFlags.SetProperty | BindingFlags.Public | BindingFlags.Instance,
                         binder: null, targetObj, putArgs, ComCulture);
                     return null;
 
                 case ComOpAction.Call:
-                    RequireMember(member, "call");
-                    object[] callArgs = ResolveArgs(op["args"] as JArray);
-                    if (FileInsertingMembers.Contains(member))
+                    string method = RequireMember(member, "call");
+                    object?[] callArgs = ResolveArgs(op["args"] as JArray);
+                    if (FileInsertingMembers.Contains(method))
                     {
-                        string fileArg = callArgs.Length > 0 ? callArgs[0] as string : null;
+                        string? fileArg = callArgs.Length > 0 ? callArgs[0] as string : null;
                         if (fileArg is null || !_generatedFiles.Contains(fileArg))
                         {
                             throw new InvalidOperationException(
-                                member + GeneratedImagesOnly + ": pass the image's name (from zimage, or d1_img2 from docread) as a variable, without quotes - " +
-                                member + "(img1, msoFalse, msoTrue, left, top, width, height) - not a string or a file path");
+                                method + GeneratedImagesOnly + ": pass the image's name (from zimage, or d1_img2 from docread) as a variable, without quotes - " +
+                                method + "(img1, msoFalse, msoTrue, left, top, width, height) - not a string or a file path");
                         }
                     }
-                    return InvokeCallOrIndex(targetObj, member, callArgs);
+                    return InvokeCallOrIndex(targetObj, method, callArgs);
 
                 case ComOpAction.Item:
-                    object[] itemArgs = ResolveArgs(op["args"] as JArray);
+                    object?[] itemArgs = ResolveArgs(op["args"] as JArray);
                     return InvokeIndexer(targetObj, itemArgs);
 
                 default:
@@ -807,10 +818,10 @@ namespace Pptcom.ComProxy
         // Slide tracking for auto-renders: a handle belongs to the slide it was reached from;
         // a result that IS a slide (Slides(n), Slides.Add) starts a new owner. Mutating ops
         // (set/call) mark their owner slide as touched. Returns the slide the result belongs to.
-        private object TrackSlides(string action, string target, object resultValue)
+        private object? TrackSlides(string action, string target, object? resultValue)
         {
-            _handleSlide.TryGetValue(target, out object targetSlide);
-            object resultSlide = targetSlide;
+            _handleSlide.TryGetValue(target, out object? targetSlide);
+            object? resultSlide = targetSlide;
             if (resultValue is not null && System.Runtime.InteropServices.Marshal.IsComObject(resultValue)
                 && string.Equals(ComSecurityPolicy.TryGetTypeName(resultValue), "_Slide", StringComparison.Ordinal))
             {
@@ -834,9 +845,9 @@ namespace Pptcom.ComProxy
         public readonly List<string> MissingSetStatements = [];
         private bool _missingSetHit;
 
-        private void NoteMissingSet(JObject op, object value)
+        private void NoteMissingSet(JObject op, object? value)
         {
-            if (op["assign"] is null || !(bool)op["assign"] || (op["set"] is not null && (bool)op["set"]))
+            if (!IsAssignmentWithoutSet(op))
             {
                 return;
             }
@@ -851,14 +862,14 @@ namespace Pptcom.ComProxy
         // default property instead of replacing the variable. Only TextRange's default (Text) is
         // supported; other objects get an error, as VBA gives one when there is no default.
         // `Set x = ...`, object values and variables holding plain values just rebind as before.
-        private bool TryLetIntoDefault(JObject op, string id, object value)
+        private bool TryLetIntoDefault(JObject op, string id, object? value)
         {
-            if (op["assign"] is null || !(bool)op["assign"] || (op["set"] is not null && (bool)op["set"]))
+            if (!IsAssignmentWithoutSet(op))
             {
                 return false;
             }
 
-            if (!_handles.TryGetValue(id, out object current) || current is null || !System.Runtime.InteropServices.Marshal.IsComObject(current))
+            if (!_handles.TryGetValue(id, out object? current) || current is null || !System.Runtime.InteropServices.Marshal.IsComObject(current))
             {
                 return false;
             }
@@ -875,23 +886,29 @@ namespace Pptcom.ComProxy
                     "(VBA rules), and " + type + " has none here. Use a new name for the value.");
             }
 
-            string blocked = ComSecurityPolicy.CheckMemberOnTarget(current, "Text");
+            string? blocked = ComSecurityPolicy.CheckMemberOnTarget(current, "Text");
             if (blocked is not null)
             {
                 throw new InvalidOperationException("member is blocked by policy: " + blocked);
             }
 
             current.GetType().InvokeMember("Text", BindingFlags.SetProperty | BindingFlags.Public | BindingFlags.Instance, binder: null, current, [value], ComCulture);
-            _handleSlide.TryGetValue(id, out object slide);
+            _handleSlide.TryGetValue(id, out object? slide);
             MarkTouched(slide);
             return true;
         }
 
+        // `name = ...` as the script wrote it (the parser flags the op that binds the name), without Set.
+        private static bool IsAssignmentWithoutSet(JObject op)
+        {
+            return (bool?)op["assign"] == true && (bool?)op["set"] != true;
+        }
+
         // ---- slides changed by the ops since the last TakeTouchedSlideIndexes() ----
-        private readonly Dictionary<string, object> _handleSlide = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, object?> _handleSlide = new(StringComparer.OrdinalIgnoreCase); // null: not on a slide
         private readonly List<object> _touchedSlides = [];
 
-        private void MarkTouched(object slide)
+        private void MarkTouched(object? slide)
         {
             if (slide is null)
             {
@@ -939,7 +956,7 @@ namespace Pptcom.ComProxy
         // get followed by the default-member indexer of its value (ActivePresentation.Slides(1), slide.Shapes(2)).
         // The script can't tell them apart, so try the call first and fall back to get + index
         // when COM says the member doesn't take arguments that way.
-        private static object InvokeCallOrIndex(object targetObj, string member, object[] args)
+        private static object? InvokeCallOrIndex(object targetObj, string member, object?[] args)
         {
             const BindingFlags flags = BindingFlags.GetProperty | BindingFlags.InvokeMethod | BindingFlags.Public | BindingFlags.Instance;
             Type t = targetObj.GetType();
@@ -958,7 +975,7 @@ namespace Pptcom.ComProxy
                 // ("type mismatch") is the true one; the retry's error would only mislead.
                 try
                 {
-                    object collection = t.InvokeMember(member, flags, binder: null, targetObj, args: null, ComCulture);
+                    object? collection = t.InvokeMember(member, flags, binder: null, targetObj, args: null, ComCulture);
                     if (collection is not null)
                     {
                         return InvokeIndexer(collection, args);
@@ -984,7 +1001,7 @@ namespace Pptcom.ComProxy
             return hr == 0x80020003 /* DISP_E_MEMBERNOTFOUND */ || hr == 0x8002000E /* DISP_E_BADPARAMCOUNT */ || hr == 0x80020005 /* DISP_E_TYPEMISMATCH */;
         }
 
-        private static object InvokeIndexer(object targetObj, object[] args)
+        private static object? InvokeIndexer(object targetObj, object?[] args)
         {
             const BindingFlags flags = BindingFlags.GetProperty | BindingFlags.InvokeMethod | BindingFlags.Public | BindingFlags.Instance;
             Type t = targetObj.GetType();
@@ -1039,11 +1056,11 @@ namespace Pptcom.ComProxy
         // show the real signature, e.g.
         //   Expected: Shapes.AddTextbox(Orientation As MsoTextOrientation, Left As Single, Top As Single,
         //             Width As Single, Height As Single) - you passed 4 argument(s).
-        private string SignatureHint(JObject op, string action, string target, string member, Exception ex)
+        private string? SignatureHint(JObject op, string? action, string? target, string? member, Exception ex)
         {
             try
             {
-                if (string.IsNullOrEmpty(member) || (action != ComOpAction.Call && action != ComOpAction.Set && action != ComOpAction.Get))
+                if (member is null || member.Length == 0 || (action != ComOpAction.Call && action != ComOpAction.Set && action != ComOpAction.Get))
                 {
                     return null;
                 }
@@ -1059,14 +1076,14 @@ namespace Pptcom.ComProxy
                     return null;
                 }
 
-                if (target is null || !_handles.TryGetValue(target, out object targetObj) || targetObj is null)
+                if (target is null || !_handles.TryGetValue(target, out object? targetObj) || targetObj is null)
                 {
                     return null;
                 }
 
-                string typeName = ComSecurityPolicy.TryGetTypeName(targetObj);
-                Type iface = FindInteropType(typeName);
-                if (iface == null)
+                string? typeName = ComSecurityPolicy.TryGetTypeName(targetObj);
+                Type? iface = FindInteropType(typeName);
+                if (iface is null)
                 {
                     return null;
                 }
@@ -1111,9 +1128,9 @@ namespace Pptcom.ComProxy
             typeof(Microsoft.Office.Core.MsoTriState).Assembly,
         ];
 
-        private static Type FindInteropType(string comTypeName)
+        private static Type? FindInteropType(string? comTypeName)
         {
-            if (string.IsNullOrEmpty(comTypeName))
+            if (comTypeName is null || comTypeName.Length == 0)
             {
                 return null;
             }
@@ -1155,7 +1172,7 @@ namespace Pptcom.ComProxy
         {
             if (t.IsByRef)
             {
-                t = t.GetElementType();
+                t = t.GetElementType() ?? t;
             }
 
             if (t == typeof(float))
@@ -1200,15 +1217,18 @@ namespace Pptcom.ComProxy
             return msg;
         }
 
-        private static void RequireMember(string member, string action)
+        // The member's name; an op of `action` without one is an error.
+        private static string RequireMember(string? member, string action)
         {
-            if (string.IsNullOrEmpty(member))
+            if (member is null || member.Length == 0)
             {
                 throw new InvalidOperationException("member is required for action: " + action);
             }
+
+            return member;
         }
 
-        private object[] ResolveArgs(JArray array)
+        private object?[] ResolveArgs(JArray? array)
         {
             if (array is null)
             {
@@ -1218,7 +1238,8 @@ namespace Pptcom.ComProxy
             return [.. array.Select(ResolveArg)];
         }
 
-        private object ResolveArg(JToken token)
+        // A value as COM gets it; null for JSON null (VBA's Nothing / Empty).
+        private object? ResolveArg(JToken? token)
         {
             if (token is null || token.Type == JTokenType.Null)
             {
@@ -1227,7 +1248,7 @@ namespace Pptcom.ComProxy
 
             return token.Type switch
             {
-                JTokenType.String => ResolveString((string)token),
+                JTokenType.String => ResolveString((string?)token ?? ""),
                 JTokenType.Integer => token.ToObject<int>(),
                 JTokenType.Float => token.ToObject<double>(),
                 JTokenType.Boolean => token.ToObject<bool>(),
@@ -1237,12 +1258,12 @@ namespace Pptcom.ComProxy
         }
 
         // "$id": the variable's value; an enum constant's name: its value; anything else: the text itself.
-        private object ResolveString(string s)
+        private object? ResolveString(string s)
         {
             if (s.Length > 0 && s[0] == '$')
             {
                 string refId = s.Substring(1);
-                if (!_handles.TryGetValue(refId, out object refVal))
+                if (!_handles.TryGetValue(refId, out object? refVal))
                 {
                     throw new InvalidOperationException("unknown reference: " + s);
                 }
@@ -1267,7 +1288,7 @@ namespace Pptcom.ComProxy
                 {
                     if (part is JObject po && po["t"] is not null)
                     {
-                        sb.Append((string)po["t"]);
+                        sb.Append((string?)po["t"]);
                         continue;
                     }
                     sb.Append(VbaOps.ToText(ResolveArg(part)));
@@ -1283,12 +1304,12 @@ namespace Pptcom.ComProxy
             // sent to COM; ComErrorText lists what this argument / property takes.
             if (obj["$unresolved"] is not null)
             {
-                throw new UnresolvedNameException((string)obj["$unresolved"]);
+                throw new UnresolvedNameException((string?)obj["$unresolved"] ?? "");
             }
 
             if (obj["$calc"] is JArray calc && calc.Count == 3)
             {
-                return VbaOps.Binary(ResolveArg(calc[0]), (string)calc[1], ResolveArg(calc[2]));
+                return VbaOps.Binary(ResolveArg(calc[0]), (string?)calc[1] ?? "", ResolveArg(calc[2]));
             }
 
             if (obj["$neg"] is not null)
@@ -1298,7 +1319,7 @@ namespace Pptcom.ComProxy
 
             // no args: none (RGB and Chr then say how many they take)
             JArray fnArgs = obj["args"] as JArray ?? [];
-            switch ((string)obj["$fn"])
+            switch ((string?)obj["$fn"])
             {
                 case "RGB":
                     if (fnArgs.Count != 3)

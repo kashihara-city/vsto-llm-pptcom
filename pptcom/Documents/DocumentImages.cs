@@ -23,8 +23,8 @@ namespace Pptcom.Documents
         // neither can use keeps FilePath null (listed, but not placeable).
         public static void Prepare(AttachedImage img)
         {
-            string ext = Extension(img.MediaType);
-            img.Kind = ext is not null ? ext.TrimStart('.').ToUpperInvariant() : (img.MediaType ?? "?");
+            string? ext = Extension(img.MediaType);
+            img.Kind = ext is not null ? ext.TrimStart('.').ToUpperInvariant() : img.MediaType;
             if (ext == ".svg")
             {
                 img.FilePath = Write(img.Data, ext);   // PowerPoint places SVG; System.Drawing cannot read it
@@ -66,7 +66,7 @@ namespace Pptcom.Documents
 
         // A PNG of at most PreviewMax on the long side (drawn on white: EMF, PNG and GIF may be transparent).
         // Null when the image cannot be decoded here (SVG, a broken file).
-        public static string Preview(AttachedImage img)
+        public static string? Preview(AttachedImage img)
         {
             if (img.PreviewPath is not null && File.Exists(img.PreviewPath))
             {
@@ -113,9 +113,9 @@ namespace Pptcom.Documents
         }
 
         // Types PowerPoint's AddPicture reads as they are.
-        private static string Extension(string mediaType)
+        private static string? Extension(string mediaType)
         {
-            return (mediaType ?? "").ToLowerInvariant() switch
+            return mediaType.ToLowerInvariant() switch
             {
                 "image/png" => ".png",
                 "image/jpeg" or "image/jpg" or "image/pjpeg" => ".jpg",

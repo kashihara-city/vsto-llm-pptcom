@@ -20,10 +20,10 @@ namespace Pptcom.Agent
         private readonly Dictionary<int, StringBuilder> _toolArgs = [];
         private readonly StreamProgress _progress = new();
         private readonly DateTime _started = DateTime.UtcNow;
-        private readonly Action<StreamProgress> _onProgress;
+        private readonly Action<StreamProgress>? _onProgress;
         private DateTime _lastReport = DateTime.MinValue;
 
-        public StreamedReply(Action<StreamProgress> onProgress)
+        public StreamedReply(Action<StreamProgress>? onProgress)
         {
             _onProgress = onProgress;
         }
@@ -34,7 +34,7 @@ namespace Pptcom.Agent
             // LiteLLM reports a backend failure after the 200 header as an error event.
             if (chunk["error"] is JObject error)
             {
-                int? status = int.TryParse((string)error["code"], NumberStyles.Integer, CultureInfo.InvariantCulture, out int code) ? code : null;
+                int? status = int.TryParse((string?)error["code"], NumberStyles.Integer, CultureInfo.InvariantCulture, out int code) ? code : null;
                 string message = "LLM stream error: " + error.ToString(Newtonsoft.Json.Formatting.None);
                 if (status is null or >= 500)
                 {
@@ -61,8 +61,8 @@ namespace Pptcom.Agent
                     AddDelta(delta);
                 }
 
-                string finish = (string)choice["finish_reason"];
-                if (!string.IsNullOrEmpty(finish))
+                string finish = (string?)choice["finish_reason"] ?? "";
+                if (finish.Length > 0)
                 {
                     _reply.FinishReason = finish;
                 }
@@ -89,7 +89,7 @@ namespace Pptcom.Agent
             {
                 ToolCall tc = kv.Value;
                 tc.Arguments = _toolArgs[kv.Key].ToString();
-                if (string.IsNullOrEmpty(tc.Id))
+                if (tc.Id.Length == 0)
                 {
                     tc.Id = Invariant($"call_{kv.Key}");
                 }
@@ -101,19 +101,19 @@ namespace Pptcom.Agent
 
         private void AddUsage(JObject usage)
         {
-            JToken rt = usage["completion_tokens_details"]?["reasoning_tokens"];
+            JToken? rt = usage["completion_tokens_details"]?["reasoning_tokens"];
             if (rt is not null && rt.Type == JTokenType.Integer)
             {
                 _reply.ReasoningTokens = (int)rt;
             }
 
-            JToken pt = usage["prompt_tokens"];
+            JToken? pt = usage["prompt_tokens"];
             if (pt is not null && pt.Type == JTokenType.Integer)
             {
                 _reply.PromptTokens = (int)pt;
             }
 
-            JToken ct = usage["completion_tokens"];
+            JToken? ct = usage["completion_tokens"];
             if (ct is not null && ct.Type == JTokenType.Integer)
             {
                 _reply.CompletionTokens = (int)ct;
@@ -122,9 +122,10 @@ namespace Pptcom.Agent
 
         private void AddDelta(JObject delta)
         {
-            bool hasReasoning = !string.IsNullOrEmpty((string)delta["reasoning_content"]);
-            bool hasOutput = !string.IsNullOrEmpty((string)delta["content"]) || delta["tool_calls"] is JArray;
-            if ((hasReasoning || hasOutput) && _reply.FirstToken is null)
+            string piece = (string?)delta["content"] ?? "";
+            string r = (string?)delta["reasoning_content"] ?? "";
+            bool hasOutput = piece.Length > 0 || delta["tool_calls"] is JArray;
+            if ((r.Length > 0 || hasOutput) && _reply.FirstToken is null)
             {
                 _reply.FirstToken = DateTime.UtcNow - _started;
             }
@@ -134,15 +135,13 @@ namespace Pptcom.Agent
                 _reply.FirstOutput = DateTime.UtcNow - _started;
             }
 
-            string piece = (string)delta["content"];
-            if (!string.IsNullOrEmpty(piece))
+            if (piece.Length > 0)
             {
                 _content.Append(piece);
                 _progress.ContentChars += piece.Length;
             }
 
-            string r = (string)delta["reasoning_content"];
-            if (!string.IsNullOrEmpty(r))
+            if (r.Length > 0)
             {
                 _reasoning.Append(r);
                 _progress.ReasoningChars += r.Length;
@@ -160,29 +159,29 @@ namespace Pptcom.Agent
         // The id and the name come in the first fragment of a call, the arguments in pieces after it.
         private void AddToolCallFragment(JObject tc)
         {
-            int index = tc["index"] is not null ? (int)tc["index"] : 0;
+            int index = (int?)tc["index"] ?? 0;
             if (!_toolSlots.TryGetValue(index, out ToolCall slot))
             {
-                slot = new ToolCall { Id = null, Name = "", Arguments = "" };
+                slot = new ToolCall();
                 _toolSlots[index] = slot;
                 _toolArgs[index] = new StringBuilder();
             }
-            string id = (string)tc["id"];
-            if (!string.IsNullOrEmpty(id))
+            string id = (string?)tc["id"] ?? "";
+            if (id.Length > 0)
             {
                 slot.Id = id;
             }
 
             if (tc["function"] is JObject fn)
             {
-                string name = (string)fn["name"];
-                if (!string.IsNullOrEmpty(name))
+                string name = (string?)fn["name"] ?? "";
+                if (name.Length > 0)
                 {
                     slot.Name += name;
                 }
 
-                string args = (string)fn["arguments"];
-                if (!string.IsNullOrEmpty(args))
+                string args = (string?)fn["arguments"] ?? "";
+                if (args.Length > 0)
                 {
                     _toolArgs[index].Append(args);
                     _progress.ToolArgChars += args.Length;

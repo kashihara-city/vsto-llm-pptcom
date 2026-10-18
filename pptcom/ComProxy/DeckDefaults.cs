@@ -29,7 +29,7 @@ namespace Pptcom.ComProxy
         // A 1024 x 1024 generated image (PNG without a resolution, like the image model's) placed with
         // width/height -1: PowerPoint shrinks a picture larger than the slide to fit it.
         public string GeneratedImageSize = "540 x 540";
-        public string Note;        // what could not be measured, for the log
+        public string Note = "";   // what could not be measured, for the log
         public double Seconds;     // how long measuring took
 
         private static string N(double v)

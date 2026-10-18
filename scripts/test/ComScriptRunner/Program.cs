@@ -165,12 +165,12 @@ namespace ComScriptRunner
         // Same as the add-in's zimage path (ThisAddIn.RunToolAsync): VBA string rules, line breaks as spaces.
         private static string ZimageLine(JObject req)
         {
-            static string lit(string s)
+            static string lit(string? s)
             {
                 return "\"" + (s ?? "").Replace("\"", "\"\"").Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ') + "\"";
             }
 
-            return (string)req["name"] + " = Image(" + lit((string)req["prompt"]) + ", " + lit((string)req["size"] ?? "1024x1024") + ")";
+            return (string?)req["name"] + " = Image(" + lit((string?)req["prompt"]) + ", " + lit((string?)req["size"] ?? "1024x1024") + ")";
         }
 
         // Parser regression check (no PowerPoint). The corpus holds past scripts: "### RUN <name>"
@@ -180,7 +180,7 @@ namespace ComScriptRunner
         // With opsPath, also writes the ops JSON of each call's accepted lines (one line per call,
         // synthetic ids renumbered by first use) - compare two builds to see whether a parser change
         // altered what accepted lines turn into, not only which lines are accepted.
-        private static int ParseCheck(string corpusPath, string outPath, string opsPath = null)
+        private static int ParseCheck(string corpusPath, string outPath, string? opsPath = null)
         {
             StringBuilder sb = new();
             StringBuilder opsOut = new();
@@ -232,7 +232,7 @@ namespace ComScriptRunner
                 total++;
                 List<string> trial = [.. accepted, raw];
                 ComScriptParser.ParseResult p = ComScriptParser.Parse(string.Join("\n", trial), known, 100000);
-                string error = LineError(p);
+                string? error = LineError(p);
                 if (error is null)
                 {
                     accepted.Add(raw);
@@ -285,14 +285,14 @@ namespace ComScriptRunner
         }
 
         // null when the script parsed; otherwise the parse error (with its "line n:" prefix removed).
-        private static string LineError(ComScriptParser.ParseResult p)
+        private static string? LineError(ComScriptParser.ParseResult p)
         {
             if (p.Success)
             {
                 return p.LineErrors.Count == 0 ? null : p.LineErrors.Values.First().Message;
             }
 
-            string e = p.Error ?? "";
+            string e = p.Error;
             int colon = e.IndexOf(": ", StringComparison.Ordinal);
             return e.StartsWith("line ", StringComparison.Ordinal) && colon > 0 ? e.Substring(colon + 2) : e;
         }
@@ -406,12 +406,12 @@ namespace ComScriptRunner
 
         // The answer to a request about the deck (read, fingerprint, compare, brief, image, export, open, probe,
         // save), or null for a script.
-        private static JObject DeckReply(JObject req, dynamic app, ComProxyEngine engine, ref DeckReader.Fingerprint fingerprint)
+        private static JObject? DeckReply(JObject req, dynamic app, ComProxyEngine engine, ref DeckReader.Fingerprint fingerprint)
         {
-            if (req["read"] is not null)
+            if (req["read"] is JToken read)
             {
                 // pptread: the tool text and the slides to render (each then fetched with export + brief).
-                string text = DeckReader.Read((object)app, req["read"].ToString(), out List<int> toRender);
+                string text = DeckReader.Read((object)app, read.ToString(), out List<int> toRender);
                 return new JObject { ["text"] = text, ["slides"] = new JArray(toRender) };
             }
 
@@ -435,35 +435,36 @@ namespace ComScriptRunner
                 };
             }
 
-            if (req["brief"] is not null)
+            if (req["brief"] is JToken brief)
             {
                 // The shape list the add-in sends with each slide rendering.
-                return new JObject { ["text"] = DeckReader.Brief((object)app, (int)req["brief"], engine.ShapeVariables()) };
+                return new JObject { ["text"] = DeckReader.Brief((object)app, (int)brief, engine.ShapeVariables()) };
             }
 
-            if (req["image"] is not null)
+            if (req["image"] is JToken image)
             {
-                if (!engine.TryGetHandle((string)req["image"], out object imgPath) || imgPath is not string)
+                string name = (string?)image ?? "";
+                if (!engine.TryGetHandle(name, out object? handle) || handle is not string imgPath)
                 {
-                    throw new InvalidOperationException("no generated image named " + (string)req["image"]);
+                    throw new InvalidOperationException("no generated image named " + name);
                 }
 
-                return new JObject { ["png"] = (string)imgPath };
+                return new JObject { ["png"] = imgPath };
             }
 
-            if (req["export"] is not null)
+            if (req["export"] is JToken export)
             {
-                return new JObject { ["png"] = DeckReader.ExportSlidePng((object)app, (int)req["export"]) };
+                return new JObject { ["png"] = DeckReader.ExportSlidePng((object)app, (int)export) };
             }
 
-            if (req["open"] is not null)
+            if (req["open"] is JToken open)
             {
                 while ((int)app.Presentations.Count > 0)
                 {
                     app.Presentations.Item(1).Close();
                 }
 
-                dynamic opened = app.Presentations.Open(Path.GetFullPath((string)req["open"]), MsoFalse, MsoFalse, MsoTrue);
+                dynamic opened = app.Presentations.Open(Path.GetFullPath((string?)open ?? ""), MsoFalse, MsoFalse, MsoTrue);
                 engine.BindPresentation();
                 return new JObject { ["opened"] = (string)opened.FullName, ["slides"] = (int)opened.Slides.Count };
             }
@@ -481,9 +482,9 @@ namespace ComScriptRunner
                 return new JObject { ["placeholders"] = ph, ["summary"] = d.Summary() };
             }
 
-            if (req["save"] is not null)
+            if (req["save"] is JToken save)
             {
-                string outPptx = Path.GetFullPath((string)req["save"]);
+                string outPptx = Path.GetFullPath((string?)save ?? "");
                 dynamic cur = app.ActivePresentation;
                 Directory.CreateDirectory(Path.GetDirectoryName(outPptx));
                 cur.SaveAs(outPptx);
@@ -501,9 +502,10 @@ namespace ComScriptRunner
             JObject reply;
             // {"zimage": {"name", "prompt", "size"}}: the rig's zimage tool, built into the same
             // `name = Image(...)` line the add-in uses - the only way Image() is accepted.
-            bool zimage = req["zimage"] is not null;
-            string script = zimage ? ZimageLine((JObject)req["zimage"]) : (string)req["script"] ?? "";
-            int maxLines = req["maxLines"] is not null ? (int)req["maxLines"] : 2000; // same as the add-in
+            JObject? zimageRequest = req["zimage"] as JObject;
+            bool zimage = zimageRequest is not null;
+            string script = zimageRequest is not null ? ZimageLine(zimageRequest) : (string?)req["script"] ?? "";
+            int maxLines = (int?)req["maxLines"] ?? 2000; // same as the add-in
             ComScriptParser.ParseResult parsed = ComScriptParser.Parse(script, knownIds, maxLines, allowImage: zimage);
             if (!parsed.Success)
             {
@@ -521,7 +523,7 @@ namespace ComScriptRunner
                 ComScriptResult result = engine.ExecuteScriptAsync(parsed).GetAwaiter().GetResult();
                 foreach (string id in parsed.DefinedIds)
                 {
-                    if (!knownIds.Contains(id) && engine.TryGetHandle(id, out object bound))
+                    if (!knownIds.Contains(id) && engine.TryGetHandle(id, out _))
                     {
                         knownIds.Add(id);
                     }

@@ -140,7 +140,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build\build.ps1
 
 版を上げるときは `scripts/deps/fetch-web.py` の版を書き換えて実行します。公開から 7 日たっていない版は取りません。
 
-C# のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.NetAnalyzers、Microsoft.CodeAnalysis.CSharp.CodeStyle、Meziantou.Analyzer）にかけ、警告はエラーとして扱います。言語の版、解析器とその版は `Directory.Build.props` で決めています。止めている規則とその理由、書き方の決まり（型は `var` でなく名前で書く、`if` などには必ず波かっこを付ける、null とは `is null` / `is not null` で比べる、1 つのファイルに 1 つの型、メソッドは 100 行・60 文まで）は `.editorconfig` に書いてあります。古い形式の csproj には .NET SDK の「すべての規則」の一覧が渡らないため、NetAnalyzers の一覧はパッケージから `scripts/deps/netanalyzers-config.py` で作り、`deps/analyzers/` に置いています（CI で照合します）。
+C# のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.NetAnalyzers、Microsoft.CodeAnalysis.CSharp.CodeStyle、Meziantou.Analyzer）にかけ、警告はエラーとして扱います。言語の版、解析器とその版は `Directory.Build.props` で決めています。止めている規則とその理由、書き方の決まり（型は `var` でなく名前で書く、`if` などには必ず波かっこを付ける、null とは `is null` / `is not null` で比べる、1 つのファイルに 1 つの型、メソッドは 100 行・60 文まで）は `.editorconfig` に書いてあります。null になりうる参照は C# の Nullable で型に書き、コンパイラが確かめます（`!` で黙らせることはしません）。古い形式の csproj には .NET SDK の「すべての規則」の一覧が渡らないため、NetAnalyzers の一覧はパッケージから `scripts/deps/netanalyzers-config.py` で作り、`deps/analyzers/` に置いています（CI で照合します）。
 
 作業ウィンドウの文言は、コードには書かず、`pptcom/UI/web/locales/<言語>.json` にメッセージのコードごとに置いています。アドインはコードと値だけを作業ウィンドウに送り、文にするのは作業ウィンドウ（`i18n.js`）です。`ja.json` がもとで、ほかの言語のファイルに無いコードは日本語で出ます。どの言語を使うかは PowerPoint の表示言語で決めます。`python -X utf8 scripts/test/i18n.py` は、使っているコードがすべて `ja.json` にあること、値の数が `{0}` などと合うこと、ほかの言語が同じコードを持つこと、コードに日本語の文が書かれていないことを調べます（CI でも流します）。
 
@@ -163,6 +163,7 @@ gh attestation verify vsto-llm-pptcom-<版>.msi --repo kashihara-city/vsto-llm-p
 - `pptcom/Agent/` LLM との通信、モデルへの指示（`system-prompt.txt`）とツールの定義（`tools.json`。どちらも DLL に埋め込み）
 - `pptcom/ComProxy/` pptcom スクリプトの解析と実行、使ってよいメンバーの検査
 - `pptcom/Documents/` 添付した資料の保持、docread、資料の画像
+- `pptcom/Polyfills/` .NET Framework 4.8 に無く、C# の `required` にコンパイラが使う属性
 - `pptcom/UI/` 作業ウィンドウ（`web/` が画面の HTML・CSS・JavaScript、`web/locales/` が言語ごとの文言。DLL に埋め込み、WebView2 に渡す）
 - `deps/` 作業ウィンドウで使う PDF.js と anydoc の、公式の配布元から取ったもの（`web-sources.lock.json` に版・取得元・ハッシュ）、SBOM を確かめる CycloneDX の公式スキーマ（`cyclonedx/`）、NetAnalyzers の規則の一覧（`analyzers/`）
 - `scripts/build/` MSI のビルド（WiX）、SBOM の生成、anydoc に含まれる Rust ライブラリのライセンス一覧の生成

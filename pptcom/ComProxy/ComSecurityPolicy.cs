@@ -69,9 +69,9 @@ namespace Pptcom.ComProxy
             new Guid("91493440-5A91-11CF-8700-00AA0060263B"), // Microsoft PowerPoint Object Library
         ];
 
-        public static bool IsMemberAllowed(string member)
+        public static bool IsMemberAllowed(string? member)
         {
-            if (string.IsNullOrEmpty(member))
+            if (member is null || member.Length == 0)
             {
                 return true; // default-member "item" access
             }
@@ -107,14 +107,14 @@ namespace Pptcom.ComProxy
 
         // The same rules by type name, for listing a type's members in an error hint (blocked
         // members are never suggested).
-        public static bool IsMemberAllowedOn(string typeName, string member)
+        public static bool IsMemberAllowedOn(string? typeName, string member)
         {
             if (!IsMemberAllowed(member))
             {
                 return false;
             }
 
-            foreach (string name in new[] { typeName, "_" + typeName })
+            foreach (string? name in new[] { typeName, "_" + typeName })
             {
                 if (name is not null && BlockedMembersByType.TryGetValue(name, out HashSet<string> blocked) && blocked.Contains(member))
                 {
@@ -126,14 +126,14 @@ namespace Pptcom.ComProxy
         }
 
         // Returns the blocking rule's description, or null if the call is allowed.
-        public static string CheckMemberOnTarget(object target, string member)
+        public static string? CheckMemberOnTarget(object? target, string? member)
         {
-            if (string.IsNullOrEmpty(member) || target is null || !Marshal.IsComObject(target))
+            if (member is null || member.Length == 0 || target is null || !Marshal.IsComObject(target))
             {
                 return null;
             }
 
-            string typeName = TryGetTypeName(target);
+            string? typeName = TryGetTypeName(target);
             if (typeName is null)
             {
                 return null;
@@ -147,14 +147,14 @@ namespace Pptcom.ComProxy
             return null;
         }
 
-        public static string TryGetTypeName(object comObject)
+        public static string? TryGetTypeName(object? comObject)
         {
             if (comObject is not IDispatchMinimal dispatch)
             {
                 return null;
             }
 
-            ComTypes.ITypeInfo typeInfo = null;
+            ComTypes.ITypeInfo? typeInfo = null;
             try
             {
                 dispatch.GetTypeInfo(0, 0, out typeInfo);
@@ -179,7 +179,7 @@ namespace Pptcom.ComProxy
             }
         }
 
-        public static bool IsReturnValueAllowed(object value)
+        public static bool IsReturnValueAllowed(object? value)
         {
             if (value is null)
             {
@@ -204,7 +204,7 @@ namespace Pptcom.ComProxy
                 return false;
             }
 
-            string typeName = TryGetTypeName(value);
+            string? typeName = TryGetTypeName(value);
             return typeName is null || !BlockedReturnTypes.Contains(typeName);
         }
 
@@ -215,8 +215,8 @@ namespace Pptcom.ComProxy
                 return null;
             }
 
-            ComTypes.ITypeInfo typeInfo = null;
-            ComTypes.ITypeLib typeLib = null;
+            ComTypes.ITypeInfo? typeInfo = null;
+            ComTypes.ITypeLib? typeLib = null;
             IntPtr pAttr = IntPtr.Zero;
             try
             {

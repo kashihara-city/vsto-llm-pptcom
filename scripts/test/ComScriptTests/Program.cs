@@ -118,8 +118,8 @@ namespace ComScriptTests
         private sealed class Outcome
         {
             public bool Ok;
-            public object Value;
-            public string Error;
+            public object? Value;
+            public string? Error;
         }
 
         // Runs the script and returns x (or the error of the line that should have set it).
@@ -133,13 +133,13 @@ namespace ComScriptTests
 
             ComProxyEngine engine = new(new object());
             ComScriptResult result = engine.ExecuteScriptAsync(parsed).GetAwaiter().GetResult();
-            ComLineResult failed = result.Lines.Find(static l => l.Status != ComLineStatus.Applied);
+            ComLineResult? failed = result.Lines.Find(static l => l.Status != ComLineStatus.Applied);
             if (failed is not null)
             {
                 return new Outcome { Error = Invariant($"line {failed.Line}: {failed.Error}") };
             }
 
-            if (!engine.TryGetHandle("x", out object x))
+            if (!engine.TryGetHandle("x", out object? x))
             {
                 return new Outcome { Error = "x was not set" };
             }
@@ -177,7 +177,7 @@ namespace ComScriptTests
             Report(name, same, "expected " + expected + " (" + type + "), got " + Show(got));
         }
 
-        private static bool IsNumber(object v)
+        private static bool IsNumber(object? v)
         {
             return v is int or long or double or float or short or decimal;
         }
@@ -227,38 +227,38 @@ namespace ComScriptTests
             Accept(Vars + "t = \"No.\" & p + 1 & \" of \" & q");
             Accept(Vars + "x = -w / 2 + p Mod q - q ^ 2");
             Accept("Set b = ActivePresentation.Slides", static ops =>
-                (string)ops.Last["id"] == "b" ? null : "the last hop should be bound to b: " + ops.Last);
+                (string?)ops.Last?["id"] == "b" ? null : "the last hop should be bound to b: " + ops.Last);
             Accept("x = ppAlignLeft", static ops =>
-                ops.Last["value"].Type == JTokenType.Integer ? null : "x = ppAlignLeft should store the enum's number: " + ops.Last);
+                ops.Last?["value"]?.Type == JTokenType.Integer ? null : "x = ppAlignLeft should store the enum's number: " + ops.Last);
             // VBA's line continuation: joined before parsing; a "_" inside a string is just text.
             Accept("Set b = ActivePresentation.Slides.Add(1, _\n    ppLayoutBlank)", static ops =>
-                (string)ops.Last["id"] == "b" ? null : "the continued Slides.Add should bind b: " + ops.Last);
+                (string?)ops.Last?["id"] == "b" ? null : "the continued Slides.Add should bind b: " + ops.Last);
             Accept("t = \"a\" & _\n    \"b\" & _\n    \"c\"", static ops =>
-                (string)ops.Last["value"] == "abc" ? null : "expected \"abc\": " + ops.Last);
+                (string?)ops.Last?["value"] == "abc" ? null : "expected \"abc\": " + ops.Last);
             Accept("t = \"ends with _\"", static ops =>
-                (string)ops.Last["value"] == "ends with _" ? null : "a _ inside a string is text: " + ops.Last);
+                (string?)ops.Last?["value"] == "ends with _" ? null : "a _ inside a string is text: " + ops.Last);
             Accept("x = 1 + _ ' the comment goes, the continuation stays\n    2", static ops =>
-                (int)ops.Last["value"] == 3 ? null : "expected 3: " + ops.Last);
+                (int?)ops.Last?["value"] == 3 ? null : "expected 3: " + ops.Last);
             // VBA's With block: shorthand, rewritten before parsing; the With object is evaluated once.
             Accept("Set box = ActivePresentation.Slides(1).Shapes(1)\nWith box\n    .Left = 10\n    .Top = .Left + .5\nEnd With", static ops =>
-                ops.Any(static o => (string)o["target"] == "box" && (string)o["member"] == "Left") && ops.Last["value"]["$calc"] is not null && (double)ops.Last["value"]["$calc"][2] == 0.5 ? null : "With on a variable: " + ops);
+                ops.Any(static o => (string?)o["target"] == "box" && (string?)o["member"] == "Left") && ops.Last?["value"]?["$calc"] is not null && (double?)ops.Last?["value"]?["$calc"]?[2] == 0.5 ? null : "With on a variable: " + ops);
             Accept("With ActivePresentation.Slides(1).Shapes(1).TextFrame.TextRange\n    .Text = \"a.b\"\n    .Font.Size = 12\nEnd With", static ops =>
-                ops.Any(static o => (string)o["id"] == "_w1") && ops.Any(static o => (string)o["value"] == "a.b") ? null : "With on a chain: " + ops);
+                ops.Any(static o => (string?)o["id"] == "_w1") && ops.Any(static o => (string?)o["value"] == "a.b") ? null : "With on a chain: " + ops);
             Accept("Set box = ActivePresentation.Slides(1).Shapes(1)\nWith box\n    With .TextFrame.TextRange\n        .Text = \"x\"\n    End With\n    .Left = 5\nEnd With", static ops =>
-                ops.Any(static o => (string)o["target"] == "box" && (string)o["member"] == "Left") ? null : "nested With: " + ops);
+                ops.Any(static o => (string?)o["target"] == "box" && (string?)o["member"] == "Left") ? null : "nested With: " + ops);
             Accept("With ActivePresentation.Slides.Add(1, ppLayoutBlank)\n    .Name = \"s\"\nEnd With", static ops =>
             {
-                int adds = ops.Count(static o => (string)o["member"] == "Add");
+                int adds = ops.Count(static o => (string?)o["member"] == "Add");
                 return adds == 1 ? null : Invariant($"the With object must be evaluated once, not {adds} times: {ops}");
             });
             // A bare unknown name passed to COM is left for the engine, which lists what the parameter takes.
             Accept("Set s = ActivePresentation.Slides(1).Shapes(1)\ns.ZOrder msoSendBehind", static ops =>
-                (string)ops.Last["args"][0]["$unresolved"] == "msoSendBehind" ? null : "expected an unresolved name: " + ops.Last);
+                (string?)ops.Last?["args"]?[0]?["$unresolved"] == "msoSendBehind" ? null : "expected an unresolved name: " + ops.Last);
             // Array(...) only as a whole argument (Shapes.Range(Array(...))); not stored, not inside expressions.
             Accept("Set r = ActivePresentation.Slides(1).Shapes.Range(Array(\"a\", \"b\"))", static ops =>
-                ops.Any(static o => (string)o["member"] == "Range" && (string)o["args"][0]["$fn"] == "Array") ? null : "expected an Array argument: " + ops);
+                ops.Any(static o => (string?)o["member"] == "Range" && (string?)o["args"]?[0]?["$fn"] == "Array") ? null : "expected an Array argument: " + ops);
             Accept("img = Image(\"a cat\", \"1024x768\")", static ops =>
-                (string)ops.Last["action"] == "image" ? null : "expected an image op: " + ops.Last, allowImage: true);
+                (string?)ops.Last?["action"] == "image" ? null : "expected an image op: " + ops.Last, allowImage: true);
 
         }
 
@@ -267,23 +267,23 @@ namespace ComScriptTests
         {
             Accept("For r = 1 To 3\n    x = r * 2\nNext", static ops =>
             {
-                int r = ops.Count(static o => (string)o["id"] == "r"), x = ops.Count(static o => (string)o["id"] == "x");
+                int r = ops.Count(static o => (string?)o["id"] == "r"), x = ops.Count(static o => (string?)o["id"] == "x");
                 return r == 4 && x == 3 ? null : Invariant($"3 passes and r after the loop, not {x} and {r}: {ops}");
             });
             Accept("Set t = ActivePresentation.Slides(1).Shapes(1).Table\nFor rr = 1 To 6\n    For cc = 2 To 3\n        t.Cell(rr, cc).Shape.TextFrame.MarginLeft = 10\n" +
                    "        t.Cell(rr, cc).Shape.TextFrame.TextRange.ParagraphFormat.Alignment = ppAlignLeft\n    Next\nNext", static ops =>
             {
-                int cells = ops.Count(static o => (string)o["member"] == "MarginLeft");
+                int cells = ops.Count(static o => (string?)o["member"] == "MarginLeft");
                 return cells == 12 ? null : Invariant($"6 x 2 cells: {cells}");
             });
             Accept("For r = 1 To 2\n    For c = 1 To 2\n        x = r + c\nNext c, r", static ops =>
             {
-                int x = ops.Count(static o => (string)o["id"] == "x");
+                int x = ops.Count(static o => (string?)o["id"] == "x");
                 return x == 4 ? null : Invariant($"Next c, r closes both: {x} passes, {ops}");
             });
             Accept("For r = 5 To 1 Step -2\n    x = r\nNext", static ops =>
-                string.Join(",", ops.Where(static o => (string)o["id"] == "x").Select(static o => (string)o["value"])) == "$r,$r,$r" &&
-                string.Join(",", ops.Where(static o => (string)o["id"] == "r").Select(static o => (string)o["value"])) == "5,3,1,-1" ? null : "Step -2: " + ops);
+                string.Join(",", ops.Where(static o => (string?)o["id"] == "x").Select(static o => (string?)o["value"])) == "$r,$r,$r" &&
+                string.Join(",", ops.Where(static o => (string?)o["id"] == "r").Select(static o => (string?)o["value"])) == "5,3,1,-1" ? null : "Step -2: " + ops);
             CheckValue("as in VBA the counter is one Step past the end after the loop", "For r = 1 To 4\nNext\nx = r", "Long", "5");
             CheckValue("loop body arithmetic", "s = 0\nFor r = 1 To 4\n    s = s + r\nNext\nx = s", "Long", "10");
             Reject("Set t = ActivePresentation.Slides(1).Shapes(1).Table\nFor r = 1 To t.Rows.Count\n    x = r\nNext", "its bounds must be numbers");
@@ -342,7 +342,7 @@ namespace ComScriptTests
             return lines[lines.Length - 1];
         }
 
-        private static void Accept(string script, Func<JArray, string> check = null, bool allowImage = false)
+        private static void Accept(string script, Func<JArray, string?>? check = null, bool allowImage = false)
         {
             string name = "accept: " + LastLine(script);
             ComScriptParser.ParseResult p = ComScriptParser.Parse(script, priorKnownIds: null, 2000, allowImage);
@@ -356,7 +356,7 @@ namespace ComScriptTests
                 Report(name, ok: false, Invariant($"line {p.LineErrors.First().Key}: {p.LineErrors.First().Value.Message}"));
                 return;
             }
-            string problem = check is not null ? check(JArray.Parse(p.OpsJson)) : null;
+            string? problem = check is not null ? check(JArray.Parse(p.OpsJson)) : null;
             Report(name, problem is null, problem);
         }
 
@@ -364,7 +364,7 @@ namespace ComScriptTests
         {
             string name = "reject: " + LastLine(script);
             ComScriptParser.ParseResult p = ComScriptParser.Parse(script, priorKnownIds: null, 2000);
-            string error = !p.Success ? p.Error : p.LineErrors.Count > 0 ? p.LineErrors.Values.First().Message : null;
+            string? error = !p.Success ? p.Error : p.LineErrors.Count > 0 ? p.LineErrors.Values.First().Message : null;
             if (error is null)
             {
                 Report(name, ok: false, "was accepted");
@@ -373,7 +373,7 @@ namespace ComScriptTests
             Report(name, error.IndexOf(expectedText, StringComparison.Ordinal) >= 0, "expected the message to contain \"" + expectedText + "\", got: " + error);
         }
 
-        private static void Report(string name, bool ok, string detail)
+        private static void Report(string name, bool ok, string? detail)
         {
             if (ok)
             {

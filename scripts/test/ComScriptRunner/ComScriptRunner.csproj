@@ -64,6 +64,8 @@
     <Compile Include="..\..\..\pptcom\Agent\StreamProgress.cs" />
     <Compile Include="..\..\..\pptcom\Agent\StreamedReply.cs" />
     <Compile Include="..\..\..\pptcom\Agent\ToolCall.cs" />
+    <Compile Include="..\..\..\pptcom\Polyfills\RequiredMemberAttribute.cs" />
+    <Compile Include="..\..\..\pptcom\Polyfills\CompilerFeatureRequiredAttribute.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 

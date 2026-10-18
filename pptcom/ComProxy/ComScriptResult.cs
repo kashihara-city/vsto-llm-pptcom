@@ -24,13 +24,8 @@ namespace Pptcom.ComProxy
         // defined are under Defined.
         public List<string> Changed(ComScriptParser.ParseResult parsed)
         {
-            HashSet<string> defined = new(parsed.DefinedIds ?? [], StringComparer.OrdinalIgnoreCase);
+            HashSet<string> defined = new(parsed.DefinedIds, StringComparer.OrdinalIgnoreCase);
             List<string> list = [];
-            if (parsed.ChangedRoots is null)
-            {
-                return list;
-            }
-
             foreach (ComLineResult l in Lines)
             {
                 if (l.Status != ComLineStatus.Applied || l.Line < 1 || l.Line > parsed.ChangedRoots.Count)
@@ -38,7 +33,7 @@ namespace Pptcom.ComProxy
                     continue;
                 }
 
-                string root = parsed.ChangedRoots[l.Line - 1];
+                string? root = parsed.ChangedRoots[l.Line - 1];
                 if (root is not null && !defined.Contains(root) && !list.Contains(root, StringComparer.OrdinalIgnoreCase))
                 {
                     list.Add(root);
@@ -65,7 +60,7 @@ namespace Pptcom.ComProxy
             // One entry per mistake: repeats of the same cause (e.g. every tb5.Cell(...) line when
             // tb5 is the Shape, not its .Table) are listed under the first error instead of repeating it.
             List<ComLineResult> failedLines = [.. Lines.Where(static x => x.Status == ComLineStatus.Failed)];
-            foreach (IGrouping<string, ComLineResult> group in failedLines.GroupBy(static x => x.Cause ?? x.Error, StringComparer.Ordinal))
+            foreach (IGrouping<string, ComLineResult> group in failedLines.GroupBy(static x => x.Cause ?? x.Error ?? "", StringComparer.Ordinal))
             {
                 List<ComLineResult> items = [.. group];
                 ComLineResult first = items[0];
@@ -77,7 +72,7 @@ namespace Pptcom.ComProxy
                 else
                 {
                     sb.Append("\nFAILED ").Append(items.Count).Append(" lines, same cause:\n  -> ").Append(first.Error);
-                    List<string> otherMembers = [.. items.Select(static x => x.Member).Where(m => !string.IsNullOrEmpty(m) && m != first.Member).Distinct(StringComparer.Ordinal)];
+                    List<string> otherMembers = [.. items.Select(static x => x.Member ?? "").Where(m => m.Length > 0 && m != first.Member).Distinct(StringComparer.Ordinal)];
                     if (otherMembers.Count > 0)
                     {
                         sb.Append("\n  The same applies to: ").Append(string.Join(", ", otherMembers)).Append('.');
@@ -149,7 +144,7 @@ namespace Pptcom.ComProxy
                     continue;
                 }
 
-                System.Text.RegularExpressions.Match m = LoopPassPattern.Match(l.Text ?? "");
+                System.Text.RegularExpressions.Match m = LoopPassPattern.Match(l.Text);
                 if (!m.Success)
                 {
                     continue;
@@ -158,7 +153,7 @@ namespace Pptcom.ComProxy
                 string counter = m.Groups[1].Value;
                 for (int k = i; k >= 0; k--)
                 {
-                    string text = Lines[k].Text ?? "";
+                    string text = Lines[k].Text;
                     if (!text.StartsWith("For ", StringComparison.OrdinalIgnoreCase))
                     {
                         continue;

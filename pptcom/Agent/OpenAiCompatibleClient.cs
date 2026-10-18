@@ -20,8 +20,8 @@ namespace Pptcom.Agent
         // go on each request instead.
         private static readonly HttpClient Http = CreateHttpClient();
 
-        private readonly Uri _base;
-        private readonly string _apiKey;
+        private readonly Uri? _base;      // null until an endpoint is set
+        private readonly string? _apiKey; // null: requests go without a key
 
         public string BaseUrl { get; }
 
@@ -65,9 +65,9 @@ namespace Pptcom.Agent
         }
 
         // `path` starts with "/": like a relative URI on HttpClient.BaseAddress, it replaces the endpoint's path.
-        private HttpRequestMessage Request(HttpMethod method, string path, HttpContent content = null)
+        private HttpRequestMessage Request(HttpMethod method, string path, HttpContent? content = null)
         {
-            if (_base == null)
+            if (_base is null)
             {
                 throw new InvalidOperationException("No endpoint is set.");
             }
@@ -92,8 +92,8 @@ namespace Pptcom.Agent
         // too, so the UI can show life during the silent thinking phase).
         public async Task<ChatReply> ChatAsync(
             List<ChatMessage> messages,
-            JArray tools = null,
-            Action<StreamProgress> onProgress = null,
+            JArray? tools = null,
+            Action<StreamProgress>? onProgress = null,
             CancellationToken cancellationToken = default)
         {
             JObject payload = Payload(MessagesJson(messages), tools);
@@ -205,7 +205,7 @@ namespace Pptcom.Agent
             return jm;
         }
 
-        private JObject Payload(JArray messagesJson, JArray tools)
+        private JObject Payload(JArray messagesJson, JArray? tools)
         {
             JObject payload = new()
             {
@@ -333,9 +333,9 @@ namespace Pptcom.Agent
 
         // Models the endpoint offers, with their mode when known ("chat", "image_generation", ...).
         // LiteLLM's /model/info has the mode; plain OpenAI-compatible servers only have /v1/models.
-        public async Task<List<KeyValuePair<string, string>>> ListModelsAsync(CancellationToken cancellationToken = default)
+        public async Task<List<KeyValuePair<string, string?>>> ListModelsAsync(CancellationToken cancellationToken = default)
         {
-            List<KeyValuePair<string, string>> result = [];
+            List<KeyValuePair<string, string?>> result = [];
             try
             {
                 using HttpRequestMessage request = Request(HttpMethod.Get, "/model/info");
@@ -346,11 +346,11 @@ namespace Pptcom.Agent
                     {
                         foreach (JToken m in data)
                         {
-                            string name = (string)m["model_name"];
-                            string mode = (string)m["model_info"]?["mode"];
-                            if (!string.IsNullOrEmpty(name) && !result.Exists(r => r.Key == name))
+                            string name = (string?)m["model_name"] ?? "";
+                            string? mode = (string?)m["model_info"]?["mode"];
+                            if (name.Length > 0 && !result.Exists(r => r.Key == name))
                             {
-                                result.Add(new KeyValuePair<string, string>(name, mode));
+                                result.Add(new KeyValuePair<string, string?>(name, mode));
                             }
                         }
                         if (result.Count > 0)
@@ -395,10 +395,10 @@ namespace Pptcom.Agent
                 {
                     foreach (JToken m in data)
                     {
-                        string id = (string)m["id"];
-                        if (!string.IsNullOrEmpty(id))
+                        string id = (string?)m["id"] ?? "";
+                        if (id.Length > 0)
                         {
-                            result.Add(new KeyValuePair<string, string>(id, null));
+                            result.Add(new KeyValuePair<string, string?>(id, null));
                         }
                     }
                 }
@@ -426,7 +426,7 @@ namespace Pptcom.Agent
             }
 
             JObject root = JObject.Parse(body);
-            string b64 = (string)root["data"]?[0]?["b64_json"] ?? throw new InvalidOperationException("Unexpected image response: " + body);
+            string b64 = (string?)root["data"]?[0]?["b64_json"] ?? throw new InvalidOperationException("Unexpected image response: " + body);
             return Convert.FromBase64String(b64);
         }
     }

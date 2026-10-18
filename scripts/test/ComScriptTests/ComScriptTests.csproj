@@ -44,6 +44,8 @@
     <Compile Include="..\..\..\pptcom\ComProxy\ComScriptParser.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\ComScriptScope.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\VbaOps.cs" />
+    <Compile Include="..\..\..\pptcom\Polyfills\RequiredMemberAttribute.cs" />
+    <Compile Include="..\..\..\pptcom\Polyfills\CompilerFeatureRequiredAttribute.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 

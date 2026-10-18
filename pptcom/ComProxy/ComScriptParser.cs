@@ -32,24 +32,25 @@ namespace Pptcom.ComProxy
     {
         internal sealed class ParseResult
         {
+            // A script that cannot be parsed at all (Success false) has only Error; the rest stays empty.
             public bool Success;
-            public string OpsJson;
-            public string Error;
+            public string OpsJson = "[]";
+            public string Error = "";
             // opIndex -> 1-based statement number, so ComBatchResult failures can be reported
             // per source line instead of per internal hop.
-            public List<int> OpLineNumbers;
+            public List<int> OpLineNumbers = [];
             // 1-based statement number -> the trimmed statement text (blank lines/comments
             // already filtered out), for showing the offending line back to the user.
-            public List<string> Lines;
+            public List<string> Lines = [];
             // Ids this script bound (via "id = ..."), so a caller running multiple rounds can
             // carry them forward into the next round's `priorKnownIds` and let the model keep
             // referencing e.g. `slide1` without re-fetching it.
-            public List<string> DefinedIds;
+            public List<string> DefinedIds = [];
             // Per statement (index = statement number - 1): the variable whose object the statement
             // changes - `card.Fill.ForeColor.RGB = ...`, `card.Delete`, and inside `With card.TextFrame`
             // `.Font.Size = 12` all give card - or null when it only binds a variable (`Set x = ...`,
             // `n = 3`) or starts from Application / ActivePresentation. For the "Changed:" list.
-            public List<string> ChangedRoots;
+            public List<string?> ChangedRoots = [];
             // Statements that could not be parsed (1-based statement number -> error). They emit no
             // ops; the rest of the script still parses, and ComProxyEngine.ExecuteScriptAsync reports
             // them as failed and skips the statements that use what they would have set.
@@ -58,9 +59,9 @@ namespace Pptcom.ComProxy
 
         internal sealed class LineError
         {
-            public string Message;
-            public string Cause;    // same key = same mistake (grouped in the report)
-            public string Assigns;  // the variable the statement would have set, or null
+            public required string Message;
+            public required string Cause; // same key = same mistake (grouped in the report)
+            public string? Assigns;       // the variable the statement would have set, or null
         }
 
         // `priorKnownIds`: ids already bound in earlier rounds (see ParseResult.DefinedIds) that
@@ -68,7 +69,7 @@ namespace Pptcom.ComProxy
         // `maxLines`: required - each host sets its own per-call limit (the add-in uses 1000).
         // `allowImage`: accept `name = Image("prompt", "size")` - only for the hosts' zimage tool,
         // never for a model's pptcom script.
-        public static ParseResult Parse(string script, IEnumerable<string> priorKnownIds, int maxLines, bool allowImage = false)
+        public static ParseResult Parse(string script, IEnumerable<string>? priorKnownIds, int maxLines, bool allowImage = false)
         {
             List<string> lines = StatementsOf(script);
             if (lines.Count == 0)
@@ -81,7 +82,7 @@ namespace Pptcom.ComProxy
             // report says `.Font.Size = 12   (rr = 3)`, not `_w1.Font.Size = 12`.
             _currentKnownIds = null;
             _currentState = null;
-            List<Stmt> stmts = ExpandForLoops([.. lines.Select(static l => new Stmt { Code = l, Shown = l })], maxLines, out string loopError);
+            List<Stmt> stmts = ExpandForLoops([.. lines.Select(static l => new Stmt { Code = l, Shown = l })], maxLines, out string? loopError);
             if (loopError is not null)
             {
                 return new ParseResult { Success = false, Error = loopError };
@@ -134,7 +135,7 @@ namespace Pptcom.ComProxy
         private static List<string> StatementsOf(string script)
         {
             List<string> lines = [];
-            foreach (string logical in JoinContinuedLines((script ?? "").Replace("\r\n", "\n").Split('\n')))
+            foreach (string logical in JoinContinuedLines(script.Replace("\r\n", "\n").Split('\n')))
             {
                 string l = logical.Trim();
                 if (l.Length == 0 || l.StartsWith("//", StringComparison.Ordinal) || RemPattern.IsMatch(l))
@@ -188,7 +189,7 @@ namespace Pptcom.ComProxy
                     }
 
                     Match named = AssignedNamePattern.Match(code[lineNo - 1]);
-                    string assigns = named.Success && !ReservedWords.Contains(named.Groups[1].Value) ? named.Groups[1].Value : null;
+                    string? assigns = named.Success && !ReservedWords.Contains(named.Groups[1].Value) ? named.Groups[1].Value : null;
                     if (assigns is not null)
                     {
                         state.KnownIds.Add(assigns);
@@ -207,10 +208,10 @@ namespace Pptcom.ComProxy
 
         // See ParseResult.ChangedRoots. Reads the code as parsed (With blocks already written out), so a
         // hidden With variable stands for the variable its object came from.
-        private static List<string> ChangedRootsOf(List<string> code)
+        private static List<string?> ChangedRootsOf(List<string> code)
         {
             Dictionary<string, string> withRoots = new(StringComparer.OrdinalIgnoreCase);
-            List<string> roots = [];
+            List<string?> roots = [];
             foreach (string c in code)
             {
                 Match set = HiddenWithSetPattern.Match(c);
@@ -227,7 +228,7 @@ namespace Pptcom.ComProxy
                     continue;
                 }
                 Match m = LeadingRootPattern.Match(c);
-                string root = m.Success ? m.Groups[1].Value : null;
+                string? root = m.Success ? m.Groups[1].Value : null;
                 if (root is not null && withRoots.TryGetValue(root, out string mapped))
                 {
                     root = mapped;
@@ -243,8 +244,8 @@ namespace Pptcom.ComProxy
             return roots;
         }
 
-        [ThreadStatic] private static HashSet<string> _currentKnownIds;
-        [ThreadStatic] private static State _currentState;
+        [ThreadStatic] private static HashSet<string>? _currentKnownIds; // null outside Parse's statement loop
+        [ThreadStatic] private static State? _currentState;
         [ThreadStatic] private static int _currentLine;
 
         private sealed class State
@@ -352,7 +353,8 @@ namespace Pptcom.ComProxy
         // error decided before parsing (a For loop that cannot be written out).
         private sealed class Stmt
         {
-            public string Code, Shown, Error, Cause;
+            public required string Code, Shown;
+            public string? Error, Cause;
         }
 
         // --- For ... Next -----------------------------------------------------------------------------
@@ -373,14 +375,16 @@ namespace Pptcom.ComProxy
 
         private sealed class PlainNode : LoopNode
         {
-            public Stmt Statement;
+            public required Stmt Statement;
         }
 
         private sealed class ForNode : LoopNode
         {
-            public Stmt Header, Next;
+            public required Stmt Header;
+            public Stmt? Next;                 // null: the loop is never closed
             public int HeaderNumber;           // statement number as written, for the over-limit report
-            public string Variable, Problem;   // Problem: why it cannot be written out
+            public required string Variable;
+            public string? Problem;            // why it cannot be written out
             public double From, To, Step;
             public readonly List<LoopNode> Body = [];
 
@@ -399,7 +403,8 @@ namespace Pptcom.ComProxy
             }
         }
 
-        private static List<Stmt> ExpandForLoops(List<Stmt> statements, int maxStatements, out string error)
+        // The statements with their For loops written out; empty when `error` says why they cannot be.
+        private static List<Stmt> ExpandForLoops(List<Stmt> statements, int maxStatements, out string? error)
         {
             error = null;
             List<LoopNode> root = [];
@@ -459,7 +464,7 @@ namespace Pptcom.ComProxy
                 }
 
                 error = sb.ToString();
-                return null;
+                return [];
             }
             List<Stmt> result = [];
             foreach (LoopNode n in root)
@@ -472,7 +477,7 @@ namespace Pptcom.ComProxy
 
         // Bounds and Step must be numbers (or arithmetic on numbers): the count has to be known before
         // anything runs. Returns why not, or null.
-        private static string LoopBounds(Match header, ForNode loop)
+        private static string? LoopBounds(Match header, ForNode loop)
         {
             string from = header.Groups[2].Value.Trim(), to = header.Groups[3].Value.Trim();
             string step = header.Groups[4].Success ? header.Groups[4].Value.Trim() : "1";
@@ -601,7 +606,7 @@ namespace Pptcom.ComProxy
         // own; not reported as defined, not shown in shape lists.
         public const string HiddenWithPrefix = "_w";
 
-        public static bool IsHiddenName(string id)
+        public static bool IsHiddenName(string? id)
         {
             return id is not null && id.Length > 2 && (id.StartsWith("_h", StringComparison.Ordinal) || id.StartsWith(HiddenWithPrefix, StringComparison.Ordinal))
                    && id.Skip(2).All(char.IsDigit);
@@ -640,7 +645,7 @@ namespace Pptcom.ComProxy
         // with; it is kept as ` _` so ComScriptScope reports it.
         private static IEnumerable<string> JoinContinuedLines(IEnumerable<string> rawLines)
         {
-            string pending = null;
+            string? pending = null;
             foreach (string raw in rawLines)
             {
                 string code = StripComment(raw).TrimEnd();
@@ -822,12 +827,12 @@ namespace Pptcom.ComProxy
                 for (int k = state.Ops.Count - 1; k >= opsBefore; k--)
                 {
                     JObject o = (JObject)state.Ops[k];
-                    if ((string)o["id"] != assigned)
+                    if ((string?)o["id"] != assigned)
                     {
                         continue;
                     }
 
-                    if ((string)o["action"] == ComOpAction.Image)
+                    if ((string?)o["action"] == ComOpAction.Image)
                     {
                         break;
                     }
@@ -895,7 +900,7 @@ namespace Pptcom.ComProxy
             Expr value = ParseExpression(rhsText);
             if (value.ChainId is not null)
             {
-                JObject lastHop = state.Ops.Cast<JObject>().Last(o => (string)o["id"] == value.ChainId);
+                JObject lastHop = state.Ops.Cast<JObject>().Last(o => (string?)o["id"] == value.ChainId);
                 lastHop["id"] = lhs;
                 state.DefineId(lhs);
                 return;
@@ -959,7 +964,7 @@ namespace Pptcom.ComProxy
 
             // Indexed property put, e.g. `shape.Adjustments(1) = 0.1`: the index args ride along
             // on the set op and the engine passes them before the value, the way COM expects.
-            JArray setArgs = null;
+            JArray? setArgs = null;
             int paren = memberName.IndexOf('(');
             if (paren >= 0)
             {
@@ -1019,7 +1024,7 @@ namespace Pptcom.ComProxy
         // into the next. The final segment gets `finalId` (if given) as its op id; everything
         // else gets an internal synthetic id, since nothing outside this chain ever needs to
         // address an intermediate hop directly.
-        private static string EmitChain(List<string> segments, string finalId, int lineNo, State state)
+        private static string EmitChain(List<string> segments, string? finalId, int lineNo, State state)
         {
             if (segments.Count == 0)
             {
@@ -1083,7 +1088,7 @@ namespace Pptcom.ComProxy
             return currentId;
         }
 
-        private static string EmitSegment(string segment, string targetId, string explicitId, int lineNo, State state)
+        private static string EmitSegment(string segment, string targetId, string? explicitId, int lineNo, State state)
         {
             int paren = segment.IndexOf('(');
             string member = paren >= 0 ? segment.Substring(0, paren) : segment;
@@ -1145,14 +1150,14 @@ namespace Pptcom.ComProxy
             // A bare name that is neither a variable nor an enum name (msoSendBehind): left for the engine,
             // which knows the object and so the parameter's type, and can list the enum names that fit
             // (ComErrorText) - here only the whole enum catalog could be searched.
-            string t = (text ?? "").Trim();
+            string t = text.Trim();
             if (IsIdentifier(t) && !IsValueName(t))
             {
                 return new JObject { ["$unresolved"] = t };
             }
             // VBA's Array(...) as a whole argument: sld.Shapes.Range(Array(a.Name, b.Name)).Align ...
             // The prompt does not offer it; it is accepted because models write it for ShapeRange.
-            JToken array = TryParseArrayArgument(t);
+            JToken? array = TryParseArrayArgument(t);
             if (array is not null)
             {
                 return array;
@@ -1164,7 +1169,7 @@ namespace Pptcom.ComProxy
         // Array(v1, v2, ...) as the whole value -> {"$fn": "Array", "args": [...]}; the engine passes
         // it to COM as a VBA array. Anywhere else (x = Array(...), inside an expression) DiagnoseValue
         // says where it works.
-        private static JObject TryParseArrayArgument(string t)
+        private static JObject? TryParseArrayArgument(string t)
         {
             if (!t.StartsWith("Array", StringComparison.OrdinalIgnoreCase) || (_currentKnownIds is not null && _currentKnownIds.Contains("Array")))
             {
@@ -1220,11 +1225,13 @@ namespace Pptcom.ComProxy
 
         private sealed class Expr
         {
+            // One of: a constant (IsConst, Value), an enum name (EnumName), a run-time value (Token, and ChainId
+            // when the whole value is one COM expression).
             public bool IsConst;     // Value is a string, int, double or bool known now
-            public object Value;
-            public string EnumName;  // a bare enum name: passed as is (the engine resolves it for the parameter)
-            public JToken Token;     // a run-time value: "$id", {"$calc"}, {"$neg"}, {"$fn"}, {"$concat"}
-            public string ChainId;   // the whole expression is one COM expression ending in this op id
+            public object? Value;
+            public string? EnumName; // a bare enum name: passed as is (the engine resolves it for the parameter)
+            public JToken? Token;    // a run-time value: "$id", {"$calc"}, {"$neg"}, {"$fn"}, {"$concat"}
+            public string? ChainId;  // the whole expression is one COM expression ending in this op id
 
             public static Expr Const(object v)
             {
@@ -1239,7 +1246,7 @@ namespace Pptcom.ComProxy
             {
                 if (IsConst)
                 {
-                    return Value is string ? LiteralText((string)Value) : new JValue(Value);
+                    return Value is string text ? LiteralText(text) : new JValue(Value);
                 }
 
                 if (EnumName is not null)
@@ -1247,13 +1254,13 @@ namespace Pptcom.ComProxy
                     return new JValue(EnumName);
                 }
 
-                return Token;
+                return Token ?? throw new InvalidOperationException("an expression without a value");
             }
         }
 
         private static Expr ParseExpression(string text)
         {
-            text = (text ?? "").Trim();
+            text = text.Trim();
             if (text.Length == 0)
             {
                 throw new FormatException("empty value");
@@ -1480,12 +1487,12 @@ namespace Pptcom.ComProxy
                     case ComScriptScope.TokenKind.Number:
                         {
                             _p++;
-                            if (!TryParseNumber(tok.Value, out JValue number))
+                            if (!TryParseNumber(tok.Value, out object number))
                             {
                                 throw new FormatException("not a number: '" + tok.Value + "'");
                             }
 
-                            return Expr.Const(number.Value);
+                            return Expr.Const(number);
                         }
                     case ComScriptScope.TokenKind.Name:
                         return NamePrimary();
@@ -1631,7 +1638,7 @@ namespace Pptcom.ComProxy
 
         // `x.y(...).z` -> "x" when text looks like a COM expression (has a top-level '.' or a
         // call), else null.
-        private static string ChainBase(string text)
+        private static string? ChainBase(string text)
         {
             int i = 0;
             if (text.Length == 0 || !(char.IsLetter(text[0]) || text[0] == '_'))
@@ -1681,9 +1688,10 @@ namespace Pptcom.ComProxy
         // green) becomes -24576 and turns blue - a trap for colors that models fall into too.
         private static readonly Regex HexOctPattern = new(@"^&([HhOo])([0-9A-Fa-f]+)(&?)$", RegexOptions.Compiled, Guard.RegexTimeout);
 
-        private static bool TryParseNumber(string text, out JValue value)
+        // `value`: the number, a long when it is whole and fits an int (as JSON reads it back), else a double.
+        private static bool TryParseNumber(string text, out object value)
         {
-            value = null;
+            value = 0L;
             text = text.Trim();
             if (text.Length == 0)
             {
@@ -1710,7 +1718,7 @@ namespace Pptcom.ComProxy
                     return false;
                 }
 
-                value = new JValue((int)(uint)v);
+                value = (long)(int)(uint)v;
                 return true;
             }
             string plain = text;
@@ -1724,7 +1732,7 @@ namespace Pptcom.ComProxy
                 return false;
             }
 
-            value = num % 1 == 0 && Math.Abs(num) < int.MaxValue ? new JValue((int)num) : new JValue(num);
+            value = num % 1 == 0 && Math.Abs(num) < int.MaxValue ? (object)(long)(int)num : num;
             return true;
         }
 
@@ -1744,7 +1752,7 @@ namespace Pptcom.ComProxy
 
         // Text as a pptcom/VBA literal the model can copy back: quotes doubled, paragraph breaks as
         // `" & vbCr & "`, soft line breaks (Shift+Enter, char 11) as `" & Chr(11) & "`.
-        public static string ToVbaLiteral(string text)
+        public static string ToVbaLiteral(string? text)
         {
             string s = (text ?? "").Replace("\"", "\"\"").Replace("\r\n", "\r").Replace('\n', '\r');
             return "\"" + s.Replace("\r", "\" & vbCr & \"").Replace("\v", "\" & Chr(11) & \"") + "\"";
@@ -1772,7 +1780,7 @@ namespace Pptcom.ComProxy
                 return "text cannot be used here ('" + whole + "'). " + ValueHelp;
             }
 
-            string chainBase = ChainBase(s);
+            string? chainBase = ChainBase(s);
             if (chainBase is not null)
             {
                 bool isCall = s.Length > chainBase.Length && s[chainBase.Length] == '(';
@@ -1814,11 +1822,11 @@ namespace Pptcom.ComProxy
         // Names a script assigns with `name = ...` (line-level scan, works even when the script
         // doesn't parse). Used to tell the model which variables a rejected script would have
         // created - it tends to reuse them in the next attempt as if they existed.
-        public static List<string> ScanAssignedIds(string script, IEnumerable<string> exclude = null)
+        public static List<string> ScanAssignedIds(string script, IEnumerable<string>? exclude = null)
         {
             HashSet<string> skip = new(exclude ?? [], StringComparer.OrdinalIgnoreCase);
             List<string> result = [];
-            foreach (string raw in (script ?? "").Replace("\r\n", "\n").Split('\n'))
+            foreach (string raw in script.Replace("\r\n", "\n").Split('\n'))
             {
                 Match m = AssignedIdPattern.Match(raw);
                 if (!m.Success)

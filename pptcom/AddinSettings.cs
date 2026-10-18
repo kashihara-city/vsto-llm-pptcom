@@ -91,7 +91,7 @@ namespace Pptcom
         // Empty = remove the stored key.
         public bool SaveApiKey(string apiKey)
         {
-            apiKey = (apiKey ?? "").Trim();
+            apiKey = apiKey.Trim();
             bool ok = apiKey.Length == 0 ? CredentialStore.Delete(CredentialTarget) : CredentialStore.Write(CredentialTarget, "api_key", apiKey);
             if (ok)
             {

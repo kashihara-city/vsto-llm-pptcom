@@ -13,7 +13,7 @@ namespace Pptcom.ComProxy
     {
         void GetTypeInfoCount(out int count);
 
-        void GetTypeInfo(int index, int lcid, out ComTypes.ITypeInfo typeInfo);
+        void GetTypeInfo(int index, int lcid, out ComTypes.ITypeInfo? typeInfo);
 
         // GetIDsOfNames / Invoke omitted - not needed here, and leaving them out keeps the
         // vtable-order-sensitive parts of this interface as small as possible to get right.

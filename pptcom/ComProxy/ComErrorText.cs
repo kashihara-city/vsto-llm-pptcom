@@ -30,7 +30,7 @@ namespace Pptcom.ComProxy
         private static readonly HashSet<string> PositionMembers = new(StringComparer.OrdinalIgnoreCase)
             { "Left", "Top", "Width", "Height" };
 
-        public static string Describe(ComProxyEngine engine, JObject op, Exception ex, string raw, string targetType)
+        public static string Describe(ComProxyEngine engine, JObject op, Exception ex, string raw, string? targetType)
         {
             try
             {
@@ -45,13 +45,13 @@ namespace Pptcom.ComProxy
         // A key for "the same mistake": failures with the same key are reported once, with all
         // their lines (e.g. ten `tb5.Cell(...)` / `tb5.Columns(...)` lines on a Shape instead of
         // its .Table), and count once toward the engine's failure limit.
-        public static string CauseOf(ComProxyEngine engine, JObject op, Exception ex, string raw, string targetType)
+        public static string CauseOf(ComProxyEngine engine, JObject op, Exception ex, string raw, string? targetType)
         {
             try
             {
-                string action = (string)op["action"];
-                string target = (string)op["target"];
-                string member = (string)op["member"];
+                string? action = (string?)op["action"];
+                string? target = (string?)op["target"];
+                string? member = (string?)op["member"];
                 Exception real = ex is TargetInvocationException && ex.InnerException is not null ? ex.InnerException : ex;
                 if (real is ComProxyEngine.UnresolvedNameException u)
                 {
@@ -68,7 +68,7 @@ namespace Pptcom.ComProxy
                     return "own|" + raw;
                 }
 
-                string type = string.IsNullOrEmpty(targetType) || targetType == "?" ? engine.TypeNameOfHandle(target) : targetType;
+                string? type = string.IsNullOrEmpty(targetType) || targetType == "?" ? engine.TypeNameOfHandle(target) : targetType;
                 string typeLabel = Clean(type) ?? "object";
                 uint hr = (uint)real.HResult;
                 if (action == ComOpAction.Item)
@@ -76,16 +76,16 @@ namespace Pptcom.ComProxy
                     return "item|" + typeLabel + "|" + raw;
                 }
 
-                if ((hr == DISP_E_UNKNOWNNAME || hr == DISP_E_MEMBERNOTFOUND) && !string.IsNullOrEmpty(member))
+                if ((hr == DISP_E_UNKNOWNNAME || hr == DISP_E_MEMBERNOTFOUND) && member is not null && member.Length > 0)
                 {
                     // One mistake when the members all live one hop further (tb5.Columns / .Rows / .Cell
                     // on the Shape instead of tb5.Table); a misspelling has its own fix, so each name
                     // stays a cause of its own (SizePt -> Size and Colour -> Color are two mistakes).
                     // The variable is not part of the key: C11.TextFrame, C12.TextFrame, ... on Cells
                     // are one mistake with one fix (.Shape.TextFrame), not one per cell.
-                    Type iface = ComProxyEngine.InteropTypeFor(type);
-                    List<string> via = iface != null ? [.. OneHopPaths(iface, member).Select(static h => h.Key).Distinct(StringComparer.Ordinal).OrderBy(static k => k, StringComparer.Ordinal)] : [];
-                    if (via.Count == 0 && iface != null)
+                    Type? iface = ComProxyEngine.InteropTypeFor(type);
+                    List<string> via = iface is not null ? [.. OneHopPaths(iface, member).Select(static h => h.Key).Distinct(StringComparer.Ordinal).OrderBy(static k => k, StringComparer.Ordinal)] : [];
+                    if (via.Count == 0 && iface is not null)
                     {
                         via = [.. ItemHopPaths(iface, member).Select(static h => h.Path)];
                     }
@@ -105,11 +105,11 @@ namespace Pptcom.ComProxy
             }
         }
 
-        private static string DescribeCore(ComProxyEngine engine, JObject op, Exception ex, string raw, string targetType)
+        private static string? DescribeCore(ComProxyEngine engine, JObject op, Exception ex, string raw, string? targetType)
         {
-            string action = (string)op["action"];
-            string target = (string)op["target"];
-            string member = (string)op["member"];
+            string? action = (string?)op["action"];
+            string? target = (string?)op["target"];
+            string? member = (string?)op["member"];
             Exception real = ex is TargetInvocationException && ex.InnerException is not null ? ex.InnerException : ex;
             uint hr = (uint)real.HResult;
             string rawNote = " [" + raw + "]";
@@ -131,7 +131,7 @@ namespace Pptcom.ComProxy
                 return null;
             }
 
-            string type = string.IsNullOrEmpty(targetType) || targetType == "?" ? engine.TypeNameOfHandle(target) : targetType;
+            string? type = string.IsNullOrEmpty(targetType) || targetType == "?" ? engine.TypeNameOfHandle(target) : targetType;
             string typeLabel = Clean(type) ?? "object";
             string who = target is null ? "the " + typeLabel
                        : IsSynthetic(target) ? "the " + typeLabel + " in this expression"
@@ -139,14 +139,14 @@ namespace Pptcom.ComProxy
 
             if (action == ComOpAction.Item)
             {
-                string idx = op["args"] is not null ? op["args"].ToString(Newtonsoft.Json.Formatting.None) : "";
+                string idx = op["args"]?.ToString(Newtonsoft.Json.Formatting.None) ?? "";
                 return "No item " + idx + " in " + who + ". Indexes are 1-based; check .Count (or use the variable you bound when you created it)." + rawNote;
             }
 
-            if ((hr == DISP_E_UNKNOWNNAME || hr == DISP_E_MEMBERNOTFOUND) && !string.IsNullOrEmpty(member))
+            if ((hr == DISP_E_UNKNOWNNAME || hr == DISP_E_MEMBERNOTFOUND) && member is not null && member.Length > 0)
             {
-                PropertyInfo prop = FindProperty(type, member);
-                if (prop != null && action == ComOpAction.Set && !prop.CanWrite)
+                PropertyInfo? prop = FindProperty(type, member);
+                if (prop is not null && action == ComOpAction.Set && !prop.CanWrite)
                 {
                     return typeLabel + "." + member + " is read-only; it cannot be assigned." + rawNote;
                 }
@@ -156,19 +156,19 @@ namespace Pptcom.ComProxy
 
             if (action == ComOpAction.Set)
             {
-                string value = op["value"] is not null ? op["value"].ToString(Newtonsoft.Json.Formatting.None) : "?";
+                string value = op["value"]?.ToString(Newtonsoft.Json.Formatting.None) ?? "?";
                 return "Setting " + typeLabel + "." + member + " = " + value + " was rejected." + ValueHint(type, typeLabel, member, op["value"]) + rawNote;
             }
 
             if (action == ComOpAction.Call || action == ComOpAction.Get)
             {
-                string hint = engine.ArgumentHint(op, ex);
-                JArray args = op["args"] as JArray;
+                string? hint = engine.ArgumentHint(op, ex);
+                JArray? args = op["args"] as JArray;
                 string argText = args is not null ? string.Join(", ", args.Select(static a => a.ToString(Newtonsoft.Json.Formatting.None))) : "";
                 // `Shapes(99)` / `Paragraphs(4)`: a call with one plain argument is usually an index.
-                bool looksLikeIndex = hint is null && args is not null && args.Count == 1 && (args[0].Type == JTokenType.Integer || (args[0].Type == JTokenType.String && !((string)args[0]).StartsWith("$", StringComparison.Ordinal)));
+                bool looksLikeIndex = hint is null && args is not null && args.Count == 1 && (args[0].Type == JTokenType.Integer || (args[0].Type == JTokenType.String && !((string?)args[0] ?? "").StartsWith("$", StringComparison.Ordinal)));
                 // Shapes.Item(25) -> count on Shapes itself; Slide.Shapes(25) -> count on Shapes.
-                string collection = member == "Item" ? typeLabel : member;
+                string collection = member is null || member == "Item" ? typeLabel : member;
                 return typeLabel + "." + member + (action == ComOpAction.Call ? "(" + argText + ")" : "") + " failed." +
                        (hint is not null ? " " + hint : "") +
                        (looksLikeIndex ? " If " + argText + " is an index or name: indexes are 1-based, so check " + collection + ".Count, or use the variable you bound when you created the item." : "") +
@@ -179,12 +179,12 @@ namespace Pptcom.ComProxy
 
         // Where the member lives instead: a near spelling on the same type, a one-hop path
         // (Shape.TextRange -> Shape.TextFrame.TextRange, FontSize -> Font.Size), or other types.
-        private static string MemberHints(string type, string typeLabel, string target, string member)
+        private static string MemberHints(string? type, string typeLabel, string? target, string member)
         {
             List<string> hints = [];
-            Type iface = ComProxyEngine.InteropTypeFor(type);
+            Type? iface = ComProxyEngine.InteropTypeFor(type);
             string varText = target is not null && !IsSynthetic(target) ? target : typeLabel;
-            if (iface != null)
+            if (iface is not null)
             {
                 List<string> paths = [.. OneHopPaths(iface, member).Select(h => varText + "." + h.Key + "." + h.Value)];
                 // row.Shape -> row.Cells(n).Shape, tbl.Shape -> tbl.Cell(Row, Column).Shape: through one
@@ -240,8 +240,8 @@ namespace Pptcom.ComProxy
                         return false;
                     }
 
-                    Type it = ComProxyEngine.InteropTypeFor(t);
-                    return it != null && HasMember(it, member);
+                    Type? it = ComProxyEngine.InteropTypeFor(t);
+                    return it is not null && HasMember(it, member);
                 })];
             if (owners.Count > 0)
             {
@@ -258,9 +258,9 @@ namespace Pptcom.ComProxy
 
             // What the object the name was looked up on does have - the For Each over its members a
             // VBA user would look up in the Object Browser.
-            if (iface != null)
+            if (iface is not null)
             {
-                string list = MemberList(iface, Clean(type), typeLabel, member);
+                string? list = MemberList(iface, Clean(type), typeLabel, member);
                 if (list is not null)
                 {
                     hints.Add(list);
@@ -274,7 +274,7 @@ namespace Pptcom.ComProxy
         // read-only), SpaceWithin (number), ..." - or, for a large type, only the members whose name
         // shares a word with the one written (LineSpacing -> SpaceWithin, LineRuleWithin, ...).
         // Application / Parent / Creator and members blocked by ComSecurityPolicy are never listed.
-        private static string MemberList(Type iface, string typeName, string typeLabel, string written)
+        private static string? MemberList(Type iface, string? typeName, string typeLabel, string written)
         {
             List<KeyValuePair<string, string>> members = [];
             HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase) { "Application", "Parent", "Creator" };
@@ -329,7 +329,7 @@ namespace Pptcom.ComProxy
         {
             if (t.IsByRef)
             {
-                t = t.GetElementType();
+                t = t.GetElementType() ?? t;
             }
 
             if (t.IsEnum)
@@ -369,7 +369,7 @@ namespace Pptcom.ComProxy
         // LineSpacing -> line, spacing ; SpaceWithin -> space, within
         private static List<string> Words(string name)
         {
-            return [.. System.Text.RegularExpressions.Regex.Matches(name ?? "", "[A-Z]?[a-z]+|[A-Z]+(?![a-z])|[0-9]+",
+            return [.. System.Text.RegularExpressions.Regex.Matches(name, "[A-Z]?[a-z]+|[A-Z]+(?![a-z])|[0-9]+",
                     System.Text.RegularExpressions.RegexOptions.None, Guard.RegexTimeout)
                 .Cast<System.Text.RegularExpressions.Match>().Select(static m => m.Value.ToLowerInvariant()).Where(static w => w.Length >= 3)];
         }
@@ -383,13 +383,13 @@ namespace Pptcom.ComProxy
         // A bare name that is neither a variable nor an enum name (card1.ZOrder msoSendBehind): what this
         // argument or property takes, from the type library of the object it was passed to - for an
         // enum, all of its names (Shape.ZOrder takes: msoBringToFront, msoSendToBack, ...).
-        private static string UnresolvedNameHint(ComProxyEngine engine, JObject op, string name, string targetType)
+        private static string UnresolvedNameHint(ComProxyEngine engine, JObject op, string name, string? targetType)
         {
-            string action = (string)op["action"], member = (string)op["member"], target = (string)op["target"];
-            string type = string.IsNullOrEmpty(targetType) || targetType == "?" ? engine.TypeNameOfHandle(target) : targetType;
+            string? action = (string?)op["action"], member = (string?)op["member"], target = (string?)op["target"];
+            string? type = string.IsNullOrEmpty(targetType) || targetType == "?" ? engine.TypeNameOfHandle(target) : targetType;
             string typeLabel = Clean(type) ?? "object";
             string head = "'" + name + "' is neither a variable defined earlier nor a known enum name.";
-            Type expected = null;
+            Type? expected = null;
             string where = typeLabel + "." + member;
 
             if (action == ComOpAction.Set && IsUnresolved(op["value"], name))
@@ -399,10 +399,10 @@ namespace Pptcom.ComProxy
             else if (action == ComOpAction.Call && op["args"] is JArray args)
             {
                 int index = args.ToList().FindIndex(a => IsUnresolved(a, name));
-                Type iface = ComProxyEngine.InteropTypeFor(type);
-                MethodInfo method = iface == null ? null : ComProxyEngine.MembersOf(iface).OfType<MethodInfo>()
+                Type? iface = ComProxyEngine.InteropTypeFor(type);
+                MethodInfo? method = iface is null ? null : ComProxyEngine.MembersOf(iface).OfType<MethodInfo>()
                     .FirstOrDefault(m => m.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
-                ParameterInfo[] ps = method?.GetParameters();
+                ParameterInfo[]? ps = method?.GetParameters();
                 if (ps is not null && index >= 0 && index < ps.Length)
                 {
                     expected = ps[index].ParameterType;
@@ -410,12 +410,12 @@ namespace Pptcom.ComProxy
                 }
             }
 
-            if (expected != null && expected.IsByRef)
+            if (expected is not null && expected.IsByRef)
             {
                 expected = expected.GetElementType();
             }
 
-            if (expected != null && expected.IsEnum)
+            if (expected is not null && expected.IsEnum)
             {
                 List<string> names = [.. Enum.GetNames(expected).Where(static n => !n.EndsWith("Mixed", StringComparison.Ordinal))];
                 string intro = "'" + name + "' is neither a variable defined earlier nor a " + expected.Name + " name. ";
@@ -431,7 +431,7 @@ namespace Pptcom.ComProxy
                 return intro + where + Invariant($" takes one of {names.Count} {expected.Name} names") +
                        (close.Count > 0 ? "; those sharing a word with '" + name + "': " + string.Join(", ", close) : "") + ".";
             }
-            if (expected != null && expected != typeof(object))
+            if (expected is not null && expected != typeof(object))
             {
                 return head + " " + where + " expects " + ComProxyEngine.TypeLabelOf(expected) + ".";
             }
@@ -439,16 +439,16 @@ namespace Pptcom.ComProxy
             return head;
         }
 
-        private static bool IsUnresolved(JToken token, string name)
+        private static bool IsUnresolved(JToken? token, string name)
         {
-            return token is JObject o && string.Equals((string)o["$unresolved"], name, StringComparison.Ordinal);
+            return token is JObject o && string.Equals((string?)o["$unresolved"], name, StringComparison.Ordinal);
         }
 
         // For a rejected assignment: the enum names the property takes, or its value type.
-        private static string ValueHint(string type, string typeLabel, string member, JToken value)
+        private static string ValueHint(string? type, string typeLabel, string? member, JToken? value)
         {
-            PropertyInfo prop = FindProperty(type, member);
-            if (prop == null)
+            PropertyInfo? prop = FindProperty(type, member);
+            if (prop is null)
             {
                 return "";
             }
@@ -464,10 +464,10 @@ namespace Pptcom.ComProxy
             return " " + typeLabel + "." + member + " expects " + ComProxyEngine.TypeLabelOf(pt) + (prop.CanWrite ? "" : " and is read-only") + ".";
         }
 
-        private static PropertyInfo FindProperty(string type, string member)
+        private static PropertyInfo? FindProperty(string? type, string? member)
         {
-            Type iface = ComProxyEngine.InteropTypeFor(type);
-            if (iface == null || member is null)
+            Type? iface = ComProxyEngine.InteropTypeFor(type);
+            if (iface is null || member is null)
             {
                 return null;
             }
@@ -483,13 +483,13 @@ namespace Pptcom.ComProxy
                 m.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
         }
 
-        private static string Clean(string comType)
+        private static string? Clean(string? comType)
         {
-            return string.IsNullOrEmpty(comType) ? null : comType.TrimStart('_');
+            return comType is null || comType.Length == 0 ? null : comType.TrimStart('_');
         }
 
         // Parser-made names: chain hops (_h1) and With objects (_w1).
-        private static bool IsSynthetic(string id)
+        private static bool IsSynthetic(string? id)
         {
             return ComScriptParser.IsHiddenName(id);
         }
@@ -536,7 +536,7 @@ namespace Pptcom.ComProxy
         // A path through one item: Path "Cells(n)", First/Second "Cells(1)"/"Cells(2)", Element "Cell".
         private sealed class ItemHop
         {
-            public string Path, First, Second, Element;
+            public required string Path, First, Second, Element;
         }
 
         // Methods that pick one item by number (Table.Cell(Row, Column)). Only these: a method such
@@ -552,13 +552,13 @@ namespace Pptcom.ComProxy
             List<ItemHop> found = [];
             bool fits(Type t)
             {
-                return t != null && RelatedTypes.Contains(t.Name.TrimStart('_'), StringComparer.OrdinalIgnoreCase) && HasMember(t, member);
+                return RelatedTypes.Contains(t.Name.TrimStart('_'), StringComparer.OrdinalIgnoreCase) && HasMember(t, member);
             }
 
             foreach (PropertyInfo p in ObjectProperties(iface))
             {
-                Type element = ItemType(p.PropertyType);
-                if (fits(element))
+                Type? element = ItemType(p.PropertyType);
+                if (element is not null && fits(element))
                 {
                     found.Add(new ItemHop { Path = p.Name + "(n)", First = p.Name + "(1)", Second = p.Name + "(2)", Element = element.Name.TrimStart('_') });
                 }
@@ -623,7 +623,7 @@ namespace Pptcom.ComProxy
         }
 
         // What a collection's Item(index) returns (CellRange -> Cell, Shapes -> Shape); null if it has no Item.
-        private static Type ItemType(Type collection)
+        private static Type? ItemType(Type collection)
         {
             foreach (MemberInfo m in ComProxyEngine.MembersOf(collection))
             {
