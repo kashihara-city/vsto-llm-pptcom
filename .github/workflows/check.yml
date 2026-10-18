@@ -1,13 +1,9 @@
-# Checks every push to main and every pull request (and runs by hand: gh workflow run check.yml): the checks and
-# builds of release.yml, without the MSI, the attestations and the Release, which stay there with their write
-# permissions.
+# Checks the branch it is run on, by hand only (gh workflow run check.yml --ref <branch>): the checks and builds of
+# release.yml, without the MSI, the attestations and the Release, which stay there with their write permissions.
+# Nothing starts it on its own: not a push, and pull requests are not taken.
 name: Check
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
   workflow_dispatch:
 
 concurrency:

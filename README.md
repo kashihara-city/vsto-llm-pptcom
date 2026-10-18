@@ -159,7 +159,7 @@ C# のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.
 
 `python -X utf8 scripts/test/no-secrets.py` は、Git が追跡しているファイルに、私有 IP アドレス、社内のホスト名、API キーらしき文字列、開発機のパス、鍵や証明書の中身が混ざっていないかを調べます（CI でも流します）。`--history` を付けると、すべてのコミットのファイルとコミットのメッセージを調べます。パターンでは見分けられない接続先のホスト名やモデル名は、Git の管理外の `notes/secrets-denylist.txt`（1 行に 1 語）に書いておくと、それも照合します。
 
-ここに書いた検査とテストは、main への push と pull request のたびに GitHub Actions（`.github/workflows/check.yml`）が流し、アドインもビルドします（手でも流せます: `gh workflow run check.yml`）。リリースのワークフローも同じものを流します。
+ここに書いた検査とテストは、GitHub Actions の `.github/workflows/check.yml` でも流せます（アドインもビルドします）。push では動かず、手で `gh workflow run check.yml --ref <ブランチ>` として流します。リリースのワークフローも同じものを流します。
 
 ## リリースと検証
 
@@ -184,7 +184,7 @@ gh attestation verify vsto-llm-pptcom-<版>.msi --repo kashihara-city/vsto-llm-p
 - `scripts/build/` MSI のビルド（WiX）、SBOM の生成、anydoc に含まれる Rust ライブラリのライセンス一覧の生成
 - `scripts/deps/` `deps/` を更新するスクリプト
 - `scripts/test/` テストと実験用の道具（構文テスト、PowerPoint を外から動かすランナー、アドインを外から操作するスクリプトなど）
-- `.github/workflows/` push と pull request ごとの検査（`check.yml`）、タグから MSI と SBOM を組み、検査と証明をして Release に載せるワークフロー（`release.yml`）
+- `.github/workflows/` 手で流す検査（`check.yml`）、タグから MSI と SBOM を組み、検査と証明をして Release に載せるワークフロー（`release.yml`）
 - `.github/actions/build-setup/` 2 つのワークフローが使う、ビルドの準備（MSBuild、Rust、VSTO ランタイム、PIA、仮の署名証明書）
 - `docs/` README の画像
 - `licenses/` 同梱している第三者のコンポーネントとライセンス（`THIRD-PARTY-NOTICES.md`。MSI にも入れます）
