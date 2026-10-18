@@ -60,6 +60,14 @@ jobs:
           node scripts/test/docs-queue.cjs
           if ($LASTEXITCODE -ne 0) { throw "attachment tests failed" }
 
+      - name: Run the task pane tests
+        shell: pwsh
+        run: |
+          # The task pane's taskpane.js, in a stand-in for the browser: one request at a time (also before the
+          # add-in's busy state arrives), and how a request's end shows.
+          node scripts/test/taskpane.cjs
+          if ($LASTEXITCODE -ne 0) { throw "task pane tests failed" }
+
       - name: Run the rig tests
         shell: pwsh
         run: |

@@ -79,7 +79,7 @@ namespace Pptcom
             _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
 
             _paneControl = new AiTaskPaneControl();
-            _paneControl.SendRequested += (s, e) => _ = SendAsync(e.Text);
+            _paneControl.SendRequested += (s, e) => _ = SendAsync(e.Text, fromOutside: false);
             _paneControl.CancelRequested += (s, e) => _cancel.Cancel();
             _paneControl.RetryRequested += (s, e) => _retryWait?.TrySetResult(true);
             _paneControl.NewConversationRequested += (s, e) => OnNewConversationRequested();
@@ -145,9 +145,13 @@ namespace Pptcom
             }
         }
 
+        // The latest RefreshModelsAsync: one asked for earlier that answers later changes nothing.
+        private int _modelsRequest;
+
         // Fetches the model list from `endpoint` and fills the drop-downs. On success the endpoint
         // becomes the active one (saved); on failure the previous endpoint stays active. Never fails:
-        // the callers start it and let it run.
+        // the callers start it and let it run. Only the latest call does any of this: lists are asked for
+        // at startup, on a new endpoint and after a new API key, and may answer in another order.
         private async Task RefreshModelsAsync(string endpoint, bool isStartup = false)
         {
             endpoint = (endpoint ?? "").Trim().TrimEnd('/');
@@ -161,11 +165,17 @@ namespace Pptcom
                 endpoint = "https://" + endpoint;
             }
 
+            int request = ++_modelsRequest;
             _paneControl.SetStatus("STATUS_FETCHING_MODELS", endpoint);
             try
             {
                 OpenAiCompatibleClient probe = new(endpoint, _settings.ApiKey, _settings.ChatModel);
                 List<KeyValuePair<string, string?>> models = await probe.ListModelsAsync(CancellationToken.None).ConfigureAwait(true); // not the request's 中止
+                if (request != _modelsRequest)
+                {
+                    return;
+                }
+
                 bool modesKnown = models.Exists(static m => m.Value is not null);
                 List<string> chat = [.. models.Where(m => !modesKnown || m.Value == "chat").Select(static m => m.Key)];
                 List<string> image = [.. models.Where(m => !modesKnown || m.Value == "image_generation").Select(static m => m.Key)];
@@ -210,7 +220,7 @@ namespace Pptcom
                     _paneControl.Log("MODEL_NOT_LISTED", _settings.ChatModel);
                 }
             }
-            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            catch (Exception ex) when (Guard.IsRecoverable(ex) && request == _modelsRequest)
             {
                 _paneControl.SetEndpoint(_settings.Endpoint);
 
@@ -230,9 +240,16 @@ namespace Pptcom
                     _paneControl.Log("MODELS_FAILED", endpoint, MessagesOf(ex));
                 }
             }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                // a newer list was asked for meanwhile: its answer is the one shown
+            }
             finally
             {
-                _paneControl.ClearStatus();
+                if (request == _modelsRequest)
+                {
+                    _paneControl.ClearStatus();
+                }
             }
         }
 
@@ -321,10 +338,7 @@ namespace Pptcom
 
         internal void SendFromOutside(string request)
         {
-            _paneControl.Log("USER_REQUEST", request);
-            _paneControl.Log("SENT_FROM_OUTSIDE");
-            LogToFile("(the next request comes from another program, through the automation object)");
-            _ = SendAsync(request);
+            _ = SendAsync(request, fromOutside: true);
         }
 
         internal void CancelFromOutside()
@@ -377,10 +391,11 @@ namespace Pptcom
         // memory only.
         private sealed class Conversation
         {
-            // `makeEngine` gets the conversation, whose ImageModel the engine's image generator reads.
-            public Conversation(object? presentation, Func<Conversation, ComProxyEngine> makeEngine)
+            // `makeEngine` gets the conversation, whose Llm and ImageModel the engine's image generator reads.
+            public Conversation(object? presentation, OpenAiCompatibleClient llm, Func<Conversation, ComProxyEngine> makeEngine)
             {
                 Presentation = presentation;
+                Llm = llm;
                 Engine = makeEngine(this);
             }
 
@@ -397,6 +412,9 @@ namespace Pptcom
             // the conversation ends: later requests may still place them by their variable.
             public readonly HashSet<string> SavedImages = new(StringComparer.OrdinalIgnoreCase);
             public string ImageModel = "";  // set at each request, fixed for that request
+            // The client of the endpoint and chat model, set at each request and fixed for it: a model list that
+            // arrives meanwhile (RefreshModelsAsync) changes the next request's.
+            public OpenAiCompatibleClient Llm;
             // The documents the user attached (d1, d2, ...), read by the model with docread.
             public readonly List<AttachedDocument> Documents = [];
             public int DocumentsAttached;   // for the next id; ids are not reused after a removal
@@ -425,8 +443,8 @@ namespace Pptcom
             }
             if (_conversation is null)
             {
-                Conversation c = new(pres, conversation =>
-                    new ComProxyEngine(this.Application, async (prompt, size) => await _llm.GenerateImageAsync(conversation.ImageModel, prompt, size).ConfigureAwait(true)));
+                Conversation c = new(pres, _llm, conversation =>
+                    new ComProxyEngine(this.Application, async (prompt, size) => await conversation.Llm.GenerateImageAsync(conversation.ImageModel, prompt, size).ConfigureAwait(true)));
                 Action<JObject> usage = ComProxyEngine.FileUsageSink("addin");
                 c.Engine.UsageSink = rec => { if (_saveProgress) { usage(rec); } };
                 _conversation = c;
@@ -595,9 +613,20 @@ namespace Pptcom
                 throw new InvalidOperationException("50MB を超えるファイルは添付できません: " + path);
             }
 
+            // Read before the ticket exists, and the ticket dropped if the page cannot be given the file: a ticket
+            // left pending would keep this conversation from sending (IsReadingDocuments).
             string ticket = Invariant($"a{++_attachTickets}");
-            _converting[ticket] = new PendingAttachment { Name = info.Name, Conversation = CurrentConversation() };
-            _paneControl.ConvertDocument(ticket, info.Name, File.ReadAllBytes(info.FullName));
+            try
+            {
+                byte[] bytes = File.ReadAllBytes(info.FullName);
+                _converting[ticket] = new PendingAttachment { Name = info.Name, Conversation = CurrentConversation() };
+                _paneControl.ConvertDocument(ticket, info.Name, bytes);
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                OnDocumentFailed(ticket, info.Name, "error", ex.Message);
+                throw;
+            }
         }
 
         // AddinAutomation.Documents: the attached documents, the conversions still running and the latest failures.
@@ -821,11 +850,27 @@ namespace Pptcom
         }
 
         // A request from the task pane or from outside. Never fails: the callers start it and let it run.
-        private async Task SendAsync(string userMessage)
+        // Every request starts here, from the page or from AddinAutomation, one at a time: a send that comes while
+        // one runs (the page sent it before its busy state arrived) is dropped before anything shows it, and the
+        // busy state is taken before the first await. AddinAutomation.Send refuses one with an exception first.
+        private async Task SendAsync(string userMessage, bool fromOutside)
         {
+            if (IsBusy)
+            {
+                LogToFile("(a request came while one runs; dropped: " + userMessage + ")");
+                return;
+            }
+
+            _paneControl.Log("USER_REQUEST", userMessage);
+            if (fromOutside)
+            {
+                _paneControl.Log("SENT_FROM_OUTSIDE");
+                LogToFile("(the next request comes from another program, through the automation object)");
+            }
             if (!_settings.HasEndpoint || _settings.ChatModel.Length == 0)
             {
                 _paneControl.Log("NO_ENDPOINT_OR_MODEL", AddinSettings.Location);
+                _paneControl.SetBusy(busy: false); // the page waits for an answer to its send
                 return;
             }
             // A document still being read belongs to this conversation, and the request would go without it. The page
@@ -833,6 +878,7 @@ namespace Pptcom
             if (IsReadingDocuments)
             {
                 _paneControl.Log("DOC_STILL_CONVERTING");
+                _paneControl.SetBusy(busy: false);
                 return;
             }
             _paneControl.SetBusy(busy: true);
@@ -1250,6 +1296,7 @@ namespace Pptcom
             // the earlier requests on this deck, and so does their conversation, shortened (see Conversation).
             Conversation conversation = CurrentConversation();
             conversation.ImageModel = _settings.ImageModel; // fixed for this request
+            conversation.Llm = _llm;
             ComProxyEngine engine = conversation.Engine;
             run.Conversation = conversation;
             run.Engine = engine;
@@ -1303,7 +1350,7 @@ namespace Pptcom
                     if (cut)
                     {
                         run.HitTokenLimit = true;
-                        _paneControl.Log("AI_REPLY_CUT", _llm.MaxTokens);
+                        _paneControl.Log("AI_REPLY_CUT", conversation.Llm.MaxTokens);
                     }
 
                     break;
@@ -1368,7 +1415,7 @@ namespace Pptcom
             {
                 try
                 {
-                    return await _llm.ChatAsync(messages, ToolsFor(conversation.Documents.Count > 0), p =>
+                    return await conversation.Llm.ChatAsync(messages, ToolsFor(conversation.Documents.Count > 0), p =>
                         _paneControl.SetStatus("STATUS_TURN", turn, Chars(p.ReasoningChars), Chars(p.ContentChars + p.ToolArgChars),
                                                p.Elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture)),
                         ct).ConfigureAwait(true);
@@ -1377,7 +1424,7 @@ namespace Pptcom
                 {
                     run.ServerErrors++;
                     LogToFile(Invariant($"!!! server error at turn {turn}: {ex.Message}"));
-                    _paneControl.Log("AI_SERVER_ERROR", ServerFailureText(ex));
+                    _paneControl.Log("AI_SERVER_ERROR", ServerFailureText(ex, conversation.Llm));
                     _paneControl.SetStatus("STATUS_SERVER_ERROR", turn);
                     await WaitForRetryAsync(ct).ConfigureAwait(true); // throws OperationCanceledException on 中止
                     LogToFile(Invariant($"(retry requested by the user, turn {turn})"));
@@ -1385,7 +1432,7 @@ namespace Pptcom
             }
         }
 
-        private PaneText ServerFailureText(LlmServerException ex)
+        private static PaneText ServerFailureText(LlmServerException ex, OpenAiCompatibleClient llm)
         {
             if (ex.StatusCode is not null)
             {
@@ -1394,7 +1441,7 @@ namespace Pptcom
 
             return ex.Failure switch
             {
-                LlmServerFailure.Stalled => PaneText.Of("STREAM_STALLED", (int)_llm.StreamIdleLimit.TotalMinutes),
+                LlmServerFailure.Stalled => PaneText.Of("STREAM_STALLED", (int)llm.StreamIdleLimit.TotalMinutes),
                 LlmServerFailure.Incomplete => PaneText.Of("STREAM_INCOMPLETE"),
                 _ => PaneText.Of("CONNECTION_DROPPED"),
             };

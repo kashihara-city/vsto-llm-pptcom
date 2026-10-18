@@ -79,12 +79,22 @@ namespace Pptcom.ComProxy
             return !BlockedMembers.Contains(member);
         }
 
+        // Application's routes to the user's other open presentations and their windows. A request works on its
+        // own deck only: ActivePresentation, and Application.ActivePresentation, which ComProxyEngine answers with
+        // that deck. (Windows, SlideShowWindow... of ActivePresentation itself stay open.)
+        private static readonly HashSet<string> OtherDeckMembers = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "Presentations", "Windows", "ActiveWindow", "SlideShowWindows", "ProtectedViewWindows", "ActiveProtectedViewWindow",
+        };
+
         // Members that are only dangerous on a specific object type (so a name-only block would
         // be too broad: blocking "Add" everywhere would also kill Slides.Add / Shapes.Add*).
         // Keyed by the COM interface name reported by the object's ITypeInfo.
         private static readonly Dictionary<string, HashSet<string>> BlockedMembersByType =
             new(StringComparer.OrdinalIgnoreCase)
             {
+                { "_Application", OtherDeckMembers },
+                { "Application", OtherDeckMembers },
                 // Creating a new deck puts the work outside the one the user has open; opening
                 // one reads an arbitrary local/network file into the session.
                 { "Presentations", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Add", "Open", "Open2007", "OpenOld", "CheckOut", "CanCheckOut" } },
@@ -141,7 +151,9 @@ namespace Pptcom.ComProxy
 
             if (BlockedMembersByType.TryGetValue(typeName, out HashSet<string> blocked) && blocked.Contains(member))
             {
-                return typeName + "." + member;
+                return ReferenceEquals(blocked, OtherDeckMembers)
+                    ? "Application." + member + " (it reaches the user's other open presentations; this request works on ActivePresentation only)"
+                    : typeName + "." + member;
             }
 
             return null;

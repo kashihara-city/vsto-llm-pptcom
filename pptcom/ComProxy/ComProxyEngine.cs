@@ -674,7 +674,11 @@ namespace Pptcom.ComProxy
                 throw new InvalidOperationException(target + " holds Nothing");
             }
 
-            object? resultValue = Invoke(op, action, member, targetObj);
+            // Application.ActivePresentation is the request's deck too, as the bare ActivePresentation is
+            // (BindPresentation): asked of PowerPoint, it would be whichever deck the user has in front now.
+            object? resultValue = IsApplicationActivePresentation(action, member, targetObj)
+                ? Presentation ?? throw new InvalidOperationException("No presentation is open.")
+                : Invoke(op, action, member, targetObj);
             if (resultValue is not null && !ComSecurityPolicy.IsReturnValueAllowed(resultValue))
             {
                 throw new InvalidOperationException(
@@ -689,6 +693,14 @@ namespace Pptcom.ComProxy
                 _handleSlide[id] = resultSlide;
                 _literalIds.Remove(id);
             }
+        }
+
+        // The root Application is the only Application object a script can hold (ComSecurityPolicy refuses one as a
+        // result), so its ActivePresentation is the only one to answer from the binding.
+        private bool IsApplicationActivePresentation(string action, string? member, object targetObj)
+        {
+            return action == ComOpAction.Get && ReferenceEquals(targetObj, _application) &&
+                   string.Equals(member, PresentationId, StringComparison.OrdinalIgnoreCase);
         }
 
         // `x = value` with no COM call: a plain value, or another variable under a second name.

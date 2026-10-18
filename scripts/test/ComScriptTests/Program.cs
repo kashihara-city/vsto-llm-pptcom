@@ -23,7 +23,8 @@ namespace ComScriptTests
     //    in (folded by the parser) - and both must match VBScript.
     // 2. Cases where VBScript is not VBA, checked against VBA's documented behavior.
     // 3. Statements: which ones are accepted, and what a rejected one is told.
-    // 4. The deck a request edits: what the engine binds as ActivePresentation, and what DeckReader reads.
+    // 4. The deck a request edits: what the engine binds as ActivePresentation (also through Application), what
+    //    DeckReader reads, and that Application's routes to the other open presentations are refused.
     internal static class Program
     {
         private static int _pass, _fail;
@@ -400,6 +401,31 @@ namespace ComScriptTests
             }
             Report("deck: a request that started without a deck has none", none.Presentation is null && error == "No presentation is open.",
                    error ?? "no error");
+
+            // A script that asks Application for it (VBA's habit) gets the same deck, and Application's routes to the
+            // user's other open presentations are refused. The decks are names here: the engine admits plain values
+            // as results, not .NET objects standing in for COM ones.
+            NamedDecks named = new() { Active = "deck A" };
+            ComProxyEngine bound = new(named);
+            named.Active = "deck B";
+            ComScriptResult result = bound.ExecuteScriptAsync(ComScriptParser.Parse("p = Application.ActivePresentation", priorKnownIds: null, 2000))
+                                          .GetAwaiter().GetResult();
+            bound.TryGetHandle("p", out object? p);
+            Report("deck: Application.ActivePresentation is that deck too", result.Success && Equals(p, "deck A"),
+                   result.Success ? "p = " + p : result.Describe());
+            foreach (string member in new[] { "Presentations", "Windows", "ActiveWindow", "SlideShowWindows", "ProtectedViewWindows", "ActiveProtectedViewWindow" })
+            {
+                Report("deck: Application." + member + " is refused", !ComSecurityPolicy.IsMemberAllowedOn("Application", member), "allowed");
+            }
+            Report("deck: the deck's own Windows stays open", ComSecurityPolicy.IsMemberAllowedOn("Presentation", "Windows"), "refused");
+        }
+
+        // An Application whose ActivePresentation is a name.
+        internal sealed class NamedDecks
+        {
+            public string Active = "";
+
+            public string ActivePresentation => Active;
         }
 
         // An Application whose active deck the test switches, as the user does with the windows. DeckReader and the

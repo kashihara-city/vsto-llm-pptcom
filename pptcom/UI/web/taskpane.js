@@ -11,6 +11,7 @@ const $ = id => document.getElementById(id);
 
 const log = $("log"), input = $("input"), action = $("action");
 let busy = false, cancelling = false;
+let sending = false;      // a request was sent and the add-in has not answered with its busy state yet
 let work = null;          // the folded block of the request in progress
 
 // ---- conversation ------------------------------------------------------------------------------
@@ -70,7 +71,7 @@ const logKinds = {
   USER_REQUEST: "user", TOOL_RESULT: "tool", TURN_SIZE: "turn", REQUEST_DONE: "done",
   AI_REPLY: "reply", AI_DONE: "reply",
   AI_ERROR: "stopped", AI_CANCELLED: "stopped", AI_SERVER_ERROR: "error", AI_TURN_LIMIT: "error", AI_REPLY_CUT: "error",
-  AI_DECK_CLOSED: "error",
+  AI_DECK_CLOSED: "stopped",
   // a request refused before it started: its block ends with the reason
   NO_ENDPOINT_OR_MODEL: "stopped", DOC_STILL_CONVERTING: "stopped",
   HAND_EDITS: "handEdits", NEW_CONVERSATION: "reset", NEW_CONVERSATION_OTHER_DECK: "divider",
@@ -142,11 +143,14 @@ function onLog(m) {
 // A document still being read (body.converting, docs.js) would not go with the request: wait for it.
 const converting = () => document.body.classList.contains("converting");
 
+// One request at a time: a second send before the add-in's busy state arrives would start a second request.
+// The add-in answers every send with its busy state, a refused one too.
 function submit() {
-  if (busy || converting()) return;
+  if (busy || sending || converting()) return;
   const text = input.value.trim();
   if (!text) return;
   input.value = "";
+  sending = true;
   post({ type: "send", text });
 }
 input.addEventListener("keydown", e => {
@@ -192,6 +196,7 @@ function fill(select, items, selected) {
 
 function setBusy(on) {
   busy = on;
+  sending = false;
   cancelling = false;
   document.body.classList.toggle("busy", on);
   action.disabled = false;

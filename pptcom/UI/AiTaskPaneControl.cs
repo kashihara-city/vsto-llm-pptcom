@@ -246,8 +246,7 @@ namespace Pptcom.UI
                         return;
                     }
 
-                    Log("USER_REQUEST", text);
-                    SendRequested?.Invoke(this, new TextEventArgs(text));
+                    SendRequested?.Invoke(this, new TextEventArgs(text)); // ThisAddIn.SendAsync shows it (USER_REQUEST)
                     break;
                 case "cancel":
                     SetStatus("STATUS_CANCELLING");
