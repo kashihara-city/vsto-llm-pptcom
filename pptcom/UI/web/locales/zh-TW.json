@@ -24,6 +24,8 @@
   "SETTINGS_EXTERNAL_CONTROL_HINT": "以同一使用者執行的其他程式可以向此增益集傳送要求（測試用）",
   "API_KEY_SET": "已設定（Windows 認證管理員）",
   "API_KEY_NOT_SET": "未設定",
+  "ABOUT_VERSION": "vsto-llm-pptcom {0}（{1}）",
+  "ABOUT_HINT": "版本與建置時的提交（+ 表示含有未提交變更的建置）",
 
   "RETRY_BAR": "因伺服器端的錯誤而停止。",
   "RETRY": "重試",

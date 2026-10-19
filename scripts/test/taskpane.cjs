@@ -1,7 +1,8 @@
 // How the task pane's page (pptcom/UI/web/taskpane.js) sends a request and shows how it ends: one request at a
 // time, also before the add-in's busy state arrives and while another window's pane runs one; a refused send does
 // not leave the page waiting; a request that stops (the deck was closed, 中止, an error) closes its block as stopped,
-// one that finishes as done; the line above the input shows what is selected in PowerPoint. taskpane.js runs
+// one that finishes as done; the line above the input shows what is selected in PowerPoint, and the settings the
+// version. taskpane.js runs
 // as it is, in a stand-in for the browser and WebView2 made of plain objects; messages from the add-in arrive as
 // WebView2 delivers them. No packages.
 //
@@ -130,10 +131,18 @@ function selection() {
         line.className + " / " + text.textContent);
 }
 
+function about() {
+  const p = page();
+  p.host({ type: "about", text: { code: "ABOUT_VERSION", args: ["0.0.4", "5efe257"] } });
+  check("the version and commit show at the bottom of the settings", p.element("about").textContent === "ABOUT_VERSION",
+        p.element("about").textContent);
+}
+
 oneAtATime();
 elsewhere();
 refused();
 selection();
+about();
 ends("a request whose deck was closed ends as stopped", p => p.log("AI_DECK_CLOSED"), "stopped");
 ends("a request stopped by 中止 ends as stopped", p => p.log("AI_CANCELLED"), "stopped");
 ends("a request that failed ends as stopped", p => p.log("AI_ERROR", "x"), "stopped");

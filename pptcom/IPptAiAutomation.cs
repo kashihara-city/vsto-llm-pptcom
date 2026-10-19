@@ -37,5 +37,8 @@ namespace Pptcom
         void Attach(string path);
         // JSON: {documents: [{id, name, format, lines, images}], converting: [names], failed: ["name: reason"]}.
         string Documents { get; }
+        // Which build is loaded: "0.0.4 5efe257", "0.0.4 5efe257+ Debug" (BuildInfo). Added last: the members above
+        // keep their places for scripts that call them.
+        string Version { get; }
     }
 }

@@ -2,7 +2,7 @@
 // The add-in (AiTaskPaneControl.cs) and this page talk only through WebView2 web messages:
 //   page -> add-in: {type: "ready" | "send" | "cancel" | "retry" | "newChat" | "endpoint" | "chatModel" | "imageModel" | "apiKey", ...}
 //   page -> add-in also: {type: "saveProgress" | "externalControl", value: bool}
-//   add-in -> page: {type: "log" | "status" | "busy" | "retry" | "endpoint" | "models" | "apiKeyState" | "options" | "selection", ...}
+//   add-in -> page: {type: "log" | "status" | "busy" | "retry" | "endpoint" | "models" | "apiKeyState" | "options" | "selection" | "about", ...}
 //   ("log" and "status" carry a message: {code, args}, shown with the text of locales/<language>.json, see i18n.js)
 // Attached documents (drop, attach button, chips, PDF pages) have their own messages: see docs.js.
 const host = window.chrome && window.chrome.webview;
@@ -216,6 +216,8 @@ const handlers = {
   models: m => { fill(chatModel, m.chat || [], m.chatSelected); fill(imageModel, m.image || [], m.imageSelected); updateSummary(); },
   apiKeyState: m => { $("apikey-state").textContent = i18n.t(m.value ? "API_KEY_SET" : "API_KEY_NOT_SET"); },
   options: m => { $("save-progress").checked = !!m.saveProgress; $("external-control").checked = !!m.externalControl; },
+  // the add-in's version and the commit it was built from, at the bottom of the settings
+  about: m => { $("about").textContent = m.text ? i18n.t(m.text) : ""; },
   // what is selected in PowerPoint (or which slide it shows); a request sends the same to the model
   selection: m => { $("selection-text").textContent = m.text ? i18n.t(m.text) : ""; $("selection").classList.toggle("show", !!m.text); },
 };

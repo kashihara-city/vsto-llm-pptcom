@@ -598,6 +598,8 @@ namespace Pptcom
             control.SetEndpoint(_settings.Endpoint);
             control.SetApiKeyState(_settings.HasApiKey);
             control.SetOptions(_settings.ExternalControl, _settings.SaveProgress);
+            control.SetAbout(PaneText.Of("ABOUT_VERSION", BuildInfo.Version,
+                                         PaneText.Join("DETAIL_SEPARATOR", BuildInfo.IsDebug ? [BuildInfo.Commit, "Debug"] : [BuildInfo.Commit])));
             control.SetModelChoices(_chatModels, _settings.ChatModel, _imageModels, _settings.ImageModel);
             control.Log(_settings.HasEndpoint ? "READY" : "NO_ENDPOINT_HELP");
             if (IsBusy)
@@ -1723,6 +1725,7 @@ namespace Pptcom
                 ["model"] = run.Model,
                 ["image_model"] = run.ImageModel,
                 ["endpoint"] = run.Endpoint,
+                ["addin"] = BuildInfo.Describe, // the build that ran it: version, commit, Debug
                 ["deck_defaults"] = run.DeckDefaults?.Summary(),
                 ["run_folder"] = null,
             };
@@ -1825,6 +1828,7 @@ namespace Pptcom
             int totalReasoningChars = 0;
             int totalLines = 0;
             LogToFile("=== request: " + userMessage +
+                "\n(add-in " + BuildInfo.Describe + ")" +
                 (conversation.Earlier.Count > 0 ? Invariant($"\n(sent after {conversation.Earlier.Count} shortened messages of the earlier requests)") : "") +
                 (context.Length > 0 ? "\n(with this context:)\n" + context.TrimEnd() : "") +
                 (pictures.Count > 0 ? "\n(with the attached picture(s): " + string.Join(", ", pictures.Select(static p => p.Label)) + ")" : ""));

@@ -24,6 +24,8 @@
   "SETTINGS_EXTERNAL_CONTROL_HINT": "同じユーザーで動くほかのプログラムが、このアドインに依頼を送れるようになります（テスト用）",
   "API_KEY_SET": "設定済み（Windows 資格情報）",
   "API_KEY_NOT_SET": "未設定",
+  "ABOUT_VERSION": "vsto-llm-pptcom {0}（{1}）",
+  "ABOUT_HINT": "版と、元にしたコミット（+ は未コミットの変更を含むビルド）",
 
   "RETRY_BAR": "サーバ側のエラーで止まっています。",
   "RETRY": "再試行",

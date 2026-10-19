@@ -39,6 +39,8 @@ PowerPoint で開いているプレゼンテーションを、LLM が作った�
 - （既定でオフ）途中経過を保存する: オンにすると、依頼ごとの記録を `%LOCALAPPDATA%\KashiharaCity\pptcom\` に残します
 - （既定でオフ）外部からの操作を許可する: テスト用です。オンにすると、ほかのプログラムからこのアドインに依頼を送れます
 
+歯車を開いた一番下に、アドインの版と、元にしたコミットが出ます（例: `vsto-llm-pptcom 0.0.4（5efe257）`）。問い合わせのときは、これを添えてください。
+
 ## インストールされるものと書き込む場所
 
 ここから以下は、運用管理者向けの説明です。  
@@ -142,7 +144,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build\new-signing.ps1   # 初�
 powershell -ExecutionPolicy Bypass -File scripts\build\build.ps1
 ```
 
-VSTO のビルドは ClickOnce のマニフェストに署名するので、開発機ごとにテスト用の証明書が要ります。`new-signing.ps1` が自己署名の証明書と署名の設定を `temp\signing\` に作ります（Git の管理外。消したときは作り直せば済みます）。ビルドの生成物は、どのプロジェクトも `temp\build\<プロジェクト名>\` の `bin\<構成>\` と `obj\` にでき、MSI は `release\` にできます。
+VSTO のビルドは ClickOnce のマニフェストに署名するので、開発機ごとにテスト用の証明書が要ります。`new-signing.ps1` が自己署名の証明書と署名の設定を `temp\signing\` に作ります（Git の管理外。消したときは作り直せば済みます）。ビルドの生成物は、どのプロジェクトも `temp\build\<プロジェクト名>\` の `bin\<構成>\` と `obj\` にでき、MSI は `release\` にできます。アドインには、ビルドしたときのコミットを git から埋め込みます（`pptcom/CommitInfo.targets`。未コミットの変更があれば `+` が付き、git が無ければ `unknown`）。
 
 作業ウィンドウで使う PDF.js と anydoc は、公式の配布元から取ったものを `deps/` に置き、版とハッシュを `deps/web-sources.lock.json` で固定しています。npm は使いません。
 

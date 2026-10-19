@@ -97,6 +97,8 @@ input[type=text]:focus, select:focus, textarea:focus { outline: 2px solid var(--
 .checks { display: flex; flex-direction: column; gap: 4px; }
 .grid label.check { color: var(--text); font-size: 12px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .check input { accent-color: var(--accent); margin: 0; }
+#about { padding: 0 12px 10px; color: var(--muted); font-size: 11px; text-align: right; user-select: text; }
+#about:empty { display: none; }
 
 /* ---- conversation ---- */
 #log {

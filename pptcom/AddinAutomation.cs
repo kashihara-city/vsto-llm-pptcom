@@ -112,6 +112,15 @@ namespace Pptcom
             }
         }
 
+        public string Version
+        {
+            get
+            {
+                RequireEnabled();
+                return BuildInfo.Describe;
+            }
+        }
+
         public string LastRun
         {
             get

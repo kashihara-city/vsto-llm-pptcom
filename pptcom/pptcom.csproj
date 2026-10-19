@@ -117,6 +117,8 @@
   <Import Project="MergeDependencies.targets" />
   <!-- The task pane's third-party scripts (anydoc, PDF.js) embedded in pptcom.dll: see WebVendor.targets. -->
   <Import Project="WebVendor.targets" />
+  <!-- The commit pptcom.dll is built from, for BuildInfo: see CommitInfo.targets. -->
+  <Import Project="CommitInfo.targets" />
 
   <ItemGroup>
     <Reference Include="stdole, Version=7.0.3300.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a">
@@ -148,6 +150,7 @@
     <Compile Include="AddinSettings.cs" />
     <Compile Include="CredentialStore.cs" />
     <Compile Include="AddinAutomation.cs" />
+    <Compile Include="BuildInfo.cs" />
     <Compile Include="IPptAiAutomation.cs" />
     <Compile Include="Polyfills\RequiredMemberAttribute.cs" />
     <Compile Include="Polyfills\CompilerFeatureRequiredAttribute.cs" />

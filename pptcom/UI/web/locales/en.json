@@ -24,6 +24,8 @@
   "SETTINGS_EXTERNAL_CONTROL_HINT": "Other programs running as the same user can send requests to this add-in (for testing)",
   "API_KEY_SET": "Set (Windows Credential Manager)",
   "API_KEY_NOT_SET": "Not set",
+  "ABOUT_VERSION": "vsto-llm-pptcom {0} ({1})",
+  "ABOUT_HINT": "The version and the commit it was built from (+ means a build with uncommitted changes)",
 
   "RETRY_BAR": "Stopped by an error on the server.",
   "RETRY": "Retry",

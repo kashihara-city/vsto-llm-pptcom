@@ -479,6 +479,12 @@ namespace Pptcom.UI
             Post(new JObject { ["type"] = "selection", ["text"] = text is not null ? text.ToJson() : JValue.CreateNull() });
         }
 
+        // The line at the bottom of the settings: the add-in's version and the commit it was built from (BuildInfo).
+        internal void SetAbout(PaneText text)
+        {
+            Post(new JObject { ["type"] = "about", ["text"] = text.ToJson() });
+        }
+
         public void SetOptions(bool externalControl, bool saveProgress)
         {
             Post(new JObject { ["type"] = "options", ["externalControl"] = externalControl, ["saveProgress"] = saveProgress });
