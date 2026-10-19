@@ -575,10 +575,11 @@ def run_turns(runner: "Runner", messages: list, turns: list, out_dir: str) -> st
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
             print("   ->", c["function"]["name"], ":", result.splitlines()[0][:160], flush=True)
         if images:
-            # Tool messages carry text only on this gateway; the rendering rides on a user
-            # message right after them, as an OpenAI-style image_url part. Only the newest
-            # rendering per slide is kept (same rule as the add-in): older image parts of a
-            # re-rendered slide are replaced by a one-line note.
+            # Chat Completions defines a tool message's content as text only. Some servers (vLLM with a
+            # vision model's chat template) take image parts there too, but another server or template
+            # may drop them without an error, so the rendering rides on a user message right after them,
+            # as an OpenAI-style image_url part. Only the newest rendering per slide is kept (same rule
+            # as the add-in): older image parts of a re-rendered slide are replaced by a one-line note.
             import base64
             newest = {label: (png, inventory) for label, png, inventory in images}
             for m in messages:

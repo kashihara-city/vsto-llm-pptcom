@@ -1826,8 +1826,10 @@ namespace Pptcom
             }
             if (renderings.Count > 0)
             {
-                // Tool messages carry text only on this gateway; the rendering rides on a
-                // user message right after them, as image_url parts.
+                // Chat Completions defines a tool message's content as text only. Some servers (vLLM with a
+                // vision model's chat template) take image parts there too, but another server or template may
+                // drop them without an error, so the rendering rides on a user message right after them, as
+                // image_url parts.
                 SupersedeOlderRenderings(messages, renderings);
                 messages.Add(new ChatMessage("user", "Image(s) for the tool results above:") { Images = renderings });
             }
