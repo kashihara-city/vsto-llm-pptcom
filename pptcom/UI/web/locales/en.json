@@ -27,9 +27,9 @@
 
   "RETRY_BAR": "Stopped by an error on the server.",
   "RETRY": "Retry",
-  "INPUT_PLACEHOLDER": "Describe the slides you want (drop documents here to attach them)",
-  "ATTACH": "Attach a document",
-  "ATTACH_HINT": "Attach a document (Word, Excel, PowerPoint, PDF, text)",
+  "INPUT_PLACEHOLDER": "Describe the slides you want (drop or paste documents and pictures to attach them)",
+  "ATTACH": "Attach a document or picture",
+  "ATTACH_HINT": "Attach a document or picture (Word, Excel, PowerPoint, PDF, text, image)",
   "NEW_CHAT": "New chat",
   "NEW_CHAT_HINT": "Start over without the earlier requests",
   "SEND": "Send",
@@ -107,6 +107,7 @@
   "STREAM_INCOMPLETE": "the reply ended before it was complete",
 
   "DOC_ATTACHED": "Attached: {0} {1} — {2}",
+  "IMAGE_ATTACHED": "Attached a picture: {0} {1} — {2}",
   "DOC_NOT_ATTACHED": "Could not attach {0}: {1}",
   "DOC_REMOVED": "Removed: {0} {1}",
   "DOC_DISCARDED": "{0} was not attached: the conversation changed while it was being read",
@@ -117,6 +118,7 @@
   "DOC_KIND_PDF": "PDF",
   "DOC_KIND_CSV": "CSV",
   "DOC_KIND_TEXT": "Text",
+  "DOC_KIND_IMAGE": "Picture",
   "DOC_PAGES": "{0} page(s)",
   "DOC_LINES": "{0} line(s) of text",
   "DOC_IMAGES": "{0} image(s)",

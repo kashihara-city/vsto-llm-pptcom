@@ -79,6 +79,13 @@ namespace Pptcom.Documents
                     : "No document " + (id.Length > 0 ? "'" + id + "'" : "given") + ". Attached: " + string.Join("; ", docs.Select(static d => d.Describe())) + ".";
             }
 
+            if (doc.IsImage && doc.Images.Count > 0)
+            {
+                string name = doc.Images[0].Name;
+                return doc.Describe() + " is a picture and has no text: look at it with docread image \"" + name + "\"" +
+                       (doc.Images[0].FilePath is not null ? "; place it with AddPicture(" + name + ", msoFalse, msoTrue, left, top, width, height) in its aspect ratio." : ".");
+            }
+
             string lines = ((string?)args["lines"] ?? "").Trim();
             string find = ((string?)args["find"] ?? "").Trim();
             if (find.Length > 0)

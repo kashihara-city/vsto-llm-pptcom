@@ -1,19 +1,20 @@
-// Documents the user attaches to the conversation: dropped on the pane, picked with the attach button,
+// Documents the user attaches to the conversation: dropped on the pane, picked with the attach button, pasted,
 // or sent by the add-in (a file attached from outside, AddinAutomation.Attach). Each one is converted -
 // PDFs with PDF.js (pdfdoc.js), everything else in a worker with anydoc (docworker.js) - and handed to the
-// add-in, which keeps it for the conversation and lets the model read it (docread). The add-in owns the
-// list; this page shows what it says (the chips above the input) and asks it to remove one. It also draws
-// PDF pages for docread page; the add-in sends the PDF along each time, so this page keeps no documents.
+// add-in, which keeps it for the conversation and lets the model read it (docread). A picture is not converted:
+// it goes as format "image", one image and no text, and the model sees it with the request that follows. The
+// add-in owns the list; this page shows what it says (the chips above the input) and asks it to remove one. It
+// also draws PDF pages for docread page; the add-in sends the PDF along each time, so this page keeps no documents.
 //
 //   page -> add-in: {type: "attachStarted", ticket, name}                   a file is taken, before it is read (the add-in ties it to the conversation)
 //                   {type: "attach", ticket, name, size, format, text, pages, images: [{index, mediaType, data (base64)}],
-//                    source (the PDF itself, base64; PDFs only)}
+//                    source (the PDF itself, base64; PDFs only), thumb (a small PNG as a data: URL; pictures only)}
 //                   {type: "attachFailed", ticket, name, reason, detail}
 //                   {type: "detach", id}
 //                   {type: "pagesRendered", request, pages: [{page, data (PNG, base64) | error}]} or {..., error}
 //   add-in -> page: {type: "convert", ticket, name, data (base64)}   a file attached from outside
 //                   {type: "renderPages", request, data (the PDF, base64), pages: [n], maxSide}
-//                   {type: "attachments", items: [{id, name, detail}]}   (detail: a message, see i18n.js)
+//                   {type: "attachments", items: [{id, name, detail, thumb}]}   (detail: a message, see i18n.js; thumb: "" or a data: URL)
 //                   {type: "busy", value}                             (also handled by taskpane.js)
 const host = window.chrome && window.chrome.webview;
 const $ = id => document.getElementById(id);
@@ -21,7 +22,9 @@ const $ = id => document.getElementById(id);
 // Larger files are refused before reading them (the add-in applies the same limit to Attach).
 const MaxBytes = 50 * 1024 * 1024;
 const Accept = [".docx", ".doc", ".docm", ".xlsx", ".xlsm", ".pptx", ".ppt", ".pptm", ".pdf", ".odt", ".ods", ".odp",
-                ".rtf", ".epub", ".csv", ".txt", ".md"];
+                ".rtf", ".epub", ".csv", ".txt", ".md", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp"];
+// Long side of a chip's picture, in pixels (shown at about half that, sharp on a high-DPI screen).
+const ThumbSide = 96;
 
 let busy = false;
 let converting = 0;
@@ -63,6 +66,8 @@ const isPdf = bytes => bytes.length > 4 && bytes[0] === 0x25 && bytes[1] === 0x5
 // The message for the add-in: attach, or attachFailed when the converter says why it could not.
 async function convert(ticket, name, bytes) {
   const size = bytes.byteLength;
+  const picture = pictureType(bytes);
+  if (picture) return pictureMessage(ticket, name, size, picture, bytes);
   const r = isPdf(bytes) ? await (await import("./pdfdoc.js")).convertPdf(bytes) : await inWorker(name, bytes.slice());
   if (!r.ok) return { type: "attachFailed", ticket, name, reason: r.reason, detail: r.detail || "" };
   const images = [];
@@ -70,6 +75,47 @@ async function convert(ticket, name, bytes) {
   const msg = { type: "attach", ticket, name, size, format: r.format, text: r.text, images };
   if (r.format === "pdf") { msg.pages = r.pages; msg.source = await base64(bytes); }
   return msg;
+}
+
+// ---- pictures ----------------------------------------------------------------------------------------
+
+// The picture types PowerPoint places as they are (and the add-in can draw for the model), by their first bytes,
+// and WebP, which this page turns into a PNG first. null for anything else.
+function pictureType(b) {
+  const at = (i, ...v) => b.length >= i + v.length && v.every((x, k) => b[i + k] === x);
+  if (at(0, 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)) return "image/png";
+  if (at(0, 0xFF, 0xD8, 0xFF)) return "image/jpeg";
+  if (at(0, 0x47, 0x49, 0x46, 0x38)) return "image/gif";                               // GIF8
+  if (at(0, 0x49, 0x49, 0x2A, 0x00) || at(0, 0x4D, 0x4D, 0x00, 0x2A)) return "image/tiff";
+  if (at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50)) return "image/webp"; // RIFF....WEBP
+  // BM, then a DIB header of a size Windows writes: "BM" alone also starts plain text
+  if (at(0, 0x42, 0x4D) && [12, 40, 52, 56, 64, 108, 124].includes(b[14]) && at(15, 0, 0, 0)) return "image/bmp";
+  return null;
+}
+
+async function pictureMessage(ticket, name, size, mediaType, bytes) {
+  let data = bytes;
+  if (mediaType === "image/webp") {
+    // PowerPoint 2019 does not place WebP
+    try { data = await drawn(bytes, Infinity); } catch (e) { return { type: "attachFailed", ticket, name, reason: "unsupported", detail: "" }; }
+    mediaType = "image/png";
+  }
+  let thumb = "";
+  try { thumb = "data:image/png;base64," + await base64(await drawn(data, ThumbSide)); } catch (e) { /* TIFF: no chip picture */ }
+  return { type: "attach", ticket, name, size, format: "image", text: "", images: [{ index: 0, mediaType, data: await base64(data) }], thumb };
+}
+
+// The picture drawn as a PNG Blob, its long side at most maxSide pixels.
+async function drawn(data, maxSide) {
+  const bitmap = await createImageBitmap(data instanceof Blob ? data : new Blob([data]));
+  try {
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const canvas = new OffscreenCanvas(Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale)));
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return await canvas.convertToBlob({ type: "image/png" });
+  } finally {
+    bitmap.close();
+  }
 }
 
 function inWorker(name, bytes) {
@@ -151,6 +197,22 @@ document.addEventListener("drop", e => {
 attachButton.addEventListener("click", () => { if (!busy) picker.click(); });
 picker.addEventListener("change", () => { const files = Array.from(picker.files); picker.value = ""; addFiles(files); });
 
+// ---- paste -------------------------------------------------------------------------------------------
+
+// Ctrl+V with text on the clipboard pastes the text, as always: Excel and Word put a picture of what was copied
+// next to its text, and whoever copies text means the text. Without text, the clipboard's files are attached like
+// dropped ones: a screen snip, a slide or shape copied in PowerPoint (it gives no text for those), a picture copied
+// in a browser, files copied in Explorer. The settings' fields keep the browser's own paste.
+document.addEventListener("paste", e => {
+  const dt = e.clipboardData;
+  if (!dt || (e.target && e.target.closest && e.target.closest("#settings"))) return;
+  if (dt.getData("text/plain").length > 0) return;
+  const files = Array.from(dt.files || []);
+  if (files.length === 0) return;
+  e.preventDefault();
+  addFiles(files);
+});
+
 // ---- chips -----------------------------------------------------------------------------------------
 
 function showAttachments(items) {
@@ -159,6 +221,13 @@ function showAttachments(items) {
     const chip = document.createElement("span");
     chip.className = "chip";
     chip.title = it.detail ? i18n.t(it.detail) : "";
+    if (it.thumb) {
+      const img = document.createElement("img");
+      img.className = "chip-thumb";
+      img.alt = "";
+      img.src = it.thumb;
+      chip.appendChild(img);
+    }
     const label = document.createElement("span");
     label.className = "chip-name";
     label.textContent = it.id + " " + it.name;

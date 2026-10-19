@@ -250,6 +250,10 @@ body.busy #action .stop { display: block; }
   padding: 2px 2px 2px 8px; border: 1px solid var(--line); border-radius: 999px;
   background: var(--accent-soft); font-size: 12px;
 }
+.chip-thumb {
+  height: 24px; max-width: 48px; object-fit: cover; flex: none;
+  margin: 0 4px 0 -5px; border-radius: 999px 4px 4px 999px; background: #fff;
+}
 .chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip-remove {
   border: none; background: none; cursor: pointer; color: var(--muted);

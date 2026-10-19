@@ -11,14 +11,16 @@ using static System.FormattableString;
 namespace Pptcom.Documents
 {
     // A document the user attached to the conversation (dropped on the task pane, picked with its attach
-    // button, or attached from outside with AddinAutomation.Attach). The task pane converts it
+    // button, pasted, or attached from outside with AddinAutomation.Attach). The task pane converts it
     // (UI\web\docworker.js: anydoc) into dense Markdown-like text - one block per line - and the images
     // it embeds; the model reads it with the docread tool (DocRead). Kept in memory with the conversation.
+    // A picture (a screen snip, a slide copied in PowerPoint, a photo) comes the same way as format "image":
+    // no text, one image, which the request that follows shows to the model (ThisAddIn.NewAttachedImages).
     internal sealed class AttachedDocument
     {
         public required string Id;     // "d1", "d2", ... in the order attached, never reused within a conversation
         public required string Name;   // the file name
-        public required string Format; // anydoc's format name (docx, xlsx, pdf, ...) or "text"
+        public required string Format; // anydoc's format name (docx, xlsx, pdf, ...), "text" or "image"
         public long Size;              // bytes of the file
         public string[] Lines = [];
         public readonly List<AttachedImage> Images = [];
@@ -26,6 +28,11 @@ namespace Pptcom.Documents
         // The text has a "[page N]" line where each page starts.
         public int Pages;
         public byte[]? Source;
+        // Pictures: a small PNG the page drew for the chip (a data: URL, "" when it could not), and whether a
+        // request has shown the picture to the model yet.
+        public string Thumbnail = "";
+        public bool Shown;
+        private const int MaxThumbnailChars = 200_000;
 
         // Each image becomes a file in the temp folder and a pptcom variable: a document with more keeps the
         // first ones (the rest stay marked [image] in the text).
@@ -72,6 +79,7 @@ namespace Pptcom.Documents
                     Name = Invariant($"{id}_img{doc.Images.Count + 1}"),
                     MediaType = (string?)img["mediaType"] ?? "",
                     Data = data,
+                    Standalone = doc.IsImage,
                 };
                 byIndex[(int?)img["index"] ?? -1] = image;
                 doc.Images.Add(image);
@@ -109,10 +117,19 @@ namespace Pptcom.Documents
                 {
                 }
             }
+            // Shown by the page as an <img> under its Content-Security-Policy (img-src data:): a PNG, nothing else.
+            string thumb = (string?)m["thumb"] ?? "";
+            if (thumb.StartsWith("data:image/png;base64,", StringComparison.Ordinal) && thumb.Length <= MaxThumbnailChars)
+            {
+                doc.Thumbnail = thumb;
+            }
+
             return doc;
         }
 
         public bool IsPdf => Format == "pdf";
+
+        public bool IsImage => Format == "image";
 
         public string Kind => Format switch
         {
@@ -127,6 +144,7 @@ namespace Pptcom.Documents
             "odt" or "ods" or "odp" => "OpenDocument (" + Format + ")",
             "rtf" => "RTF document",
             "epub" => "EPUB book",
+            "image" => "image",
             _ => Format,
         };
 
@@ -139,19 +157,31 @@ namespace Pptcom.Documents
             "pdf" => PaneText.Of("DOC_KIND_PDF"),
             "csv" => PaneText.Of("DOC_KIND_CSV"),
             "text" => PaneText.Of("DOC_KIND_TEXT"),
+            "image" => PaneText.Of("DOC_KIND_IMAGE"),
             _ => Format,
         };
 
-        // For the model: "d1: 交通計画.docx (Word document, 540 lines, 3 images)".
+        // For the model: "d1: 交通計画.docx (Word document, 540 lines, 3 images)"; a picture:
+        // "d2: image.png (image d2_img1, 1600x900 PNG)".
         public string Describe()
         {
+            if (IsImage && Images.Count > 0)
+            {
+                return Id + ": " + Name + " (image " + Images[0].Name + ", " + Images[0].SizeAndKind + ")";
+            }
+
             return Id + ": " + Name + " (" + Kind + (IsPdf && Pages > 0 ? Invariant($", {Pages} page") + (Pages == 1 ? "" : "s") : "") + Invariant($", {Lines.Length} lines") +
                    (Images.Count > 0 ? Invariant($", {Images.Count} image") + (Images.Count == 1 ? "" : "s") : "") + ")";
         }
 
-        // For the task pane: "Word 文書、本文 540 行、画像 3 枚" in Japanese.
+        // For the task pane: "Word 文書、本文 540 行、画像 3 枚" in Japanese; a picture: "画像、1600x900 PNG".
         public PaneText Detail()
         {
+            if (IsImage && Images.Count > 0)
+            {
+                return PaneText.Join("DETAIL_SEPARATOR", [KindText, Images[0].SizeAndKind]);
+            }
+
             List<object> parts = [KindText];
             if (IsPdf && Pages > 0)
             {

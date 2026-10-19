@@ -63,7 +63,7 @@ namespace Pptcom.UI
         public event EventHandler<SwitchEventArgs>? SaveProgressChanged;
         // The page started converting a document (UI\web\docs.js): its ticket and name.
         public event EventHandler<DocumentStartedEventArgs>? DocumentStarted;
-        // A document the page converted (UI\web\docs.js): {ticket, name, size, format, text, images}.
+        // A document the page converted (UI\web\docs.js): {ticket, name, size, format, text, images, thumb}.
         public event EventHandler<DocumentConvertedEventArgs>? DocumentConverted;
         // One it could not convert: ticket, file name, reason (docworker.js), detail.
         public event EventHandler<DocumentFailedEventArgs>? DocumentFailed;
@@ -462,13 +462,14 @@ namespace Pptcom.UI
             }
         }
 
-        // The chips above the input: the conversation's attached documents (id, file name, a detail line).
-        internal void SetAttachments(IEnumerable<Tuple<string, string, PaneText>> documents)
+        // The chips above the input: the conversation's attached documents (id, file name, a detail line, and for a
+        // picture the small PNG the page drew of it as a data: URL, "" for none).
+        internal void SetAttachments(IEnumerable<Tuple<string, string, PaneText, string>> documents)
         {
             Post(new JObject
             {
                 ["type"] = "attachments",
-                ["items"] = new JArray(documents.Select(static d => new JObject { ["id"] = d.Item1, ["name"] = d.Item2, ["detail"] = d.Item3.ToJson() })),
+                ["items"] = new JArray(documents.Select(static d => new JObject { ["id"] = d.Item1, ["name"] = d.Item2, ["detail"] = d.Item3.ToJson(), ["thumb"] = d.Item4 })),
             });
         }
 

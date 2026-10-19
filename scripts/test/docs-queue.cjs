@@ -1,7 +1,9 @@
 // How the task pane takes the documents the user attaches (pptcom/UI/web/docs.js): every file is announced to the
 // add-in (attachStarted) and counted as converting before it is read, and every announced file ends with attach
-// or attachFailed, whatever fails on the way, while the files after it go on. docs.js runs as it is, in a
-// stand-in for the browser and WebView2 made of plain objects (it imports nothing at its top level); no packages.
+// or attachFailed, whatever fails on the way, while the files after it go on. A picture goes as it is (format
+// "image"), not through the converter; a paste attaches the clipboard's files only when it holds no text.
+// docs.js runs as it is, in a stand-in for the browser and WebView2 made of plain objects (it imports nothing at
+// its top level, and the stand-in has no createImageBitmap, so a picture comes without its chip thumbnail); no packages.
 //
 //   node scripts/test/docs-queue.cjs     exit code 0 = all passed
 "use strict";
@@ -21,6 +23,8 @@ function check(name, ok, detail) {
 
 // A converter that answers at once: a text document, with one image when the file's name says so.
 class TextWorker {
+  static started = 0;
+  constructor() { TextWorker.started++; }
   postMessage({ name }) {
     const images = name.includes("image") ? [{ index: 0, mediaType: "image/png", data: new Uint8Array([1]) }] : [];
     queueMicrotask(() => this.onmessage({ data: { ok: true, format: "text", text: "x", images } }));
@@ -40,7 +44,7 @@ function fileReader(fails) {
 
 // docs.js in a fresh page. `messages` is what it posted to the add-in; `fromAddin` delivers a message to it.
 function page({ worker = TextWorker, readerFails = false } = {}) {
-  const messages = [], classes = new Set(), elements = new Map();
+  const messages = [], classes = new Set(), elements = new Map(), onDocument = {};
   let onMessage = null;
   const element = () => ({
     children: [], classList: { toggle() {} }, addEventListener() {}, querySelectorAll: () => [], appendChild() {},
@@ -54,7 +58,7 @@ function page({ worker = TextWorker, readerFails = false } = {}) {
     document: {
       body: { classList: { toggle: (k, on) => (on ? classes.add(k) : classes.delete(k)), add() {}, remove() {} } },
       getElementById: id => { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); },
-      addEventListener() {},
+      addEventListener: (type, fn) => { onDocument[type] = fn; },
       createElement: element,
     },
     i18n: { t: s => s, fill: s => s },
@@ -71,18 +75,31 @@ function page({ worker = TextWorker, readerFails = false } = {}) {
       Promise.resolve(vm.runInContext("addFiles(files)", context)).catch(() => {});
     },
     fromAddin: data => onMessage({ data }),
+    // Ctrl+V: the clipboard's text and files, into the request box or a settings field; returns whether the page
+    // took it over (preventDefault)
+    paste: ({ text = "", files = [], inSettings = false }) => {
+      let prevented = false;
+      onDocument.paste({
+        clipboardData: { getData: type => (type === "text/plain" ? text : ""), files },
+        target: { closest: selector => (inSettings && selector === "#settings" ? {} : null) },
+        preventDefault: () => { prevented = true; },
+      });
+      return prevented;
+    },
     settled: async () => { for (let i = 0; i < 5; i++) await vm.runInContext("queue", context).catch(() => {}); },
   };
 }
 
-// A dropped file whose bytes come when the test says (or fail to).
-function file(name, size = 1) {
+const PngHeader = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D];
+
+// A dropped file whose bytes come when the test says (or fail to); "A" unless given.
+function file(name, size = 1, content = [65]) {
   let resolve, reject, reads = 0;
   const bytes = new Promise((res, rej) => { resolve = res; reject = rej; });
   return {
     name, size,
     arrayBuffer: () => { reads++; return bytes; },
-    arrive: () => resolve(new Uint8Array([65]).buffer),
+    arrive: () => resolve(new Uint8Array(content).buffer),
     fail: () => reject(new Error("the file could not be read")),
     reads: () => reads,
   };
@@ -175,6 +192,55 @@ async function fromAddin() {
   check("and attached", show(p.messages) === "attachStarted:a1, attach:a1" && !p.converting(), show(p.messages));
 }
 
+async function picture() {
+  const before = TextWorker.started;
+  const p = page(), png = file("image.png", PngHeader.length, PngHeader);
+  p.addFiles([png]);
+  png.arrive();
+  await p.settled();
+  const m = p.messages.find(x => x.type === "attach");
+  check("a picture is attached as it is, as one image and no text, without the converter",
+        eachEndsOnce(p.messages) && m && m.format === "image" && m.text === "" && m.images.length === 1 &&
+        m.images[0].mediaType === "image/png" && m.images[0].data === Buffer.from(PngHeader).toString("base64") &&
+        m.thumb === "" && TextWorker.started === before && !p.converting(),
+        JSON.stringify(m) + "; converters started=" + (TextWorker.started - before));
+}
+
+async function textStartingLikeBmp() {
+  const p = page(), txt = file("notes.txt", 3, [0x42, 0x4D, 0x41]); // "BMA"
+  p.addFiles([txt]);
+  txt.arrive();
+  await p.settled();
+  const m = p.messages.find(x => x.type === "attach");
+  check("a text file that starts with BM is a document, not a picture", m && m.format === "text", JSON.stringify(m));
+}
+
+async function paste() {
+  let p = page();
+  let prevented = p.paste({ text: "1\r\n2\r\n", files: [file("image.png")] });
+  check("a paste with text (Excel puts a picture next to it) is left to the text box",
+        !prevented && p.messages.length === 0, "prevented=" + prevented + "; " + show(p.messages));
+
+  p = page();
+  const snip = file("image.png", PngHeader.length, PngHeader);
+  prevented = p.paste({ files: [snip] });
+  snip.arrive();
+  await p.settled();
+  check("a paste of a picture alone attaches it",
+        prevented && show(p.messages) === "attachStarted:p1, attach:p1" && p.messages[1].format === "image",
+        "prevented=" + prevented + "; " + show(p.messages));
+
+  p = page();
+  prevented = p.paste({ files: [file("image.png")], inSettings: true });
+  check("a paste into the settings is left alone", !prevented && p.messages.length === 0,
+        "prevented=" + prevented + "; " + show(p.messages));
+
+  p = page();
+  prevented = p.paste({});
+  check("a paste with nothing on the clipboard is left alone", !prevented && p.messages.length === 0,
+        "prevented=" + prevented + "; " + show(p.messages));
+}
+
 (async () => {
   await announcedBeforeRead();
   await unreadable();
@@ -182,6 +248,9 @@ async function fromAddin() {
   await converterThrows();
   await tooLarge();
   await fromAddin();
+  await picture();
+  await textStartingLikeBmp();
+  await paste();
   console.log();
   console.log(failed === 0 ? `ALL PASSED (${passed})` : `${failed} FAILED, ${passed} passed`);
   process.exitCode = failed === 0 ? 0 : 1;
