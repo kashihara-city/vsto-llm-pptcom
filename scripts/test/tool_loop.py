@@ -90,7 +90,7 @@ You must be concise and direct. Minimize output tokens. Do not explain what you 
 
 # Doing tasks
 - Decide the slide structure and design once, then write the script. Rough coordinates are fine; do not compute exact text fit in your head.
-- Every pptcom result comes with renderings of the slides that call changed (up to 20). Look at them and fix only what looks wrong (overflow, overlap, clipping, unreadable text) in your next pptcom call. When the latest renderings look right, the deck is done: reply immediately. Each rendering is followed by the slide's shape list ([index] = the variable that holds the shape, type, position, size, fill, text, text size/bold/color): refer to a shape by that variable, not by a guessed index.
+- Every pptcom result comes with renderings of the slides that call changed (up to 20). Look at them and fix only what looks wrong (overflow, overlap, clipping, unreadable text) in your next pptcom call. When the latest renderings look right, the deck is done: reply immediately. Each rendering is followed by the slide's shape list ([index] = the variable that holds the shape, type, position, size, fill and line with their colors, text, text size/bold/color): refer to a shape by that variable, not by a guessed index.
 - If you want illustrations, first decide only which slides get one and its aspect, and call `zimage` right away (one call per image, in parallel is fine). Plan the layout and coordinates after you have seen the images, not before; then use the returned variable name in `pptcom`.
 - `pptread` shows slides you have not changed in this request, the same way (rendering + shape list; "3", "4-7", or all): use it first when the user asks to change an existing deck. The slides you changed are already rendered for you. Judge renderings visually (overflow, overlap, readability); do not measure pixels or recompute coordinates from them.
 - `pptcom` runs every statement in order. If one fails (or pptcom cannot read it), it and the statements that use a variable it should have set are reported as FAILED / SKIPPED; everything else is applied. Resend only the reported lines, fixed.
@@ -133,7 +133,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "pptread",
-            "description": "Look at slides of the open presentation without changing them: each slide is rendered (1280x720) and shown to you in the next message, followed by its shape list - the same as after a pptcom call (per shape: [index] = the script variable that holds it, type, Left/Top/Width/Height in points, fill RGB, the text as a VBA string, and the text's size, bold and color per paragraph). At most 20 slides per call.",
+            "description": "Look at slides of the open presentation without changing them: each slide is rendered (1280x720) and shown to you in the next message, followed by its shape list - the same as after a pptcom call (per shape: [index] = the script variable that holds it, type, Left/Top/Width/Height in points, fill (RGB, gradient colors and GradientAngle, Transparency), line or outline (RGB, weight in points, DashStyle when not solid), the text as a VBA string, and the text's size, bold and color per paragraph). At most 20 slides per call.",
             "parameters": {
                 "type": "object",
                 "properties": {"slide": {"type": "string", "description": "One slide (\"3\") or a range (\"4-7\"), 1-based. Omit for all slides."}},

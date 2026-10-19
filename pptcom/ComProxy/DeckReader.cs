@@ -129,9 +129,7 @@ namespace Pptcom.ComProxy
                     }
 
                     dynamic font = para.Runs(1).Font;
-                    int rgb = (int)font.Color.RGB;
-                    style = R(font.Size) + "pt" + ((int)font.Bold != 0 ? " bold" : "") +
-                            Invariant($" RGB({rgb & 0xFF},{(rgb >> 8) & 0xFF},{(rgb >> 16) & 0xFF})");
+                    style = R(font.Size) + "pt" + ((int)font.Bold != 0 ? " bold" : "") + " " + Rgb(font.Color.RGB);
                 }
                 catch (Exception ex) when (Guard.IsRecoverable(ex))
                 {
@@ -178,7 +176,7 @@ namespace Pptcom.ComProxy
 
         // The shape list that goes with a slide rendering - what a VBA `For Each shp In
         // slide.Shapes: Debug.Print ...` loop would show - one line per shape:
-        //   [13] = d2 RoundedRectangle L340 T412 W280 H100 fill RGB(255,255,255) "品種は500以上" & vbCr & "..." | font 16pt RGB(40,40,40)
+        //   [13] = d2 RoundedRectangle L340 T412 W280 H100 fill RGB(255,255,255) line RGB(223,226,229) 1pt "品種は500以上" & vbCr & "..." | font 16pt RGB(40,40,40)
         // Names PowerPoint made up ("Rounded Rectangle 15") are left out, as the type says the same;
         // names a script gave are kept ('card1'). The text is complete, as a VBA literal.
         public static string Brief(object? presentation, int slideIndex, IDictionary<string, List<string>>? variables = null)
@@ -213,12 +211,14 @@ namespace Pptcom.ComProxy
 
             sb.Append(" L").Append(R(shape.Left)).Append(" T").Append(R(shape.Top))
               .Append(" W").Append(R(shape.Width)).Append(" H").Append(R(shape.Height));
+            // Colors and weights as numbers: from a rendering the model could only guess them (a thin dotted line
+            // comes out paler than it is).
             try
             {
-                if ((int)shape.Fill.Visible != 0 && (int)shape.HasTable == 0)
+                if ((int)shape.HasTable == 0)
                 {
-                    int rgb = (int)shape.Fill.ForeColor.RGB;
-                    sb.Append(" fill RGB(").Append(rgb & 0xFF).Append(',').Append((rgb >> 8) & 0xFF).Append(',').Append((rgb >> 16) & 0xFF).Append(')');
+                    AppendFill(sb, shape.Fill);
+                    AppendLine(sb, shape.Line);
                 }
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
@@ -244,6 +244,101 @@ namespace Pptcom.ComProxy
             {
             }
             sb.Append('\n');
+        }
+
+        // " fill RGB(245,246,247)", " fill gradient RGB(126,183,236) to RGB(0,90,163), GradientAngle 90" or " fill picture",
+        // then " Transparency 0.3" when it is not opaque. Nothing when the shape has no visible fill.
+        private static void AppendFill(StringBuilder sb, dynamic fill)
+        {
+            if ((int)fill.Visible == 0)
+            {
+                return;
+            }
+
+            int type = (int)fill.Type;
+            if (type == 3) // msoFillGradient
+            {
+                dynamic stops = fill.GradientStops;
+                int n = (int)stops.Count;
+                sb.Append(" fill gradient ").Append(Rgb(stops.Item(1).Color.RGB)).Append(" to ").Append(Rgb(stops.Item(n).Color.RGB));
+                if (n > 2)
+                {
+                    sb.Append(Invariant($" ({n} stops)"));
+                }
+
+                try
+                {
+                    sb.Append(", GradientAngle ").Append(Num(fill.GradientAngle));
+                }
+                catch (Exception ex) when (Guard.IsRecoverable(ex))
+                {
+                    // a radial or path gradient has no angle
+                }
+            }
+            else if (type == 6) // msoFillPicture
+            {
+                sb.Append(" fill picture");
+            }
+            else
+            {
+                sb.Append(" fill ").Append(Rgb(fill.ForeColor.RGB));
+            }
+
+            double transparency = (double)fill.Transparency;
+            if (transparency >= 0.005 && transparency <= 1)
+            {
+                sb.Append(" Transparency ").Append(Num(transparency));
+            }
+        }
+
+        // " line RGB(214,0,32) 2pt", with the DashStyle when it is not solid (" msoLineSquareDot"): the line of a Line
+        // shape, the outline of any other. Nothing when it is not visible (its weight then reads as "mixed").
+        private static void AppendLine(StringBuilder sb, dynamic line)
+        {
+            if ((int)line.Visible == 0)
+            {
+                return;
+            }
+
+            sb.Append(" line ").Append(Rgb(line.ForeColor.RGB)).Append(' ').Append(Num(line.Weight)).Append("pt");
+            string? dash = DashName((int)line.DashStyle);
+            if (dash is not null)
+            {
+                sb.Append(' ').Append(dash);
+            }
+        }
+
+        // MsoLineDashStyle by value; null for solid (and mixed).
+        private static string? DashName(int style)
+        {
+            return style switch
+            {
+                2 => "msoLineSquareDot",
+                3 => "msoLineRoundDot",
+                4 => "msoLineDash",
+                5 => "msoLineDashDot",
+                6 => "msoLineDashDotDot",
+                7 => "msoLineLongDash",
+                8 => "msoLineLongDashDot",
+                9 => "msoLineLongDashDotDot",
+                10 => "msoLineSysDash",
+                11 => "msoLineSysDot",
+                12 => "msoLineSysDashDot",
+                _ => null,
+            };
+        }
+
+        // A COM color (0x00BBGGRR) as VBA writes it: "RGB(214,0,32)".
+        private static string Rgb(dynamic color)
+        {
+            int c = (int)color;
+            return Invariant($"RGB({c & 0xFF},{(c >> 8) & 0xFF},{(c >> 16) & 0xFF})");
+        }
+
+        // A size that may have a fraction (a line weight of 0.75 pt): "0.75", "2".
+        private static string Num(dynamic v)
+        {
+            return ((double)v).ToString("0.##", CultureInfo.InvariantCulture);
         }
 
         // ---- what the user has selected in PowerPoint ------------------------------------------------
