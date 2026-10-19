@@ -241,6 +241,15 @@ body.converting:not(.busy) #action { opacity: .4; cursor: default; }
 body.busy #action .send { display: none; }
 body.busy #action .stop { display: block; }
 
+/* ---- what is selected in PowerPoint ---- */
+#selection {
+  display: none; align-items: center; gap: 5px; padding: 6px 10px 0;
+  color: var(--muted); font-size: 12px;
+}
+#selection.show { display: flex; }
+#selection svg { flex: none; }
+#selection-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---- attached documents ---- */
 #attach-area { display: none; flex-wrap: wrap; gap: 4px; align-items: center; padding: 8px 8px 0; }
 #attach-area.show { display: flex; }

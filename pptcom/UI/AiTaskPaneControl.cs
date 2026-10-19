@@ -473,6 +473,12 @@ namespace Pptcom.UI
             });
         }
 
+        // The line above the input: what is selected in the window (a message, see PaneText), or null to hide it.
+        internal void SetSelection(PaneText? text)
+        {
+            Post(new JObject { ["type"] = "selection", ["text"] = text is not null ? text.ToJson() : JValue.CreateNull() });
+        }
+
         public void SetOptions(bool externalControl, bool saveProgress)
         {
             Post(new JObject { ["type"] = "options", ["externalControl"] = externalControl, ["saveProgress"] = saveProgress });

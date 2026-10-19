@@ -189,54 +189,247 @@ namespace Pptcom.ComProxy
             sb.Append("Slide ").Append(slideIndex).Append(" (").Append(shapeCount).Append(" shapes):\n");
             for (int i = 1; i <= shapeCount; i++)
             {
-                dynamic shape = slide.Shapes(i);
-                string type = TypeName(shape);
-                if (type.StartsWith("AutoShape(msoShape", StringComparison.Ordinal))
-                {
-                    type = type.Substring("AutoShape(msoShape".Length).TrimEnd(')');
-                }
+                AppendShape(sb, slide, i, variables);
+            }
+            return sb.ToString();
+        }
 
-                sb.Append('[').Append(i).Append("] ").Append(VariablesOf(variables, slide, shape)).Append(type);
-                string name = (string)shape.Name ?? "";
-                if (!AutoNamePattern.IsMatch(name))
-                {
-                    sb.Append(" '").Append(name).Append('\'');
-                }
+        // One line of Brief: the slide's shape Shapes(i).
+        private static void AppendShape(StringBuilder sb, dynamic slide, int i, IDictionary<string, List<string>>? variables)
+        {
+            dynamic shape = slide.Shapes(i);
+            string type = TypeName(shape);
+            if (type.StartsWith("AutoShape(msoShape", StringComparison.Ordinal))
+            {
+                type = type.Substring("AutoShape(msoShape".Length).TrimEnd(')');
+            }
 
-                sb.Append(" L").Append(R(shape.Left)).Append(" T").Append(R(shape.Top))
-                  .Append(" W").Append(R(shape.Width)).Append(" H").Append(R(shape.Height));
-                try
+            sb.Append('[').Append(i).Append("] ").Append(VariablesOf(variables, slide, shape)).Append(type);
+            string name = (string)shape.Name ?? "";
+            if (!AutoNamePattern.IsMatch(name))
+            {
+                sb.Append(" '").Append(name).Append('\'');
+            }
+
+            sb.Append(" L").Append(R(shape.Left)).Append(" T").Append(R(shape.Top))
+              .Append(" W").Append(R(shape.Width)).Append(" H").Append(R(shape.Height));
+            try
+            {
+                if ((int)shape.Fill.Visible != 0 && (int)shape.HasTable == 0)
                 {
-                    if ((int)shape.Fill.Visible != 0 && (int)shape.HasTable == 0)
-                    {
-                        int rgb = (int)shape.Fill.ForeColor.RGB;
-                        sb.Append(" fill RGB(").Append(rgb & 0xFF).Append(',').Append((rgb >> 8) & 0xFF).Append(',').Append((rgb >> 16) & 0xFF).Append(')');
-                    }
+                    int rgb = (int)shape.Fill.ForeColor.RGB;
+                    sb.Append(" fill RGB(").Append(rgb & 0xFF).Append(',').Append((rgb >> 8) & 0xFF).Append(',').Append((rgb >> 16) & 0xFF).Append(')');
                 }
-                catch (Exception ex) when (Guard.IsRecoverable(ex))
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+            }
+            try
+            {
+                if ((int)shape.HasTextFrame != 0)
                 {
-                }
-                try
-                {
-                    if ((int)shape.HasTextFrame != 0)
+                    string text = (string)shape.TextFrame.TextRange.Text ?? "";
+                    if (text.Length > 0)
                     {
-                        string text = (string)shape.TextFrame.TextRange.Text ?? "";
-                        if (text.Length > 0)
+                        sb.Append(' ').Append(ComScriptParser.ToVbaLiteral(text));
+                        string fonts = DescribeFonts(shape.TextFrame.TextRange);
+                        if (fonts.Length > 0)
                         {
-                            sb.Append(' ').Append(ComScriptParser.ToVbaLiteral(text));
-                            string fonts = DescribeFonts(shape.TextFrame.TextRange);
-                            if (fonts.Length > 0)
-                            {
-                                sb.Append(" | font ").Append(fonts);
-                            }
+                            sb.Append(" | font ").Append(fonts);
                         }
                     }
                 }
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+            }
+            sb.Append('\n');
+        }
+
+        // ---- what the user has selected in PowerPoint ------------------------------------------------
+        //
+        // Read from the presentation's window when a request is sent, so that "this" and "here" in the request
+        // can be tied to something: the selected shapes (by the numbers of Brief), the selected text, the slides
+        // selected in the slide list, or else the slide the window shows. The task pane shows the same, live.
+
+        internal sealed class UserSelection
+        {
+            public int Slide;                           // the slide the window shows or the shapes are on; 0: none (another view)
+            public readonly List<int> Slides = [];      // slides selected in the slide list
+            public readonly List<int> ShapeIds = [];    // shapes selected on Slide, by Shape.Id
+            public readonly List<string> ShapeNames = [];
+            public readonly List<string> InGroup = [];  // shapes selected inside a group (by name)
+            public string Text = "";                    // text selected in a shape ("" for a caret)
+
+            public bool HasShapes => ShapeIds.Count > 0;
+
+            // Same content, so the task pane is not told twice.
+            public string Key => string.Join("|", Slide, string.Join(",", Slides), string.Join(",", ShapeIds), string.Join(",", ShapeNames),
+                                             string.Join(",", InGroup), Text);
+        }
+
+        // The selection of a DocumentWindow. Whatever cannot be read (another view, a master, a window in the middle
+        // of closing) is left out.
+        public static UserSelection ReadSelection(object window)
+        {
+            UserSelection s = new();
+            dynamic w = window;
+            try
+            {
+                s.Slide = (int)w.View.Slide.SlideIndex;
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+            }
+            dynamic sel;
+            int type;
+            try
+            {
+                sel = w.Selection;
+                type = (int)sel.Type;
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                return s;
+            }
+            if (type == 1) // ppSelectionSlides
+            {
+                try
+                {
+                    dynamic range = sel.SlideRange;
+                    int n = (int)range.Count;
+                    for (int i = 1; i <= n; i++)
+                    {
+                        s.Slides.Add((int)range.Item(i).SlideIndex);
+                    }
+                }
                 catch (Exception ex) when (Guard.IsRecoverable(ex))
                 {
+                    s.Slides.Clear();
                 }
-                sb.Append('\n');
+                return s;
             }
+
+            if (type is not (2 or 3)) // ppSelectionShapes, ppSelectionText
+            {
+                return s;
+            }
+
+            try
+            {
+                s.Slide = (int)sel.SlideRange.Item(1).SlideIndex;
+                dynamic shapes = sel.ShapeRange;
+                int n = (int)shapes.Count;
+                for (int i = 1; i <= n; i++)
+                {
+                    dynamic shape = shapes.Item(i);
+                    s.ShapeIds.Add((int)shape.Id);
+                    s.ShapeNames.Add((string)shape.Name ?? "");
+                }
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                // a selection on a master or a notes page: no slide to tie it to
+                s.ShapeIds.Clear();
+                s.ShapeNames.Clear();
+                return s;
+            }
+            // Each on its own: a part that cannot be read does not take the shapes with it.
+            try
+            {
+                if ((bool)sel.HasChildShapeRange) // a Boolean, not an MsoTriState
+                {
+                    dynamic children = sel.ChildShapeRange;
+                    int c = (int)children.Count;
+                    for (int i = 1; i <= c; i++)
+                    {
+                        s.InGroup.Add((string)children.Item(i).Name ?? "");
+                    }
+                }
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                s.InGroup.Clear();
+            }
+            if (type == 3)
+            {
+                try
+                {
+                    s.Text = ((string)sel.TextRange.Text ?? "").Replace("\r\n", "\r").Replace('\v', '\r');
+                }
+                catch (Exception ex) when (Guard.IsRecoverable(ex))
+                {
+                    s.Text = "";
+                }
+            }
+            return s;
+        }
+
+        // For the request: what the user had selected when they sent it, in Brief's terms ("" when nothing is known).
+        // `summary` is one line for the shortened copy of the request that later requests see.
+        public static string DescribeSelection(object? presentation, UserSelection s, IDictionary<string, List<string>>? variables, out string summary)
+        {
+            summary = "";
+            StringBuilder sb = new();
+            string meaning;
+            // the selected shapes by their numbers on the slide (none when they are not on it: a notes page)
+            dynamic? slide = null;
+            List<int> indexes = [];
+            if (s.HasShapes && s.Slide > 0)
+            {
+                slide = ((dynamic)Deck(presentation)).Slides(s.Slide);
+                int count = (int)slide.Shapes.Count;
+                for (int i = 1; i <= count && indexes.Count < s.ShapeIds.Count; i++)
+                {
+                    if (s.ShapeIds.Contains((int)slide.Shapes(i).Id))
+                    {
+                        indexes.Add(i);
+                    }
+                }
+            }
+
+            if (s.Slides.Count > 0)
+            {
+                string slides = string.Join(", ", s.Slides);
+                sb.Append("When the user sent this, slide(s) ").Append(slides).Append(" were selected in PowerPoint's slide list.\n");
+                summary = "(sent with slide(s) " + slides + " selected)";
+                meaning = "those slides";
+            }
+            else if (indexes.Count > 0)
+            {
+                sb.Append("When the user sent this, PowerPoint showed slide ").Append(s.Slide).Append(" with this selected (as in pptread):\n");
+                foreach (int i in indexes)
+                {
+                    AppendShape(sb, slide, i, variables);
+                }
+
+                if (s.InGroup.Count > 0)
+                {
+                    sb.Append("Inside the group, the user selected: ").Append(string.Join(", ", s.InGroup.Select(static n => "'" + n + "'"))).Append(".\n");
+                }
+
+                if (s.Text.Length > 0)
+                {
+                    sb.Append("The selected text in it: ").Append(ComScriptParser.ToVbaLiteral(s.Text)).Append('\n');
+                }
+
+                summary = "(sent with slide " + s.Slide.ToString(CultureInfo.InvariantCulture) + " shape(s) " +
+                          string.Join(", ", indexes.Select(static i => Invariant($"[{i}]"))) + (s.Text.Length > 0 ? " and some of their text" : "") + " selected)";
+                meaning = s.Text.Length > 0 ? "the selected text" : "the selection";
+            }
+            else if (s.Slide > 0)
+            {
+                sb.Append("When the user sent this, PowerPoint showed slide ").Append(s.Slide).Append(" (nothing selected).\n");
+                summary = "(sent while slide " + s.Slide.ToString(CultureInfo.InvariantCulture) + " was shown)";
+                meaning = "that slide";
+            }
+            else
+            {
+                return "";
+            }
+
+            sb.Append("\"This\", \"here\" and the like in the request most likely mean ").Append(meaning)
+              .Append("; ignore it when the request is about something else.\n\n");
             return sb.ToString();
         }
 

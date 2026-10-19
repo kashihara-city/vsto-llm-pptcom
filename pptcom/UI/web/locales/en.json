@@ -40,6 +40,13 @@
   "DOC_REMOVE": "Remove",
   "DOC_REMOVE_NAMED": "Remove {0}",
   "DOC_CONVERTING": "Reading the document…",
+  "SELECTION_HINT": "Sent to the AI with your request",
+  "SELECTION_VIEWING": "Showing slide {0}",
+  "SELECTION_SLIDES": "Selected: slide {0}",
+  "SELECTION_SHAPES": "Selected: {1} on slide {0}",
+  "SELECTION_TEXT": "Selected: “{2}” in {1} on slide {0}",
+  "SELECTION_NAME": "“{0}”",
+  "SELECTION_MORE": "{0} more",
 
   "WORK_THINKING": "Thinking…",
   "WORK_DONE": "Steps",

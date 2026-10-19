@@ -40,6 +40,13 @@
   "DOC_REMOVE": "添付を外す",
   "DOC_REMOVE_NAMED": "{0} の添付を外す",
   "DOC_CONVERTING": "資料を読み取っています…",
+  "SELECTION_HINT": "依頼を送ると、この選択も AI に伝わります",
+  "SELECTION_VIEWING": "表示中: スライド {0}",
+  "SELECTION_SLIDES": "選択中: スライド {0}",
+  "SELECTION_SHAPES": "選択中: スライド {0} の {1}",
+  "SELECTION_TEXT": "選択中: スライド {0} の {1} の「{2}」",
+  "SELECTION_NAME": "「{0}」",
+  "SELECTION_MORE": "ほか {0} 個",
 
   "WORK_THINKING": "考えています…",
   "WORK_DONE": "処理の経過",

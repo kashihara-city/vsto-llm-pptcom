@@ -87,6 +87,9 @@ namespace Pptcom
             // the front later. A pane whose window is gone is removed.
             this.Application.WindowActivate += (_, window) => OnWindowActivate(window);
             this.Application.PresentationCloseFinal += _ => PrunePanes();
+            // The pane of the window in front shows what is selected there.
+            this.Application.WindowSelectionChange += _ => OnSelectionChanged();
+            this.Application.SlideSelectionChanged += _ => OnSelectionChanged();
             try
             {
                 foreach (Microsoft.Office.Interop.PowerPoint.DocumentWindow window in this.Application.Windows)
@@ -520,6 +523,8 @@ namespace Pptcom
             public readonly List<string> FailedAttachments = [];
             // The model list fetch (RefreshModelsAsync) whose status the pane shows; 0: none.
             public int FetchShown;
+            // The selection the pane shows (DeckReader.UserSelection.Key), so that it is told only of changes.
+            public string SelectionShown = "";
 
             // A document of the pane's conversation is still being read.
             public bool IsReadingDocuments => Conversation is not null && Converting.Values.Any(p => ReferenceEquals(p.Conversation, Conversation));
@@ -604,6 +609,7 @@ namespace Pptcom
             pane.Pane.Visible = true;
             pane.Pane.VisibleChanged += (s, e) => _ribbon?.Refresh();
             _panes[hwnd] = pane;
+            ShowSelection(pane, window);
             return pane;
         }
 
@@ -773,6 +779,120 @@ namespace Pptcom
             EndConversation(pane);
             pane.Control.Log("NEW_CONVERSATION");
             LogToFile("=== new conversation (by the user)");
+        }
+
+        // ---- what the user has selected ---------------------------------------------------------------
+        // Each pane shows above its input what is selected in its window (or which slide it shows), updated as the
+        // selection changes. A request reads the same again when it is sent and tells the model (SelectionContext),
+        // so that "this" and "here" in it can be tied to something.
+
+        private const int MaxSelectionNames = 3;
+        private const int MaxSelectionExcerpt = 20;
+
+        private void OnSelectionChanged()
+        {
+            try
+            {
+                if (this.Application.Windows.Count > 0 && _panes.TryGetValue(this.Application.ActiveWindow.HWND, out WindowPane? pane))
+                {
+                    ShowSelection(pane, DeckReader.ReadSelection(this.Application.ActiveWindow));
+                }
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                // a window in the middle of closing: the next change shows it again
+            }
+        }
+
+        private static void ShowSelection(WindowPane pane, Microsoft.Office.Interop.PowerPoint.DocumentWindow window)
+        {
+            try
+            {
+                ShowSelection(pane, DeckReader.ReadSelection(window));
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                LogToFile("(the selection could not be read: " + ex.Message + ")");
+            }
+        }
+
+        private static void ShowSelection(WindowPane pane, DeckReader.UserSelection s)
+        {
+            if (s.Key == pane.SelectionShown)
+            {
+                return;
+            }
+
+            pane.SelectionShown = s.Key;
+            pane.Control.SetSelection(SelectionText(s));
+        }
+
+        // For the pane: 選択中: スライド 3 の「タイトル 1」、「テキスト ボックス 5」 or 表示中: スライド 3 in Japanese;
+        // null when the window shows no slide.
+        private static PaneText? SelectionText(DeckReader.UserSelection s)
+        {
+            if (s.Slides.Count > 0)
+            {
+                return PaneText.Of("SELECTION_SLIDES", PaneText.Join("DETAIL_SEPARATOR", s.Slides.Cast<object>()));
+            }
+
+            if (s.HasShapes && s.Slide > 0)
+            {
+                List<string> names = s.InGroup.Count > 0 ? s.InGroup : s.ShapeNames;
+                List<object> items = [.. names.Take(MaxSelectionNames).Select(static n => PaneText.Of("SELECTION_NAME", n))];
+                if (names.Count > MaxSelectionNames)
+                {
+                    items.Add(PaneText.Of("SELECTION_MORE", names.Count - MaxSelectionNames));
+                }
+
+                PaneText list = PaneText.Join("DETAIL_SEPARATOR", items);
+                if (s.Text.Trim().Length == 0)
+                {
+                    return PaneText.Of("SELECTION_SHAPES", s.Slide, list);
+                }
+
+                string excerpt = s.Text.Replace('\r', ' ').Trim();
+                return PaneText.Of("SELECTION_TEXT", s.Slide, list, excerpt.Length <= MaxSelectionExcerpt ? excerpt : excerpt.Substring(0, MaxSelectionExcerpt) + "…");
+            }
+
+            return s.Slide > 0 ? PaneText.Of("SELECTION_VIEWING", s.Slide) : null;
+        }
+
+        // What the user had selected when sending the request, for the model ("" when it cannot be read); the pane shows
+        // the same. run.Selection keeps one line of it for the shortened copy of the request.
+        private string SelectionContext(RunRecord run, Conversation c)
+        {
+            try
+            {
+                Microsoft.Office.Interop.PowerPoint.DocumentWindow? window = WindowOf(run.Pane);
+                if (window is null)
+                {
+                    return "";
+                }
+
+                DeckReader.UserSelection s = DeckReader.ReadSelection(window);
+                ShowSelection(run.Pane, s);
+                string text = DeckReader.DescribeSelection(c.Engine.Presentation, s, c.Engine.ShapeVariables(), out string summary);
+                run.Selection = summary.Length > 0 ? summary : null;
+                return text;
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                LogToFile("(the selection could not be read: " + ex.Message + ")");
+                return "";
+            }
+        }
+
+        private Microsoft.Office.Interop.PowerPoint.DocumentWindow? WindowOf(WindowPane pane)
+        {
+            foreach (Microsoft.Office.Interop.PowerPoint.DocumentWindow window in this.Application.Windows)
+            {
+                if (window.HWND == pane.Hwnd)
+                {
+                    return window;
+                }
+            }
+            return null;
         }
 
         // ---- attached documents ----------------------------------------------------------------------
@@ -999,17 +1119,18 @@ namespace Pptcom
             };
         }
 
-        // What goes between the time line and the request in the user message, for a request that
-        // follows earlier ones: how the last one ended if it did not finish, what the user changed in
-        // the deck since, and a pointer to pptread. English, like the rest of the prompt. The hand edits
+        // What goes between the time line and the request in the user message: the attached documents and
+        // pictures, and for a request that follows earlier ones how the last one ended if it did not finish,
+        // what the user changed in the deck since, and a pointer to pptread; last, `selection` (what the user had
+        // selected in PowerPoint, SelectionContext). English, like the rest of the prompt. The hand edits
         // also go into run.HandEdits, so the shortened copy of this request keeps them (a request
         // stopped right away would otherwise lose them for the next one).
-        private static string ContextBeforeRequest(Conversation c, RunRecord run)
+        private static string ContextBeforeRequest(Conversation c, RunRecord run, string selection)
         {
             string documents = DocumentsContext(c);
             if (c.Earlier.Count == 0)
             {
-                return documents.Length > 0 ? documents + "Request:\n" : "";
+                return documents.Length + selection.Length > 0 ? documents + selection + "Request:\n" : "";
             }
 
             System.Text.StringBuilder sb = new(documents);
@@ -1047,7 +1168,7 @@ namespace Pptcom
             {
             }
             sb.Append("The deck now has ").Append(slides).Append(" slide(s). The renderings and scripts of the earlier requests are left out of this conversation; " +
-                      "their variables still exist. Look at the slides you need with pptread.\n\nRequest:\n");
+                      "their variables still exist. Look at the slides you need with pptread.\n\n").Append(selection).Append("Request:\n");
             return sb.ToString();
         }
 
@@ -1325,7 +1446,8 @@ namespace Pptcom
 
             try
             {
-                c.Earlier.AddRange(ShortenForLater(run.Messages, run.FirstOwnMessage, (run.HandEdits is not null ? run.HandEdits + "\n" : "") + run.Request));
+                c.Earlier.AddRange(ShortenForLater(run.Messages, run.FirstOwnMessage, (run.HandEdits is not null ? run.HandEdits + "\n" : "") + run.Request +
+                                                                                      (run.Selection is not null ? "\n" + run.Selection : "")));
                 c.LastEnding = DescribeEnding(run);
                 c.LastSeen = DeckReader.TakeFingerprint(c.Engine.Presentation, c.Engine.ShapeVariables());
             }
@@ -1361,6 +1483,7 @@ namespace Pptcom
             public List<ChatMessage>? Messages; // this request's conversation, as sent
             public int FirstOwnMessage;      // index in Messages of this request's user message
             public string? HandEdits;        // what the user had changed by hand before it (ContextBeforeRequest)
+            public string? Selection;        // one line on what the user had selected when sending it (DeckReader.DescribeSelection)
             public readonly List<string> ToolLines = []; // "[2] pptcom -> OK: ..." as the pane shows them
             public DeckDefaults? DeckDefaults;
             public readonly List<string> Renders = [];
@@ -1668,7 +1791,7 @@ namespace Pptcom
             run.EarlierMessages = conversation.Earlier.Count;
             List<string> knownIds = conversation.KnownIds;
 
-            string context = ContextBeforeRequest(conversation, run);
+            string context = ContextBeforeRequest(conversation, run, SelectionContext(run, conversation));
             List<ChatMessage> messages = [new ChatMessage("system", CurrentDeckDefaults(run).Fill(SystemPrompt)), .. conversation.Earlier];
             run.FirstOwnMessage = messages.Count;
             List<SlideImage> pictures = NewAttachedImages(conversation);

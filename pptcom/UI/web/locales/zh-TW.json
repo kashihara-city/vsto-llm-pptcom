@@ -40,6 +40,13 @@
   "DOC_REMOVE": "移除附件",
   "DOC_REMOVE_NAMED": "移除附件 {0}",
   "DOC_CONVERTING": "正在讀取資料…",
+  "SELECTION_HINT": "送出要求時，也會把這個選取告訴 AI",
+  "SELECTION_VIEWING": "顯示中：投影片 {0}",
+  "SELECTION_SLIDES": "已選取：投影片 {0}",
+  "SELECTION_SHAPES": "已選取：投影片 {0} 的 {1}",
+  "SELECTION_TEXT": "已選取：投影片 {0} 的 {1} 中的「{2}」",
+  "SELECTION_NAME": "「{0}」",
+  "SELECTION_MORE": "另 {0} 個",
 
   "WORK_THINKING": "思考中…",
   "WORK_DONE": "處理過程",
