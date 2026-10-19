@@ -851,7 +851,7 @@ namespace Pptcom
                     return PaneText.Of("SELECTION_SHAPES", s.Slide, list);
                 }
 
-                string excerpt = s.Text.Replace('\r', ' ').Trim();
+                string excerpt = s.Text.Replace('\r', ' ').Replace('\n', ' ').Replace('\v', ' ').Trim();
                 return PaneText.Of("SELECTION_TEXT", s.Slide, list, excerpt.Length <= MaxSelectionExcerpt ? excerpt : excerpt.Substring(0, MaxSelectionExcerpt) + "…");
             }
 

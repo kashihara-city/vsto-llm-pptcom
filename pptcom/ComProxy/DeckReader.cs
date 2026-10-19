@@ -354,7 +354,11 @@ namespace Pptcom.ComProxy
             public readonly List<int> ShapeIds = [];    // shapes selected on Slide, by Shape.Id
             public readonly List<string> ShapeNames = [];
             public readonly List<string> InGroup = [];  // shapes selected inside a group (by name)
-            public string Text = "";                    // text selected in a shape ("" for a caret)
+            public bool InText;                         // the selection is in a shape's text (selected characters, or a caret)
+            public string Text = "";                    // the characters selected there ("" for a caret)
+            // Where in the shape's text, as TextRange.Characters(TextStart, TextLength) takes it: the same word can be
+            // in a shape twice. 0 when PowerPoint did not say.
+            public int TextStart, TextLength;
 
             public bool HasShapes => ShapeIds.Count > 0;
 
@@ -448,13 +452,17 @@ namespace Pptcom.ComProxy
             }
             if (type == 3)
             {
+                s.InText = true;
                 try
                 {
-                    s.Text = ((string)sel.TextRange.Text ?? "").Replace("\r\n", "\r").Replace('\v', '\r');
+                    dynamic range = sel.TextRange;
+                    s.Text = (string)range.Text ?? "";
+                    s.TextStart = (int)range.Start;
+                    s.TextLength = (int)range.Length;
                 }
                 catch (Exception ex) when (Guard.IsRecoverable(ex))
                 {
-                    s.Text = "";
+                    s.TextStart = s.TextLength = 0;
                 }
             }
             return s;
@@ -503,14 +511,32 @@ namespace Pptcom.ComProxy
                     sb.Append("Inside the group, the user selected: ").Append(string.Join(", ", s.InGroup.Select(static n => "'" + n + "'"))).Append(".\n");
                 }
 
+                // The selected characters (or the caret) by their place in the shape's text, as PowerPoint gives it:
+                // the words alone do not tell which, when the shape has them twice. A table counts its text per
+                // cell, so for a table only the words are given.
+                bool table = false;
+                try
+                {
+                    table = indexes.Count == 1 && (int)slide!.Shapes(indexes[0]).HasTable != 0;
+                }
+                catch (Exception ex) when (Guard.IsRecoverable(ex))
+                {
+                }
+                string where = s.InText && s.TextStart > 0 && !table ? Invariant($"TextRange.Characters({s.TextStart}, {s.TextLength})") : "";
                 if (s.Text.Length > 0)
                 {
-                    sb.Append("The selected text in it: ").Append(ComScriptParser.ToVbaLiteral(s.Text)).Append('\n');
+                    sb.Append("The selected text in it: ").Append(ComScriptParser.ToVbaLiteral(s.Text))
+                      .Append(where.Length > 0 ? ", which is " + where + " of the shape's text" : "").Append('\n');
+                }
+                else if (where.Length > 0)
+                {
+                    sb.Append("The text cursor is in it, before character ").Append(s.TextStart).Append(" of the shape's text (").Append(where).Append(").\n");
                 }
 
                 summary = "(sent with slide " + s.Slide.ToString(CultureInfo.InvariantCulture) + " shape(s) " +
-                          string.Join(", ", indexes.Select(static i => Invariant($"[{i}]"))) + (s.Text.Length > 0 ? " and some of their text" : "") + " selected)";
-                meaning = s.Text.Length > 0 ? "the selected text" : "the selection";
+                          string.Join(", ", indexes.Select(static i => Invariant($"[{i}]"))) + " selected" +
+                          (s.Text.Length > 0 ? where.Length > 0 ? ", text " + where : " and some of their text" : "") + ")";
+                meaning = s.Text.Length > 0 ? "the selected text" : where.Length > 0 ? "that shape, or the place of the text cursor in it" : "the selection";
             }
             else if (s.Slide > 0)
             {

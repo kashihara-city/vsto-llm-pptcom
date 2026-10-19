@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Dynamic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -48,6 +49,7 @@ namespace ComScriptTests
             VbaOnlyTests();
             StatementTests();
             DeckTests();
+            SelectionTests();
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -428,6 +430,123 @@ namespace ComScriptTests
                 Report("deck: Application." + member + " is refused", !ComSecurityPolicy.IsMemberAllowedOn("Application", member), "allowed");
             }
             Report("deck: the deck's own Windows stays open", ComSecurityPolicy.IsMemberAllowedOn("Presentation", "Windows"), "refused");
+        }
+
+        // What the user had selected reaches the model with its place in the shape's text (DeckReader.ReadSelection and
+        // DescribeSelection, late-bound on stand-ins for PowerPoint's window, selection and slide): the same word twice
+        // in one shape must not read the same for either one.
+        private static void SelectionTests()
+        {
+            string first = SelectionContext(start: 1, length: 4, out string firstSummary);
+            string second = SelectionContext(start: 8, length: 4, out _);
+            Report("selection: the same word at two places in a shape reads differently", first != second, first);
+            Report("selection: the place is given as TextRange.Characters",
+                   first.Contains("TextRange.Characters(1, 4)") && second.Contains("TextRange.Characters(8, 4)"), first + " / " + second);
+            Report("selection: the shortened request keeps the place", firstSummary.Contains("Characters(1, 4)"), firstSummary);
+            string caret = SelectionContext(start: 6, length: 0, out _);
+            Report("selection: a text cursor gives its place", caret.Contains("before character 6") && !caret.Contains("selected text"), caret);
+        }
+
+        private static string SelectionContext(int start, int length, out string summary)
+        {
+            SelSlide slide = new();
+            SelText selected = new() { Text = "same / same".Substring(start - 1, length), Start = start, Length = length };
+            SelWindow window = new()
+            {
+                View = new SelView { Slide = slide },
+                Selection = new SelSelection { SlideRange = new SelSlideRange { Slide = slide }, ShapeRange = slide.Shapes, TextRange = selected, HasChildShapeRange = false },
+            };
+            DeckReader.UserSelection s = DeckReader.ReadSelection(window);
+            return DeckReader.DescribeSelection(new SelDeck(slide), s, variables: null, out summary);
+        }
+
+        internal sealed class SelWindow
+        {
+            public SelView? View;
+            public SelSelection? Selection;
+        }
+
+        internal sealed class SelView
+        {
+            public SelSlide? Slide;
+        }
+
+        // Characters selected in a shape's text (Type 3, ppSelectionText).
+        internal sealed class SelSelection
+        {
+            public int Type = 3;
+            public bool HasChildShapeRange;
+            public SelSlideRange? SlideRange;
+            public SelShapes? ShapeRange;
+            public SelText? TextRange;
+        }
+
+        internal sealed class SelSlideRange
+        {
+            public int Count = 1;
+            public SelSlide? Slide;
+
+            public SelSlide? Item(int index)
+            {
+                return index == 1 ? Slide : throw new ArgumentOutOfRangeException(nameof(index));
+            }
+        }
+
+        // slide.Shapes.Count and slide.Shapes(i), as late binding reaches PowerPoint's Slide.
+        internal sealed class SelSlide : DynamicObject
+        {
+            public int SlideIndex = 1;
+            public SelShapes Shapes = new();
+
+            public override bool TryInvokeMember(InvokeMemberBinder binder, object?[]? args, out object? result)
+            {
+                result = binder.Name == "Shapes" && args is { Length: 1 } ? Shapes.Item((int)args[0]!) : null;
+                return result is not null;
+            }
+        }
+
+        // ActivePresentation.Slides(i).
+        internal sealed class SelDeck(SelSlide slide) : DynamicObject
+        {
+            public override bool TryInvokeMember(InvokeMemberBinder binder, object?[]? args, out object? result)
+            {
+                result = binder.Name == "Slides" && args is { Length: 1 } && (int)args[0]! == 1 ? slide : null;
+                return result is not null;
+            }
+        }
+
+        internal sealed class SelShapes
+        {
+            public int Count = 1;
+            public SelShape Shape = new() { HasTable = 0 }; // not a table: the place in the text is given
+
+            public SelShape Item(int index)
+            {
+                return index == 1 ? Shape : throw new ArgumentOutOfRangeException(nameof(index));
+            }
+        }
+
+        // A text box with the same word twice. It has no Fill or Line: the shape list leaves out what it cannot read.
+        internal sealed class SelShape
+        {
+            public int Id = 7;
+            public int Type = 17; // msoTextBox
+            public string Name = "TextBox 7";
+            public double Left = 10, Top = 20, Width = 100, Height = 40;
+            public int HasTable;
+            public int HasTextFrame = -1;
+            public SelFrame TextFrame = new();
+        }
+
+        internal sealed class SelFrame
+        {
+            public SelText TextRange = new() { Text = "same / same", Start = 1, Length = 11 };
+        }
+
+        internal sealed class SelText
+        {
+            public string Text = "";
+            public int Start, Length;
         }
 
         // An Application whose ActivePresentation is a name.
