@@ -945,6 +945,20 @@ namespace Pptcom
             foreach (AttachedImage img in doc.Images)
             {
                 DocumentImages.Prepare(img);
+                if (img.Standalone && img.Width == 0)
+                {
+                    // The model sees an attached picture as a PNG drawn here (DocumentImages.Preview): one that cannot
+                    // be drawn would be attached in name only. Refused now, where the user sees it (a broken file);
+                    // the page's own check is only the first bytes.
+                    if (img.FilePath is not null)
+                    {
+                        TryDelete(img.FilePath);
+                    }
+
+                    OnDocumentFailed(pane, ticket, doc.Name, "malformed", "");
+                    return;
+                }
+
                 if (img.FilePath is null)
                 {
                     continue;
@@ -1002,8 +1016,8 @@ namespace Pptcom
         }
 
         // For the request: which documents the model can read and which pictures the user attached (before the
-        // request text).
-        private static string DocumentsContext(Conversation c)
+        // request text). `shownNow`: the labels of the pictures on this request's message (NewAttachedImages).
+        private static string DocumentsContext(Conversation c, ISet<string> shownNow)
         {
             List<AttachedDocument> documents = [.. c.Documents.Where(static d => !d.IsImage)];
             List<AttachedDocument> pictures = [.. c.Documents.Where(static d => d.IsImage)];
@@ -1018,9 +1032,8 @@ namespace Pptcom
 
             if (pictures.Count > 0)
             {
-                // NewAttachedImages marks them shown after this, when it puts them on the request's message
                 sb.Append("Pictures the user attached:\n")
-                  .Append(string.Concat(pictures.Select(static d => "- " + d.Describe() + (d.Shown ? "" : " - shown below") + "\n")))
+                  .Append(string.Concat(pictures.Select(d => "- " + d.Describe() + (d.Images.Count > 0 && shownNow.Contains("image " + d.Images[0].Name) ? " - shown below" : "") + "\n")))
                   .Append("A picture may show what to change (a screenshot of the deck, perhaps marked up), " +
                           "an example of what to make (build it with shapes, tables and text in pptcom; do not place the picture itself), or a picture to place on a slide " +
                           "(AddPicture with its variable) - tell them apart from the request. Look at an earlier one again with docread image. " +
@@ -1032,33 +1045,42 @@ namespace Pptcom
 
         // The pictures attached since the last request, shown to the model on this request's own message (like slide
         // renderings on theirs). Each is shown once; later requests list it, and the model looks again with docread
-        // image. The previews go with the conversation.
-        private static List<SlideImage> NewAttachedImages(Conversation c)
+        // image. One whose preview cannot be made now (the temp folder) is not marked shown: the pane says so, and the
+        // next request tries again. The previews go with the conversation.
+        private static List<SlideImage> NewAttachedImages(WindowPane pane, Conversation c)
         {
             List<SlideImage> images = [];
             foreach (AttachedDocument d in c.Documents.Where(static d => d.IsImage && !d.Shown && d.Images.Count > 0))
             {
-                d.Shown = true;
                 AttachedImage img = d.Images[0];
+                string? failure = null;
                 string? preview = DocumentImages.Preview(img);
                 if (preview is null)
                 {
-                    LogToFile("(attached picture not shown, it cannot be drawn here: " + d.Describe() + ")");
-                    continue;
+                    failure = "it cannot be drawn here";
+                }
+                else
+                {
+                    if (!c.TempFiles.Contains(preview))
+                    {
+                        c.TempFiles.Add(preview);
+                    }
+
+                    try
+                    {
+                        images.Add(new SlideImage { Label = "image " + img.Name, Png = File.ReadAllBytes(preview) });
+                        d.Shown = true;
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        failure = ex.Message;
+                    }
                 }
 
-                if (!c.TempFiles.Contains(preview))
+                if (failure is not null)
                 {
-                    c.TempFiles.Add(preview);
-                }
-
-                try
-                {
-                    images.Add(new SlideImage { Label = "image " + img.Name, Png = File.ReadAllBytes(preview) });
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    LogToFile("(attached picture not shown: " + d.Describe() + " - " + ex.Message + ")");
+                    pane.Control.Log("IMAGE_NOT_SENT", d.Id, d.Name);
+                    LogToFile("(attached picture not shown: " + d.Describe() + " - " + failure + ")");
                 }
             }
             return images;
@@ -1120,14 +1142,15 @@ namespace Pptcom
         }
 
         // What goes between the time line and the request in the user message: the attached documents and
-        // pictures, and for a request that follows earlier ones how the last one ended if it did not finish,
-        // what the user changed in the deck since, and a pointer to pptread; last, `selection` (what the user had
-        // selected in PowerPoint, SelectionContext). English, like the rest of the prompt. The hand edits
+        // pictures (`picturesShown`: those on this request's message), and for a request that follows earlier
+        // ones how the last one ended if it did not finish, what the user changed in the deck since, and a
+        // pointer to pptread; last, `selection` (what the user had selected in PowerPoint, SelectionContext).
+        // English, like the rest of the prompt. The hand edits
         // also go into run.HandEdits, so the shortened copy of this request keeps them (a request
         // stopped right away would otherwise lose them for the next one).
-        private static string ContextBeforeRequest(Conversation c, RunRecord run, string selection)
+        private static string ContextBeforeRequest(Conversation c, RunRecord run, string selection, ISet<string> picturesShown)
         {
-            string documents = DocumentsContext(c);
+            string documents = DocumentsContext(c, picturesShown);
             if (c.Earlier.Count == 0)
             {
                 return documents.Length + selection.Length > 0 ? documents + selection + "Request:\n" : "";
@@ -1791,10 +1814,11 @@ namespace Pptcom
             run.EarlierMessages = conversation.Earlier.Count;
             List<string> knownIds = conversation.KnownIds;
 
-            string context = ContextBeforeRequest(conversation, run, SelectionContext(run, conversation));
+            // the pictures first: the context says "shown below" only of those that are
+            List<SlideImage> pictures = NewAttachedImages(run.Pane, conversation);
+            string context = ContextBeforeRequest(conversation, run, SelectionContext(run, conversation), new HashSet<string>(pictures.Select(static p => p.Label), StringComparer.Ordinal));
             List<ChatMessage> messages = [new ChatMessage("system", CurrentDeckDefaults(run).Fill(SystemPrompt)), .. conversation.Earlier];
             run.FirstOwnMessage = messages.Count;
-            List<SlideImage> pictures = NewAttachedImages(conversation);
             messages.Add(new ChatMessage("user", CurrentTimeLine() + "\n\n" + context + userMessage) { Images = pictures.Count > 0 ? pictures : null });
             run.Messages = messages;
             DateTime requestStart = DateTime.Now;

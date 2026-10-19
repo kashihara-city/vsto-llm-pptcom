@@ -115,6 +115,7 @@
 
   "DOC_ATTACHED": "已附加資料：{0} {1} — {2}",
   "IMAGE_ATTACHED": "已附加圖片：{0} {1} — {2}",
+  "IMAGE_NOT_SENT": "無法把圖片 {0} {1} 交給模型，下次要求時會再試",
   "DOC_NOT_ATTACHED": "無法附加 {0}：{1}",
   "DOC_REMOVED": "已移除附件：{0} {1}",
   "DOC_DISCARDED": "{0} 未附加：讀取期間對話已變更",

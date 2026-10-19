@@ -115,6 +115,7 @@
 
   "DOC_ATTACHED": "Attached: {0} {1} — {2}",
   "IMAGE_ATTACHED": "Attached a picture: {0} {1} — {2}",
+  "IMAGE_NOT_SENT": "Could not pass the picture {0} {1} to the model; the next request tries again",
   "DOC_NOT_ATTACHED": "Could not attach {0}: {1}",
   "DOC_REMOVED": "Removed: {0} {1}",
   "DOC_DISCARDED": "{0} was not attached: the conversation changed while it was being read",
