@@ -20,9 +20,9 @@ namespace Pptcom.ComProxy
         // Same as the renderings after a pptcom call.
         public const int MaxSlidesPerRead = 20;
 
-        // pptread: `slides` is "3", "4-7", or empty for all. Returns the tool result text, and in
-        // `toRender` the slides whose rendering and shape list go with it (at most MaxSlidesPerRead;
-        // the text names the rest so the model can ask for them).
+        // pptread: `slides` is "3", "4-7", a list of them ("1,3-5"), or empty for all. Returns the tool result text,
+        // and in `toRender` the slides whose rendering and shape list go with it, in order and each once (at most
+        // MaxSlidesPerRead; the text names the rest so the model can ask for them, and the numbers the deck lacks).
         public static string Read(object? presentation, string slides, out List<int> toRender)
         {
             toRender = [];
@@ -34,46 +34,48 @@ namespace Pptcom.ComProxy
                 return head;
             }
 
-            int from = 1, to = count;
+            SortedSet<int> wanted = [];
+            SortedSet<int> missing = [];
             string s = slides.Trim();
-            if (s.Length > 0)
+            if (s.Length == 0)
             {
-                System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(s, @"^(\d{1,4})\s*(?:[-~–〜]\s*(\d{1,4}))?$", System.Text.RegularExpressions.RegexOptions.None, Guard.RegexTimeout);
+                wanted.UnionWith(Enumerable.Range(1, count));
+            }
+
+            foreach (string part in s.Split(SlideListSeparators, StringSplitOptions.RemoveEmptyEntries))
+            {
+                System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(part.Trim(), @"^(\d{1,4})\s*(?:[-~–〜]\s*(\d{1,4}))?$", System.Text.RegularExpressions.RegexOptions.None, Guard.RegexTimeout);
                 if (!m.Success)
                 {
-                    return head + "\nslide must be one number (\"3\") or a range (\"4-7\"), or left out for all slides; got \"" + s + "\".";
+                    return head + "\nslide must be a number (\"3\"), a range (\"4-7\") or a list of them (\"1,3-5\"), or left out for all slides; got \"" + s + "\".";
                 }
 
-                from = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
-                to = m.Groups[2].Success ? int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture) : from;
-                if (to < from)
+                int from = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                int to = m.Groups[2].Success ? int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture) : from;
+                for (int n = Math.Min(from, to); n <= Math.Max(from, to); n++)
                 {
-                    (to, from) = (from, to);
-                }
-                if (from < 1 || from > count)
-                {
-                    return head + Invariant($"\nSlide {from} does not exist.");
-                }
-
-                if (to > count)
-                {
-                    to = count;
+                    (n >= 1 && n <= count ? wanted : missing).Add(n);
                 }
             }
-            int last = Math.Min(to, from + MaxSlidesPerRead - 1);
-            for (int n = from; n <= last; n++)
+
+            string notFound = missing.Count > 0 ? Invariant($"\nSlide(s) {SlideList(missing)} do not exist (the deck has {count}).") : "";
+            if (wanted.Count == 0)
             {
-                toRender.Add(n);
+                return head + notFound;
             }
 
-            string text = head + "\nRenderings of slide(s) " + SlideRange(from, last) + " are attached in the next message, each with its shape list.";
-            if (last < to)
+            toRender.AddRange(wanted.Take(MaxSlidesPerRead));
+            string text = head + "\nRenderings of slide(s) " + SlideList(toRender) + " are attached in the next message, each with its shape list." + notFound;
+            if (wanted.Count > MaxSlidesPerRead)
             {
-                text += Invariant($"\nSlide(s) {SlideRange(last + 1, to)} are not included (at most {MaxSlidesPerRead} per call): call pptread with slide \"{SlideRange(last + 1, to)}\" for them.");
+                string rest = SlideList(wanted.Skip(MaxSlidesPerRead));
+                text += Invariant($"\nSlide(s) {rest} are not included (at most {MaxSlidesPerRead} per call): call pptread with slide \"{rest}\" for them.");
             }
 
             return text;
         }
+
+        private static readonly char[] SlideListSeparators = [',', '、', ';'];
 
         // "960x540 pt": the slide size, in pptread's first line and at the head of every shape list, so that a size that
         // changed under the model (the user did it) shows at once - a rendering has the slide's shape, not its size.
@@ -88,9 +90,35 @@ namespace Pptcom.ComProxy
             return presentation ?? throw new InvalidOperationException("No presentation is open.");
         }
 
-        private static string SlideRange(int from, int to)
+        // Slide numbers, ascending, as pptread takes them back: "1,3-5".
+        private static string SlideList(IEnumerable<int> numbers)
         {
-            return from == to ? from.ToString(CultureInfo.InvariantCulture) : Invariant($"{from}-{to}");
+            List<string> parts = [];
+            bool open = false;
+            int start = 0, last = 0;
+            foreach (int n in numbers)
+            {
+                if (open && n == last + 1)
+                {
+                    last = n;
+                    continue;
+                }
+
+                if (open)
+                {
+                    parts.Add(start == last ? Invariant($"{start}") : Invariant($"{start}-{last}"));
+                }
+
+                start = last = n;
+                open = true;
+            }
+
+            if (open)
+            {
+                parts.Add(start == last ? Invariant($"{start}") : Invariant($"{start}-{last}"));
+            }
+
+            return string.Join(",", parts);
         }
 
         public static string ExportSlidePng(object? presentation, int slideIndex)

@@ -441,6 +441,27 @@ namespace ComScriptTests
             Report("deck: other properties can still be set",
                    ComSecurityPolicy.IsSetAllowedOn("PageSetup", "FirstSlideNumber") && ComSecurityPolicy.IsSetAllowedOn("Shape", "Width"), "refused");
 
+            // pptread takes a slide, a range or a list of them; each slide once, in order, at most MaxSlidesPerRead, and
+            // the numbers the deck does not have are named.
+            foreach ((int slides, string spec, string expected, string inText) in new[]
+                     {
+                         (5, "", "1,2,3,4,5", ""),
+                         (5, "3", "3", ""),
+                         (5, "4-2", "2,3,4", ""),
+                         (5, "1,3", "1,3", "slide(s) 1,3 are attached"),
+                         (5, "1, 3-5", "1,3,4,5", "slide(s) 1,3-5 are attached"),
+                         (5, "3,1,3", "1,3", ""),
+                         (5, "1,9", "1", "Slide(s) 9 do not exist (the deck has 5)"),
+                         (5, "0-2", "1,2", "Slide(s) 0 do not exist"),
+                         (25, "1-25", "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20", "call pptread with slide \"21-25\""),
+                         (5, "x", "", "a list of them (\"1,3-5\")"),
+                     })
+            {
+                string text = DeckReader.Read(new StubDeck(960, slides), spec, out List<int> toRender);
+                Report(Invariant($"pptread: \"{spec}\" of {slides} slides"),
+                       string.Join(",", toRender) == expected && text.Contains(inText), string.Join(",", toRender) + " / " + text);
+            }
+
             // A shape list starts with its slide's size, so a size the user changed meanwhile shows.
             string brief = DeckReader.Brief(new SelDeck(new SelSlide()), 1);
             Report("deck: a shape list starts with its slide's size", brief.StartsWith("Slide 1 (720x540 pt, 1 shapes):", StringComparison.Ordinal), brief);
@@ -603,19 +624,20 @@ namespace ComScriptTests
 
         internal sealed class StubDeck
         {
-            public StubDeck(int width)
+            public StubDeck(int width, int slides = 0)
             {
                 PageSetup = new StubPageSetup(width);
+                Slides = new StubSlides(slides);
             }
 
-            public StubSlides Slides { get; } = new();
+            public StubSlides Slides { get; }
 
             public StubPageSetup PageSetup { get; }
         }
 
-        internal sealed class StubSlides
+        internal sealed class StubSlides(int count)
         {
-            public int Count { get; }
+            public int Count { get; } = count;
         }
 
         internal sealed class StubPageSetup
