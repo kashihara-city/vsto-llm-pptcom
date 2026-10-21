@@ -7,7 +7,7 @@ namespace Pptcom
     // rig and scripts/test/tool_loop.py all read the same places:
     //
     //   HKCU\Software\KashiharaCity\pptcom  endpoint, chat_model, image_model (REG_SZ);
-    //                                        external_control, save_progress (REG_DWORD 0/1, add-in only)
+    //                                        external_control, save_progress, open_pane (REG_DWORD 0/1, add-in only)
     //   Windows Credential Manager           generic credential "KashiharaCity/pptcom:api_key" (the API key,
     //                                        sent as the Bearer token; never written to disk in plain text)
     //
@@ -33,6 +33,9 @@ namespace Pptcom
         // SaveProgress: keep session.log, com_usage.jsonl and a folder per request (generated-pptx)
         // under DataFolder. They hold the requests, the model's reasoning and the deck's text.
         public bool SaveProgress;
+        // OpenPane: each presentation window opens with its task pane shown (on unless the user turns it off: the
+        // pane always opened before this setting). Off, the pane waits hidden for the ribbon's AIアシスタント button.
+        public bool OpenPane = true;
 
         // %LOCALAPPDATA%\KashiharaCity\pptcom: app\ (installed by the MSI), temp\ (temporary files and the
         // WebView2 profile; safe to delete while PowerPoint is closed) and, with SaveProgress, the records.
@@ -55,6 +58,7 @@ namespace Pptcom
                     s.ImageModel = ((key.GetValue("image_model") as string) ?? "").Trim();
                     s.ExternalControl = key.GetValue("external_control") is int ec && ec != 0;
                     s.SaveProgress = key.GetValue("save_progress") is int sp && sp != 0;
+                    s.OpenPane = key.GetValue("open_pane") is not int op || op != 0;
                 }
             }
             catch (Exception ex) when (IsRegistryFailure(ex))
@@ -76,6 +80,7 @@ namespace Pptcom
                 key.SetValue("image_model", ImageModel, RegistryValueKind.String);
                 key.SetValue("external_control", ExternalControl ? 1 : 0, RegistryValueKind.DWord);
                 key.SetValue("save_progress", SaveProgress ? 1 : 0, RegistryValueKind.DWord);
+                key.SetValue("open_pane", OpenPane ? 1 : 0, RegistryValueKind.DWord);
             }
             catch (Exception ex) when (IsRegistryFailure(ex))
             {

@@ -1,8 +1,7 @@
 {
   "PANE_TITLE": "AI Assistant",
-  "RIBBON_GROUP": "AI Assistant",
-  "RIBBON_PANE": "Task Pane",
-  "RIBBON_PANE_TIP": "Show or hide the AI Assistant task pane of this window.",
+  "RIBBON_PANE": "AI Assistant",
+  "RIBBON_PANE_TIP": "Show or hide the AI Assistant (task pane) of this window.",
   "NOTE": "({0})",
   "LIST_SEPARATOR": ", ",
   "DETAIL_SEPARATOR": ", ",
@@ -19,6 +18,8 @@
   "SETTINGS_API_KEY": "API key",
   "SETTINGS_API_KEY_BUTTON": "Set",
   "SETTINGS_OTHER": "Other",
+  "SETTINGS_OPEN_PANE": "Show AI Assistant when a presentation opens",
+  "SETTINGS_OPEN_PANE_HINT": "When off, AI Assistant stays hidden until you open it with the AI Assistant button on the Home tab (from the windows you open next)",
   "SETTINGS_SAVE_PROGRESS": "Save a record of each request",
   "SETTINGS_EXTERNAL_CONTROL": "Allow control from other programs",
   "SETTINGS_EXTERNAL_CONTROL_HINT": "Other programs running as the same user can send requests to this add-in (for testing)",
@@ -70,6 +71,8 @@
   "IMAGE_MODEL_SET": "Image model: {0}",
   "EXTERNAL_CONTROL_ON": "Other programs may now control this add-in",
   "EXTERNAL_CONTROL_OFF": "Other programs may no longer control this add-in",
+  "OPEN_PANE_ON": "AI Assistant will show in the windows you open from now on",
+  "OPEN_PANE_OFF": "AI Assistant will not show by itself in the windows you open from now on; open it with the AI Assistant button on the Home tab",
   "SAVE_PROGRESS_ON": "Saving a record of each request in {0}",
   "SAVE_PROGRESS_OFF": "Stopped saving records of the requests",
 

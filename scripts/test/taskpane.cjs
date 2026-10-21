@@ -138,11 +138,22 @@ function about() {
         p.element("about").textContent);
 }
 
+function options() {
+  const p = page();
+  p.host({ type: "options", openPane: false, saveProgress: true, externalControl: false });
+  const open = p.element("open-pane"), save = p.element("save-progress"), ext = p.element("external-control");
+  check("the settings' switches show the add-in's values", open.checked === false && save.checked === true && ext.checked === false,
+        `openPane=${open.checked} saveProgress=${save.checked} externalControl=${ext.checked}`);
+  p.host({ type: "busy", value: true });
+  check("and are locked while a request runs", open.disabled === true && save.disabled === true, `open=${open.disabled} save=${save.disabled}`);
+}
+
 oneAtATime();
 elsewhere();
 refused();
 selection();
 about();
+options();
 ends("a request whose deck was closed ends as stopped", p => p.log("AI_DECK_CLOSED"), "stopped");
 ends("a request stopped by 中止 ends as stopped", p => p.log("AI_CANCELLED"), "stopped");
 ends("a request that failed ends as stopped", p => p.log("AI_ERROR", "x"), "stopped");

@@ -1,7 +1,7 @@
 "use strict";
 // The add-in (AiTaskPaneControl.cs) and this page talk only through WebView2 web messages:
 //   page -> add-in: {type: "ready" | "send" | "cancel" | "retry" | "newChat" | "endpoint" | "chatModel" | "imageModel" | "apiKey", ...}
-//   page -> add-in also: {type: "saveProgress" | "externalControl", value: bool}
+//   page -> add-in also: {type: "openPane" | "saveProgress" | "externalControl", value: bool}
 //   add-in -> page: {type: "log" | "status" | "busy" | "retry" | "endpoint" | "models" | "apiKeyState" | "options" | "selection" | "about", ...}
 //   ("log" and "status" carry a message: {code, args}, shown with the text of locales/<language>.json, see i18n.js)
 // Attached documents (drop, attach button, chips, PDF pages) have their own messages: see docs.js.
@@ -169,6 +169,7 @@ endpoint.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDe
 chatModel.addEventListener("change", () => { post({ type: "chatModel", value: chatModel.value }); updateSummary(); });
 imageModel.addEventListener("change", () => { post({ type: "imageModel", value: imageModel.value }); updateSummary(); });
 $("apikey").addEventListener("click", () => post({ type: "apiKey" }));
+$("open-pane").addEventListener("change", e => post({ type: "openPane", value: e.target.checked }));
 $("save-progress").addEventListener("change", e => post({ type: "saveProgress", value: e.target.checked }));
 $("external-control").addEventListener("change", e => post({ type: "externalControl", value: e.target.checked }));
 
@@ -201,7 +202,7 @@ function setBusy(on, elsewhere) {
   action.disabled = waiting;
   action.title = i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND_TITLE");
   action.setAttribute("aria-label", i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND"));
-  for (const el of [endpoint, $("fetch"), chatModel, imageModel, $("apikey"), $("new-chat"), $("save-progress"), $("external-control")]) el.disabled = on;
+  for (const el of [endpoint, $("fetch"), chatModel, imageModel, $("apikey"), $("new-chat"), $("open-pane"), $("save-progress"), $("external-control")]) el.disabled = on;
   if (waiting) $("status").textContent = i18n.t("STATUS_BUSY_ELSEWHERE");
   if (!on) { $("status").textContent = ""; $("retry-bar").classList.remove("show"); if (work) finishWork("done"); }
 }
@@ -215,7 +216,11 @@ const handlers = {
   endpoint: m => { endpoint.value = m.value || ""; $("settings").open = !endpoint.value; updateSummary(); },
   models: m => { fill(chatModel, m.chat || [], m.chatSelected); fill(imageModel, m.image || [], m.imageSelected); updateSummary(); },
   apiKeyState: m => { $("apikey-state").textContent = i18n.t(m.value ? "API_KEY_SET" : "API_KEY_NOT_SET"); },
-  options: m => { $("save-progress").checked = !!m.saveProgress; $("external-control").checked = !!m.externalControl; },
+  options: m => {
+    $("open-pane").checked = !!m.openPane;
+    $("save-progress").checked = !!m.saveProgress;
+    $("external-control").checked = !!m.externalControl;
+  },
   // the add-in's version and the commit it was built from, at the bottom of the settings
   about: m => { $("about").textContent = m.text ? i18n.t(m.text) : ""; },
   // what is selected in PowerPoint (or which slide it shows); a request sends the same to the model

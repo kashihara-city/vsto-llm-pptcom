@@ -474,8 +474,17 @@ namespace Pptcom
         {
             foreach (WindowPane p in _panes.Values.Where(p => !ReferenceEquals(p, except)))
             {
-                p.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress);
+                p.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane);
             }
+        }
+
+        // Applies to the windows opened from now on: the panes already open stay as they are.
+        private void OnOpenPaneChanged(WindowPane pane, bool on)
+        {
+            _settings.OpenPane = on;
+            _settings.Save();
+            ShowOptions(except: pane);
+            pane.Control.Log(on ? "OPEN_PANE_ON" : "OPEN_PANE_OFF");
         }
 
         private void OnExternalControlChanged(WindowPane pane, bool on)
@@ -587,6 +596,7 @@ namespace Pptcom
             control.NewConversationRequested += (s, e) => OnNewConversationRequested(pane);
             control.ExternalControlChanged += (s, e) => OnExternalControlChanged(pane, e.On);
             control.SaveProgressChanged += (s, e) => OnSaveProgressChanged(pane, e.On);
+            control.OpenPaneChanged += (s, e) => OnOpenPaneChanged(pane, e.On);
             control.EndpointSubmitted += (s, e) => _ = RefreshModelsAsync(e.Text, pane);
             control.ChatModelSelected += (s, e) => OnChatModelSelected(pane, e.Text);
             control.ImageModelSelected += (s, e) => OnImageModelSelected(pane, e.Text);
@@ -597,7 +607,7 @@ namespace Pptcom
             control.DocumentRemoved += (s, e) => OnDocumentRemoved(pane, e.Text);
             control.SetEndpoint(_settings.Endpoint);
             control.SetApiKeyState(_settings.HasApiKey);
-            control.SetOptions(_settings.ExternalControl, _settings.SaveProgress);
+            control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane);
             control.SetAbout(PaneText.Of("ABOUT_VERSION", BuildInfo.Version,
                                          PaneText.Join("DETAIL_SEPARATOR", BuildInfo.IsDebug ? [BuildInfo.Commit, "Debug"] : [BuildInfo.Commit])));
             control.SetModelChoices(_chatModels, _settings.ChatModel, _imageModels, _settings.ImageModel);
@@ -608,7 +618,8 @@ namespace Pptcom
             }
 
             pane.Pane.Width = 320;
-            pane.Pane.Visible = true;
+            // Hidden when the user turned off opening it with each window: the ribbon's AIアシスタント button shows it.
+            pane.Pane.Visible = _settings.OpenPane;
             pane.Pane.VisibleChanged += (s, e) => _ribbon?.Refresh();
             _panes[hwnd] = pane;
             ShowSelection(pane, window);

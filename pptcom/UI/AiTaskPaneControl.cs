@@ -39,8 +39,14 @@ namespace Pptcom.UI
             "style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; base-uri 'none'; form-action 'none'";
 
         private readonly WebView2 _web;
-        // Messages sent before the page has said "ready" wait here, in order.
-        private readonly List<string> _pending = [];
+        // Messages sent before the page has said "ready" wait here, in order (with their type). Of the ones that only
+        // state the latest value, one waits: a pane kept hidden (OpenPane off) loads its page only when first shown,
+        // and would otherwise queue a message per selection change until then.
+        private readonly List<KeyValuePair<string, string>> _pending = [];
+        private static readonly HashSet<string> LatestOnly = new(StringComparer.Ordinal)
+        {
+            "selection", "about", "options", "endpoint", "models", "apiKeyState", "attachments",
+        };
         private bool _pageReady;
         private bool _navigated;
         private bool _initStarted;
@@ -58,9 +64,11 @@ namespace Pptcom.UI
         public event EventHandler<TextEventArgs>? ApiKeyEntered;
         // 新しい会話: forget the earlier requests on this deck (their summary, variables and images).
         public event EventHandler? NewConversationRequested;
-        // The two switches in the settings (AddinSettings.ExternalControl / SaveProgress).
+        // Switches in the settings (AddinSettings.ExternalControl / SaveProgress).
         public event EventHandler<SwitchEventArgs>? ExternalControlChanged;
         public event EventHandler<SwitchEventArgs>? SaveProgressChanged;
+        // Whether each window opens with its pane shown (AddinSettings.OpenPane).
+        public event EventHandler<SwitchEventArgs>? OpenPaneChanged;
         // The page started converting a document (UI\web\docs.js): its ticket and name.
         public event EventHandler<DocumentStartedEventArgs>? DocumentStarted;
         // A document the page converted (UI\web\docs.js): {ticket, name, size, format, text, images, thumb}.
@@ -234,9 +242,9 @@ namespace Pptcom.UI
             {
                 case "ready":
                     _pageReady = true;
-                    foreach (string json in _pending)
+                    foreach (KeyValuePair<string, string> queued in _pending)
                     {
-                        _web.CoreWebView2.PostWebMessageAsJson(json);
+                        _web.CoreWebView2.PostWebMessageAsJson(queued.Value);
                     }
 
                     _pending.Clear();
@@ -284,6 +292,9 @@ namespace Pptcom.UI
                     break;
                 case "saveProgress":
                     SaveProgressChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
+                    break;
+                case "openPane":
+                    OpenPaneChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
                     break;
                 case "attachStarted":
                     DocumentStarted?.Invoke(this, new DocumentStartedEventArgs((string?)m["ticket"] ?? "", (string?)m["name"] ?? ""));
@@ -336,7 +347,13 @@ namespace Pptcom.UI
             }
             else
             {
-                _pending.Add(json);
+                string type = (string?)message["type"] ?? "";
+                if (LatestOnly.Contains(type))
+                {
+                    _pending.RemoveAll(w => w.Key == type);
+                }
+
+                _pending.Add(new KeyValuePair<string, string>(type, json));
             }
         }
 
@@ -485,9 +502,9 @@ namespace Pptcom.UI
             Post(new JObject { ["type"] = "about", ["text"] = text.ToJson() });
         }
 
-        public void SetOptions(bool externalControl, bool saveProgress)
+        public void SetOptions(bool externalControl, bool saveProgress, bool openPane)
         {
-            Post(new JObject { ["type"] = "options", ["externalControl"] = externalControl, ["saveProgress"] = saveProgress });
+            Post(new JObject { ["type"] = "options", ["externalControl"] = externalControl, ["saveProgress"] = saveProgress, ["openPane"] = openPane });
         }
 
         public void SetEndpoint(string endpoint)

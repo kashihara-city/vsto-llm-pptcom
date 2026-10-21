@@ -25,11 +25,12 @@ namespace Pptcom.UI
             _show = show;
         }
 
+        // The group has no label: its one button already says AIアシスタント.
         public string GetCustomUI(string RibbonID)
         {
             return "<customUI xmlns=\"http://schemas.microsoft.com/office/2009/07/customui\" onLoad=\"OnLoad\">" +
                    "<ribbon><tabs><tab idMso=\"TabHome\">" +
-                   "<group id=\"pptcomGroup\" label=\"" + Attribute(Texts.Get("RIBBON_GROUP")) + "\">" +
+                   "<group id=\"pptcomGroup\">" +
                    "<toggleButton id=\"" + ButtonId + "\" size=\"large\" imageMso=\"ReviewNewComment\" label=\"" + Attribute(Texts.Get("RIBBON_PANE")) + "\" " +
                    "supertip=\"" + Attribute(Texts.Get("RIBBON_PANE_TIP")) + "\" getPressed=\"GetPressed\" onAction=\"OnTogglePane\"/>" +
                    "</group></tab></tabs></ribbon></customUI>";
