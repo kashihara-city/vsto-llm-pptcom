@@ -228,8 +228,14 @@ const handlers = {
 };
 if (host) host.addEventListener("message", e => { const h = handlers[e.data && e.data.type]; if (h) h(e.data); });
 
-// The texts first, then "ready": the add-in sends nothing before it. Without them the codes show.
-i18n.load(new URLSearchParams(location.search).get("lang")).catch(() => {}).then(() => {
+// "ready" once the texts are in and docs.js listens too. The add-in sends nothing before it and then at once all that
+// waited, some of it for docs.js (files to convert, the attachment chips, PDF pages to draw): a message that came
+// before docs.js listened would be lost, and a file to convert with it for good. docs.js is a module script, which
+// runs after the page is parsed and before DOMContentLoaded. Without the texts the codes show.
+const parsed = document.readyState === "loading"
+  ? new Promise(resolve => document.addEventListener("DOMContentLoaded", resolve, { once: true }))
+  : Promise.resolve();
+Promise.all([i18n.load(new URLSearchParams(location.search).get("lang")).catch(() => {}), parsed]).then(() => {
   i18n.applyText(document);
   updateSummary();
   input.focus();

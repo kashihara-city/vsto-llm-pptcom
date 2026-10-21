@@ -39,8 +39,10 @@ function element() {
 }
 
 // taskpane.js in a fresh page. `sent` is what it posted to the add-in; `host(message)` delivers one to it.
-function page() {
-  const sent = [], elements = new Map();
+// `texts`: how i18n.load ends (by default never: the codes show, and "ready" is not sent); `readyState`: the page's
+// document.readyState as taskpane.js starts ("loading" until the test fires DOMContentLoaded).
+function page({ texts = () => new Promise(() => {}), readyState = "complete" } = {}) {
+  const sent = [], elements = new Map(), onDocument = {};
   let onMessage = null;
   const context = vm.createContext({
     console, URLSearchParams, location: { search: "" },
@@ -49,16 +51,18 @@ function page() {
       addEventListener: (type, fn) => { if (type === "message") onMessage = fn; },
     } } },
     document: {
-      body: element(), createElement: element,
+      body: element(), createElement: element, readyState,
       getElementById: id => { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); },
+      addEventListener: (type, fn) => { onDocument[type] = fn; },
     },
-    // the texts never load here: the codes show, and "ready" is not sent
-    i18n: { t: m => (typeof m === "string" ? m : m.code), fill: code => code, load: () => new Promise(() => {}), applyText() {} },
+    i18n: { t: m => (typeof m === "string" ? m : m.code), fill: code => code, load: texts, applyText() {} },
   });
   vm.runInContext(source, context);
   const run = code => vm.runInContext(code, context);
   return {
     sends: () => sent.filter(m => m.type === "send").map(m => m.text),
+    posted: () => sent.map(m => m.type),
+    fire: type => { if (onDocument[type]) onDocument[type](); },
     submit: text => { context.text = text; run("input.value = text; submit();"); },
     host: data => onMessage({ data }),
     log: (code, ...args) => onMessage({ data: { type: "log", code, args } }),
@@ -148,6 +152,21 @@ function options() {
   check("and are locked while a request runs", open.disabled === true && save.disabled === true, `open=${open.disabled} save=${save.disabled}`);
 }
 
+// "ready" waits for docs.js as well as the texts: the add-in then sends at once what waited, files to convert among it,
+// and only docs.js takes those. docs.js is a module script, so it has run by DOMContentLoaded.
+async function readyWaitsForDocs() {
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+  const p = page({ texts: () => Promise.resolve(), readyState: "loading" });
+  await tick();
+  check("ready waits for the page's module scripts (docs.js) even with the texts in", !p.posted().includes("ready"), p.posted().join(","));
+  p.fire("DOMContentLoaded");
+  await tick();
+  check("and is sent once the page is parsed", p.posted().filter(t => t === "ready").length === 1, p.posted().join(","));
+  const q = page({ texts: () => Promise.resolve() });
+  await tick();
+  check("a page already parsed sends ready with the texts", q.posted().filter(t => t === "ready").length === 1, q.posted().join(","));
+}
+
 oneAtATime();
 elsewhere();
 refused();
@@ -158,6 +177,8 @@ ends("a request whose deck was closed ends as stopped", p => p.log("AI_DECK_CLOS
 ends("a request stopped by 中止 ends as stopped", p => p.log("AI_CANCELLED"), "stopped");
 ends("a request that failed ends as stopped", p => p.log("AI_ERROR", "x"), "stopped");
 ends("a request that finished ends as done", p => { p.log("AI_REPLY", "ok"); p.log("REQUEST_DONE", "0:01", "1", 0); }, "done");
-console.log();
-console.log(failed === 0 ? `ALL PASSED (${passed})` : `${failed} FAILED, ${passed} passed`);
-process.exitCode = failed === 0 ? 0 : 1;
+readyWaitsForDocs().then(() => {
+  console.log();
+  console.log(failed === 0 ? `ALL PASSED (${passed})` : `${failed} FAILED, ${passed} passed`);
+  process.exitCode = failed === 0 ? 0 : 1;
+}).catch(e => { console.error(e); process.exitCode = 1; });
