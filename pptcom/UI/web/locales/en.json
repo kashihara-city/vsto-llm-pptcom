@@ -30,6 +30,8 @@
 
   "RETRY_BAR": "Stopped by an error on the server.",
   "RETRY": "Retry",
+  "CONTINUE_BAR": "The request stopped at the turn limit; it can carry on from where it stopped.",
+  "CONTINUE": "Continue",
   "INPUT_PLACEHOLDER": "Describe the slides you want (drop or paste documents and pictures to attach them)",
   "ATTACH": "Attach a document or picture",
   "ATTACH_HINT": "Attach a document or picture (Word, Excel, PowerPoint, PDF, text, image)",
@@ -77,6 +79,7 @@
   "SAVE_PROGRESS_OFF": "Stopped saving records of the requests",
 
   "USER_REQUEST": "{0}",
+  "CONTINUE_REQUEST": "Continue",
   "SENT_FROM_OUTSIDE": "Sent from another program",
   "NEW_CONVERSATION": "Started a new chat",
   "HAND_EDITS": "Since the previous request, {0}",
@@ -110,7 +113,7 @@
   "AI_CANCELLED": "Stopped.",
   "AI_ERROR": "An error occurred. {0}",
   "AI_SERVER_ERROR": "Stopped by an error on the server ({0}). The work so far stays as it is. Press Retry to send the same request again, or Stop to end it.",
-  "AI_TURN_LIMIT": "Reached the limit of {0} turns; ending.",
+  "AI_TURN_LIMIT": "Reached the limit of {0} turns; stopped here.",
   "AI_REPLY_CUT": "The model's reply reached the output limit ({0} tokens) and was cut off, so the request ends here.",
   "AI_DECK_CLOSED": "The presentation this request was working on was closed, so the request ends here.",
   "HTTP_STATUS": "HTTP {0}",

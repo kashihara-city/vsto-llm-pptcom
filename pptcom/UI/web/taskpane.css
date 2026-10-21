@@ -180,7 +180,7 @@ input[type=text]:focus, select:focus, textarea:focus { outline: 2px solid var(--
   text-overflow: ellipsis;
 }
 #status:not(:empty) { padding: 4px 12px; }
-#retry-bar {
+#retry-bar, #continue-bar {
   flex: none;
   display: none;
   align-items: center;
@@ -192,8 +192,9 @@ input[type=text]:focus, select:focus, textarea:focus { outline: 2px solid var(--
   color: var(--warn);
   font-size: 12px;
 }
-#retry-bar.show { display: flex; }
-#retry-bar span { flex: 1; }
+#continue-bar { border-color: var(--line); color: var(--muted); }
+#retry-bar.show, #continue-bar.show { display: flex; }
+#retry-bar span, #continue-bar span { flex: 1; }
 #composer {
   flex: none;
   margin: 0 12px 12px;

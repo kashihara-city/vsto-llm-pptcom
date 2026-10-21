@@ -51,6 +51,32 @@ namespace Pptcom
             _addin.SendFromOutside(request.Trim());
         }
 
+        public void ContinueStopped()
+        {
+            RequireEnabled();
+            if (!_addin.HasWindow)
+            {
+                throw new InvalidOperationException("プレゼンテーションのウィンドウがありません。プレゼンテーションを開いてから使ってください。");
+            }
+
+            if (_addin.IsBusy)
+            {
+                throw new InvalidOperationException("実行中の依頼があります。IsBusy が False になってから送ってください。");
+            }
+
+            if (_addin.IsReadingDocuments)
+            {
+                throw new InvalidOperationException("資料を読み取っています。Documents の converting が空になってから送ってください。");
+            }
+
+            if (!_addin.CanContinue)
+            {
+                throw new InvalidOperationException("続けられる依頼がありません。ターン数の上限で止まった依頼のあとでだけ使えます。");
+            }
+
+            _addin.ContinueFromOutside();
+        }
+
         public void Cancel()
         {
             RequireEnabled();

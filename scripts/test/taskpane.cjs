@@ -1,8 +1,8 @@
 // How the task pane's page (pptcom/UI/web/taskpane.js) sends a request and shows how it ends: one request at a
 // time, also before the add-in's busy state arrives and while another window's pane runs one; a refused send does
 // not leave the page waiting; a request that stops (the deck was closed, 中止, an error) closes its block as stopped,
-// one that finishes as done; the line above the input shows what is selected in PowerPoint, and the settings the
-// version. taskpane.js runs
+// one that finishes as done; 続ける shows after a request that stopped at the turn limit, and sends like a request;
+// the line above the input shows what is selected in PowerPoint, and the settings the version. taskpane.js runs
 // as it is, in a stand-in for the browser and WebView2 made of plain objects; messages from the add-in arrive as
 // WebView2 delivers them. No packages.
 //
@@ -25,7 +25,7 @@ function check(name, ok, detail) {
 function element() {
   const classes = new Set();
   return {
-    children: [], value: "", textContent: "", scrollHeight: 0, scrollTop: 0, clientHeight: 0, disabled: false,
+    children: [], value: "", textContent: "", scrollHeight: 0, scrollTop: 0, clientHeight: 0, disabled: false, listeners: {},
     set className(s) { classes.clear(); for (const c of s.split(/\s+/)) if (c) classes.add(c); },
     get className() { return [...classes].join(" "); },
     classList: {
@@ -34,7 +34,7 @@ function element() {
     },
     appendChild(e) { this.children.push(e); },
     insertBefore(e) { this.children.unshift(e); },
-    addEventListener() {}, setAttribute() {}, insertAdjacentHTML() {}, focus() {},
+    addEventListener(type, fn) { this.listeners[type] = fn; }, setAttribute() {}, insertAdjacentHTML() {}, focus() {},
   };
 }
 
@@ -68,6 +68,7 @@ function page({ texts = () => new Promise(() => {}), readyState = "complete" } =
     log: (code, ...args) => onMessage({ data: { type: "log", code, args } }),
     work: () => run("work"),
     element: id => run("document.getElementById(" + JSON.stringify(id) + ")"),
+    click: id => run("document.getElementById(" + JSON.stringify(id) + ")").listeners.click(),
     lastBlock: () => { const children = run("log.children"); return children.filter(e => e.className.startsWith("work")).pop(); },
   };
 }
@@ -152,6 +153,31 @@ function options() {
   check("and are locked while a request runs", open.disabled === true && save.disabled === true, `open=${open.disabled} save=${save.disabled}`);
 }
 
+// 続ける: after a request that stopped at the turn limit, hidden while any request runs (here or in another window), and
+// sent like a request - once, until the add-in answers with its busy state.
+function continueBar() {
+  const p = page();
+  const bar = p.element("continue-bar");
+  p.host({ type: "continue", value: true });
+  check("続ける shows after a request that stopped at the turn limit", bar.classList.contains("show"), bar.className);
+  p.click("continue");
+  p.click("continue");
+  check("and is sent once until the busy state arrives", p.posted().filter(t => t === "continue").length === 1, p.posted().join(","));
+  p.log("CONTINUE_REQUEST");
+  p.host({ type: "busy", value: true });
+  check("it shows as the user's message and starts the request's block",
+        p.element("log").children.some(e => e.className === "msg user") && p.work() !== null && !bar.classList.contains("show"),
+        bar.className);
+  p.host({ type: "continue", value: false });
+  p.host({ type: "busy", value: false });
+  check("a request carried on to the end leaves no 続ける", !bar.classList.contains("show"), bar.className);
+  p.host({ type: "continue", value: true });
+  p.host({ type: "busy", value: true, elsewhere: true });
+  check("hidden while another window's pane runs a request", !bar.classList.contains("show"), bar.className);
+  p.host({ type: "busy", value: false });
+  check("and back once it has ended", bar.classList.contains("show"), bar.className);
+}
+
 // "ready" waits for docs.js as well as the texts: the add-in then sends at once what waited, files to convert among it,
 // and only docs.js takes those. docs.js is a module script, so it has run by DOMContentLoaded.
 async function readyWaitsForDocs() {
@@ -173,6 +199,7 @@ refused();
 selection();
 about();
 options();
+continueBar();
 ends("a request whose deck was closed ends as stopped", p => p.log("AI_DECK_CLOSED"), "stopped");
 ends("a request stopped by 中止 ends as stopped", p => p.log("AI_CANCELLED"), "stopped");
 ends("a request that failed ends as stopped", p => p.log("AI_ERROR", "x"), "stopped");

@@ -41,5 +41,9 @@ namespace Pptcom
         // Which build is loaded: "0.0.4 5efe257", "0.0.4 5efe257+ Debug" (BuildInfo). Added last: the members above
         // keep their places for scripts that call them.
         string Version { get; }
+        // Same as 続ける, shown when the last request stopped at the turn limit (LastRun's outcome "max_turns"): it
+        // carries that request on. Returns at once, like Send. Added last, as Version was. Not named Continue, a keyword
+        // in Visual Basic.
+        void ContinueStopped();
     }
 }

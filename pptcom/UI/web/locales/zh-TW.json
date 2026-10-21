@@ -30,6 +30,8 @@
 
   "RETRY_BAR": "因伺服器端的錯誤而停止。",
   "RETRY": "重試",
+  "CONTINUE_BAR": "已在回合數上限停止的要求，可以從停止處繼續。",
+  "CONTINUE": "繼續",
   "INPUT_PLACEHOLDER": "輸入想製作的投影片內容（拖放或貼上即可附加資料或圖片）",
   "ATTACH": "附加資料或圖片",
   "ATTACH_HINT": "附加資料或圖片（Word、Excel、PowerPoint、PDF、文字檔、圖片）",
@@ -77,6 +79,7 @@
   "SAVE_PROGRESS_OFF": "已停止儲存要求的記錄",
 
   "USER_REQUEST": "{0}",
+  "CONTINUE_REQUEST": "繼續",
   "SENT_FROM_OUTSIDE": "由其他程式傳送",
   "NEW_CONVERSATION": "已開始新對話",
   "HAND_EDITS": "自上次要求之後，{0}",
@@ -110,7 +113,7 @@
   "AI_CANCELLED": "已停止。",
   "AI_ERROR": "發生錯誤。{0}",
   "AI_SERVER_ERROR": "因伺服器端的錯誤而停止（{0}）。到目前為止的作業都會保留。請按「重試」重新傳送相同的內容，或按「停止」結束。",
-  "AI_TURN_LIMIT": "已達到回合數上限（{0}），因此結束。",
+  "AI_TURN_LIMIT": "已達到回合數上限（{0}），在此停止。",
   "AI_REPLY_CUT": "模型的回應達到輸出上限（{0} 個 token）而中斷，因此在此結束。",
   "AI_DECK_CLOSED": "此要求正在處理的簡報已關閉，因此在此結束。",
   "HTTP_STATUS": "HTTP {0}",

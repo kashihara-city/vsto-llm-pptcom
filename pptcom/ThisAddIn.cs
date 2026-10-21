@@ -452,6 +452,18 @@ namespace Pptcom
             }
         }
 
+        // Whether 続ける would carry on a request in the window in front (AddinAutomation.ContinueStopped checks it first).
+        internal bool CanContinue => ActivePane()?.Conversation?.Stopped is not null;
+
+        internal void ContinueFromOutside()
+        {
+            if (ActivePane() is WindowPane pane)
+            {
+                ShowForOutside(pane);
+                _ = SendAsync(pane, ContinueRequest, fromOutside: true, continues: true);
+            }
+        }
+
         // A request or a file from outside needs the pane's page (it converts files, draws PDF pages), and a pane kept
         // hidden (OpenPane off) has none until it is first shown: it is shown, as a user has it to type or drop. Without
         // it an attached file would wait for the page for good, and every later request with it.
@@ -605,6 +617,7 @@ namespace Pptcom
             control.SendRequested += (s, e) => _ = SendAsync(pane, e.Text, fromOutside: false);
             control.CancelRequested += (s, e) => _cancel.Cancel();
             control.RetryRequested += (s, e) => _retryWait?.TrySetResult(true);
+            control.ContinueRequested += (s, e) => _ = SendAsync(pane, ContinueRequest, fromOutside: false, continues: true);
             control.NewConversationRequested += (s, e) => OnNewConversationRequested(pane);
             control.ExternalControlChanged += (s, e) => OnExternalControlChanged(pane, e.On);
             control.SaveProgressChanged += (s, e) => OnSaveProgressChanged(pane, e.On);
@@ -727,7 +740,8 @@ namespace Pptcom
         // prompts left out, the first line of each result (OK / Defined / Changed, or how many lines
         // failed) and the model's replies - no renderings, no reasoning. The deck itself is not resent:
         // the model looks at it with pptread, and is told which slides the user changed by hand since
-        // the last request (DeckReader.Fingerprint / Compare). The conversation ends with 新しい会話,
+        // the last request (DeckReader.Fingerprint / Compare). A request that stopped at the turn limit is also kept
+        // whole until the next one (Stopped), for 続ける. The conversation ends with 新しい会話,
         // when its window is gone, or when PowerPoint closes. Kept in memory only.
         private sealed class Conversation
         {
@@ -746,6 +760,8 @@ namespace Pptcom
             public readonly List<ChatMessage> Earlier = [];
             // How the last request ended, when it did not finish ("stopped by the user after 3 s ...").
             public string? LastEnding;
+            // The last request, when it stopped at the turn limit: 続ける carries it on (ContinueRequest). Null otherwise.
+            public StoppedRequest? Stopped;
             // The deck as the last request left it, to tell the next one what the user changed since.
             public DeckReader.Fingerprint? LastSeen;
             // Generated images already copied into a run folder. The temp files themselves stay until
@@ -762,6 +778,18 @@ namespace Pptcom
             // The documents' image files themselves are the engine's (GeneratedFiles).
             public readonly List<string> TempFiles = [];
         }
+
+        // A request that stopped at the turn limit: how many of Earlier were sent before it, and its messages from its
+        // request on as they were sent - not shortened: its reasoning, scripts and renderings stay. The request that
+        // carries it on is sent after these, so the model goes on with all it had.
+        private sealed class StoppedRequest(int earlierBefore, List<ChatMessage> messages)
+        {
+            public readonly int EarlierBefore = earlierBefore;
+            public readonly List<ChatMessage> Messages = messages;
+        }
+
+        // What 続ける sends as the request, after the stopped one (see ContextBeforeRequest).
+        private const string ContinueRequest = "Continue the request from where it stopped, and reply to the user when it is done.";
 
         // The pane's conversation, made the first time. Its engine binds the window's presentation as ActivePresentation.
         private Conversation ConversationOf(WindowPane pane)
@@ -793,6 +821,10 @@ namespace Pptcom
 
             bool hadDocuments = c.Documents.Count > 0;
             pane.Conversation = null;
+            if (!_shuttingDown)
+            {
+                pane.Control.ShowContinue(show: false);
+            }
             if (hadDocuments)
             {
                 ShowAttachments(pane);
@@ -1216,8 +1248,10 @@ namespace Pptcom
             catch (COMException)
             {
             }
-            sb.Append("The deck now has ").Append(slides).Append(" slide(s). The renderings and scripts of the earlier requests are left out of this conversation; " +
-                      "their variables still exist. Look at the slides you need with pptread.\n\n").Append(selection).Append("Request:\n");
+            sb.Append("The deck now has ").Append(slides).Append(" slide(s). ").Append(run.Continues
+                ? "That request is above as it was sent, with its renderings" + (run.EarlierMessages > 0 ? "; the ones before it are shortened" : "") + ".\n\n"
+                : "The renderings and scripts of the earlier requests are left out of this conversation; " +
+                  "their variables still exist. Look at the slides you need with pptread.\n\n").Append(selection).Append("Request:\n");
             return sb.ToString();
         }
 
@@ -1375,7 +1409,8 @@ namespace Pptcom
         // one runs (the page sent it before its busy state arrived) is dropped before anything shows it, and the
         // busy state is taken before the first await. AddinAutomation.Send refuses one with an exception first.
         // A request runs in the pane it was sent from, on that window's conversation; the other panes wait meanwhile.
-        private async Task SendAsync(WindowPane pane, string userMessage, bool fromOutside)
+        // `continues`: 続ける, which carries on the request that stopped at the turn limit (userMessage is ContinueRequest).
+        private async Task SendAsync(WindowPane pane, string userMessage, bool fromOutside, bool continues = false)
         {
             if (IsBusy)
             {
@@ -1388,7 +1423,22 @@ namespace Pptcom
                 return;
             }
 
-            pane.Control.Log("USER_REQUEST", userMessage);
+            if (continues && pane.Conversation?.Stopped is null)
+            {
+                LogToFile("(continue came with no request stopped at the turn limit; dropped)");
+                pane.Control.ShowContinue(show: false);
+                pane.Control.SetBusy(busy: false);
+                return;
+            }
+
+            if (continues)
+            {
+                pane.Control.Log("CONTINUE_REQUEST");
+            }
+            else
+            {
+                pane.Control.Log("USER_REQUEST", userMessage);
+            }
             if (fromOutside)
             {
                 pane.Control.Log("SENT_FROM_OUTSIDE");
@@ -1415,7 +1465,7 @@ namespace Pptcom
             _windowGone = new CancellationTokenSource();
             try
             {
-                await HandleDeckEditRequestAsync(pane, userMessage).ConfigureAwait(true);
+                await HandleDeckEditRequestAsync(pane, userMessage, continues).ConfigureAwait(true);
             }
             catch (OperationCanceledException)
             {
@@ -1445,11 +1495,12 @@ namespace Pptcom
         // deck, slide PNGs, this request's session log, summary.json, the generated images and the
         // slide renderings the model saw. Written even when the request fails or is cancelled.
         // Temp PNGs (ComProxyEngine.TempPath) are deleted afterwards.
-        private async Task HandleDeckEditRequestAsync(WindowPane pane, string userMessage)
+        private async Task HandleDeckEditRequestAsync(WindowPane pane, string userMessage, bool continues)
         {
             RunRecord run = new()
             {
                 Request = userMessage,
+                Continues = continues,
                 Started = DateTime.Now,
                 Pane = pane,
                 Endpoint = _llm.BaseUrl,
@@ -1497,6 +1548,10 @@ namespace Pptcom
             {
                 c.Earlier.AddRange(ShortenForLater(run.Messages, run.FirstOwnMessage, (run.HandEdits is not null ? run.HandEdits + "\n" : "") + run.Request +
                                                                                       (run.Selection is not null ? "\n" + run.Selection : "")));
+                // From after the earlier requests it was sent with: a request that carried on another one keeps that one too.
+                int own = 1 + run.EarlierMessages;
+                c.Stopped = run.Outcome == "max_turns" ? new StoppedRequest(run.EarlierMessages, run.Messages.GetRange(own, run.Messages.Count - own)) : null;
+                run.Pane.Control.ShowContinue(c.Stopped is not null);
                 c.LastEnding = DescribeEnding(run);
                 c.LastSeen = DeckReader.TakeFingerprint(c.Engine.Presentation, c.Engine.ShapeVariables());
             }
@@ -1509,6 +1564,7 @@ namespace Pptcom
         private sealed class RunRecord
         {
             public required string Request;
+            public bool Continues;             // 続ける: it carries on the request that stopped at the turn limit
             public required WindowPane Pane;   // where it was sent from: its messages go there
             public DateTime Started;
             public string Outcome = "unknown";
@@ -1528,7 +1584,7 @@ namespace Pptcom
             public Conversation? Conversation; // null until the request has one (it may fail before)
             public ComProxyEngine? Engine;
             public int MissingSetBefore;    // the engine lives across requests; count this request's only
-            public int EarlierMessages;      // how many shortened messages of earlier requests it was sent after
+            public int EarlierMessages;      // how many shortened messages of earlier requests it was sent after (then the stopped one's, when it continues)
             public List<ChatMessage>? Messages; // this request's conversation, as sent
             public int FirstOwnMessage;      // index in Messages of this request's user message
             public string? HandEdits;        // what the user had changed by hand before it (ContextBeforeRequest)
@@ -1742,6 +1798,7 @@ namespace Pptcom
                 ["missing_set"] = run.Engine is not null ? run.Engine.MissingSetStatements.Count - run.MissingSetBefore : 0,
                 ["missing_set_examples"] = run.Engine is not null ? new JArray(run.Engine.MissingSetStatements.Skip(run.MissingSetBefore).Take(5)) : [],
                 ["earlier_messages"] = run.EarlierMessages,
+                ["continues"] = run.Continues, // 続ける: carried on the request before it, which stopped at the turn limit
                 ["hand_edits"] = run.HandEdits,
                 ["documents"] = run.Conversation is not null ? new JArray(run.Conversation.Documents.Select(static d => d.Describe())) : [],
                 // what the task pane showed: each tool call's first result line, and the model's reply
@@ -1828,6 +1885,41 @@ namespace Pptcom
             }
         }
 
+        // The request's conversation as first sent: the system prompt, the earlier requests (shortened), and the request
+        // with its context. 続ける sends the stopped request again as it was sent, after the earlier requests it was sent
+        // with (their shortened copy of it is left out). Any other request ends the chance to carry that one on.
+        private List<ChatMessage> StartMessages(string userMessage, RunRecord run, Conversation conversation)
+        {
+            StoppedRequest? stopped = run.Continues ? conversation.Stopped : null;
+            run.Continues = stopped is not null;
+            conversation.Stopped = null;
+            run.Pane.Control.ShowContinue(show: false);
+            List<ChatMessage> earlier = stopped is not null ? conversation.Earlier.GetRange(0, stopped.EarlierBefore) : conversation.Earlier;
+            run.EarlierMessages = earlier.Count;
+
+            // the pictures first: the context says "shown below" only of those that are
+            List<SlideImage> pictures = NewAttachedImages(run.Pane, conversation);
+            // The selection is left out when carrying on: the user pressed 続ける, they did not point at anything.
+            string selection = stopped is not null ? "" : SelectionContext(run, conversation);
+            string context = ContextBeforeRequest(conversation, run, selection, new HashSet<string>(pictures.Select(static p => p.Label), StringComparer.Ordinal));
+            List<ChatMessage> messages = [new ChatMessage("system", CurrentDeckDefaults(run).Fill(SystemPrompt)), .. earlier];
+            if (stopped is not null)
+            {
+                messages.AddRange(stopped.Messages);
+            }
+
+            run.FirstOwnMessage = messages.Count;
+            messages.Add(new ChatMessage("user", CurrentTimeLine() + "\n\n" + context + userMessage) { Images = pictures.Count > 0 ? pictures : null });
+            run.Messages = messages;
+            LogToFile("=== request: " + userMessage +
+                "\n(add-in " + BuildInfo.Describe + ")" +
+                (earlier.Count > 0 ? Invariant($"\n(sent after {earlier.Count} shortened messages of the earlier requests)") : "") +
+                (stopped is not null ? Invariant($"\n(carries on the request that stopped at the turn limit: its {stopped.Messages.Count} messages as sent)") : "") +
+                (context.Length > 0 ? "\n(with this context:)\n" + context.TrimEnd() : "") +
+                (pictures.Count > 0 ? "\n(with the attached picture(s): " + string.Join(", ", pictures.Select(static p => p.Label)) + ")" : ""));
+            return messages;
+        }
+
         private async Task RunAgentAsync(string userMessage, RunRecord run)
         {
             // The engine (variables, generated images) and the names the parser knows carry over from
@@ -1839,24 +1931,11 @@ namespace Pptcom
             run.Conversation = conversation;
             run.Engine = engine;
             run.MissingSetBefore = engine.MissingSetStatements.Count;
-            run.EarlierMessages = conversation.Earlier.Count;
             List<string> knownIds = conversation.KnownIds;
-
-            // the pictures first: the context says "shown below" only of those that are
-            List<SlideImage> pictures = NewAttachedImages(run.Pane, conversation);
-            string context = ContextBeforeRequest(conversation, run, SelectionContext(run, conversation), new HashSet<string>(pictures.Select(static p => p.Label), StringComparer.Ordinal));
-            List<ChatMessage> messages = [new ChatMessage("system", CurrentDeckDefaults(run).Fill(SystemPrompt)), .. conversation.Earlier];
-            run.FirstOwnMessage = messages.Count;
-            messages.Add(new ChatMessage("user", CurrentTimeLine() + "\n\n" + context + userMessage) { Images = pictures.Count > 0 ? pictures : null });
-            run.Messages = messages;
+            List<ChatMessage> messages = StartMessages(userMessage, run, conversation);
             DateTime requestStart = DateTime.Now;
             int totalReasoningChars = 0;
             int totalLines = 0;
-            LogToFile("=== request: " + userMessage +
-                "\n(add-in " + BuildInfo.Describe + ")" +
-                (conversation.Earlier.Count > 0 ? Invariant($"\n(sent after {conversation.Earlier.Count} shortened messages of the earlier requests)") : "") +
-                (context.Length > 0 ? "\n(with this context:)\n" + context.TrimEnd() : "") +
-                (pictures.Count > 0 ? "\n(with the attached picture(s): " + string.Join(", ", pictures.Select(static p => p.Label)) + ")" : ""));
 
             for (int turn = 1; turn <= MaxTurns; turn++)
             {

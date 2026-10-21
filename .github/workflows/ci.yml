@@ -85,7 +85,7 @@ jobs:
         shell: pwsh
         run: |
           # The task pane's taskpane.js, in a stand-in for the browser: one request at a time (also before the
-          # add-in's busy state arrives), and how a request's end shows.
+          # add-in's busy state arrives), how a request's end shows, and 続ける after the turn limit.
           node scripts/test/taskpane.cjs
           if ($LASTEXITCODE -ne 0) { throw "task pane tests failed" }
 

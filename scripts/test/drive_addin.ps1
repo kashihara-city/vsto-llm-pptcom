@@ -7,6 +7,7 @@
   Each step is one of:
     any text              send it as a request and wait until it ends (prints the add-in's LastRun as one JSON line)
     /new                  新しい会話
+    /continue             続ける: carry on the request that stopped at the turn limit, and wait until it ends
     /cancel-after N text  send the request and press stop after N seconds
     /attach path          attach a document as if dropped on the task pane (waits until it is converted)
     /ps code              run PowerShell code with $ppt (PowerPoint.Application) and $pres (the active presentation),
@@ -91,6 +92,11 @@ foreach ($step in $Steps) {
             exit 1
         }
         else { Write-Output ($state.documents[-1] | ConvertTo-Json -Compress) }
+    }
+    elseif ($step -eq "/continue") {
+        $ai.ContinueStopped()
+        Wait-Idle $TimeoutSec
+        Write-Output $ai.LastRun
     }
     elseif ($step -match '^/ps\s+(.+)$') {
         $null = Invoke-Expression $Matches[1]

@@ -23,6 +23,7 @@ PowerPoint で開いているプレゼンテーションを、LLM が作った�
 - 作業ウィンドウの入力欄の上に、PowerPoint で選んでいる図形や文字、スライド（何も選んでいなければ表示中のスライド）が出ます。依頼を送ると、その選択も AI に伝わるので、図形を選んで「これを赤くして」のように頼めます。
 - LLM は VBA に近い短いスクリプト（pptcom スクリプト）を書きます。アドインがそれを検査してから PowerPoint で実行します。
 - プレゼンテーションのウィンドウごとに作業ウィンドウがあり、会話もウィンドウごとに続きます。作業ウィンドウはホームタブの「AIアシスタント」ボタンで表示と非表示を切り替えます（閉じたときもここから開きます）。依頼は一度に 1 つで、実行中はほかのウィンドウの作業ウィンドウは待ちます。
+- 1 つの依頼は 20 ターン（モデルが答えてツールを使う 1 往復が 1 ターン）までで止まります。そこで止まったときは作業ウィンドウに「続ける」が出て、押すと止まったところからもう 20 ターン続けます。それまでの経過は、短くせずにそのままモデルに渡ります。
 - 多言語対応です。
 
 ![橿原市第5期地域福祉推進計画（PDF）を添付して「この資料を5枚にまとめて」と依頼し、続けて1枚目の文字の高さを揃えるよう頼んだところ。右が作業ウィンドウで、オンプレミスで動かしているモデルを使っている](docs/image.png)
@@ -169,7 +170,7 @@ C# のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.
 | `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcom スクリプトの解析と実行。式の値を VBScript の値（`expected.tsv`。式を足したら `make_expected.vbs` で作り直す）と、VBScript と違うところは VBA の値と照らす。受け付ける文と断る文、モデルへの報告の文、依頼のプレゼンテーションの固定、ほかのプレゼンテーションに届くメンバーを断ること |
 | `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLM の応答の読み取り（模擬サーバー）。終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答、サーバー側の失敗、中止と待ち時間の上限、`mm_processor_kwargs` の送り直し、画像の待ちの終わり方 |
 | `node scripts/test/docs-queue.cjs` | 作業ウィンドウの添付の受け付け（`docs.js`）。読み出す前に「読み取り中」になり、どこで失敗しても添付か失敗で終わり、後のファイルが続くこと。画像は変換せずにそのまま添付し、貼り付けは文字が無いときだけ添付すること |
-| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼が 1 つだけ送られること、依頼の終わり方の表示 |
+| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼が 1 つだけ送られること、依頼の終わり方の表示、ターンの上限で止まったあとの「続ける」 |
 | `python -X utf8 scripts/test/rig-stream.py` | リグ（`tool_loop.py`）の応答の読み取りと失敗の分け方、証明書の検証、失敗した回も記録が残ること（模擬サーバーと模擬のランナー） |
 | `python -X utf8 scripts/test/js-syntax.py` | 作業ウィンドウの JavaScript が構文として読めること（Node の `--check`） |
 | `python -X utf8 scripts/test/i18n.py` | 文言のコードが `ja.json` にあり、値の数と言語がそろい、コードに日本語の文が無いこと |
@@ -185,7 +186,7 @@ SBOM の検査（`scripts/test/sbom.py`）は「リリースと検証」を見�
 
 - `scripts/test/ComScriptRunner`: PowerPoint を外から動かし、アドインと同じ解析・実行・検査で pptcom スクリプトを流す
 - `scripts/test/tool_loop.py`（リグ）: アドインと同じ指示とツールで LLM を回し、ランナーで PowerPoint を動かす。接続先と API キーはアドインの設定を使い、記録は `%LOCALAPPDATA%\KashiharaCity\pptcom\generated-pptx\<名前>\` に残す
-- `scripts/test/drive_addin.ps1`: 本物のアドインを外から操作する（依頼、新しい会話、中止、添付）。作業ウィンドウの設定で「外部からの操作を許可」をオンにしてから使う
+- `scripts/test/drive_addin.ps1`: 本物のアドインを外から操作する（依頼、新しい会話、中止、添付、続ける）。作業ウィンドウの設定で「外部からの操作を許可」をオンにしてから使う
 - 記録の集計と実験: `usage_report.py`（COM の呼び出しの集計）、`used_members.py`（モデルが使った COM のメンバー）、`extract_corpus.py`（過去のスクリプトを集め、パーサの変更の前後で比べる）、`replay_parse_error.py`（構文エラーの知らせ方の実験）
 
 ## リリースと検証

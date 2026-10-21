@@ -45,7 +45,7 @@ namespace Pptcom.UI
         private readonly List<KeyValuePair<string, string>> _pending = [];
         private static readonly HashSet<string> LatestOnly = new(StringComparer.Ordinal)
         {
-            "selection", "about", "options", "endpoint", "models", "apiKeyState", "attachments",
+            "selection", "about", "options", "endpoint", "models", "apiKeyState", "attachments", "continue",
         };
         private bool _pageReady;
         private bool _navigated;
@@ -56,6 +56,8 @@ namespace Pptcom.UI
         public event EventHandler? CancelRequested;
         // Shown only while a request waits after a server-side error (5xx / dropped connection).
         public event EventHandler? RetryRequested;
+        // 続ける: shown when the last request stopped at the turn limit (ShowContinue); it carries that request on.
+        public event EventHandler? ContinueRequested;
         // Settings area: the endpoint is applied with the 取得 button (or Enter), models on selection.
         public event EventHandler<TextEventArgs>? EndpointSubmitted;
         public event EventHandler<TextEventArgs>? ChatModelSelected;
@@ -266,6 +268,9 @@ namespace Pptcom.UI
                     ShowRetry(show: false);
                     SetStatus("STATUS_RESENDING");
                     RetryRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case "continue":
+                    ContinueRequested?.Invoke(this, EventArgs.Empty); // ThisAddIn.SendAsync shows it (CONTINUE_REQUEST)
                     break;
                 case "endpoint":
                     EndpointSubmitted?.Invoke(this, new TextEventArgs(value.Trim()));
@@ -557,6 +562,12 @@ namespace Pptcom.UI
         public void ShowRetry(bool show)
         {
             Post(new JObject { ["type"] = "retry", ["value"] = show });
+        }
+
+        // Whether the conversation's last request stopped at the turn limit and can be carried on (続ける).
+        public void ShowContinue(bool show)
+        {
+            Post(new JObject { ["type"] = "continue", ["value"] = show });
         }
 
         // While busy the send button turns into the stop button and the settings are locked
