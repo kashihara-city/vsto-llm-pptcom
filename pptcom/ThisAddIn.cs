@@ -1447,7 +1447,7 @@ namespace Pptcom
             if (!_settings.HasEndpoint || _settings.ChatModel.Length == 0)
             {
                 pane.Control.Log("NO_ENDPOINT_OR_MODEL", AddinSettings.Location);
-                pane.Control.SetBusy(busy: false); // the page waits for an answer to its send
+                RefuseSend(pane, continues);
                 return;
             }
             // A document still being read belongs to this conversation, and the request would go without it. The page
@@ -1455,7 +1455,7 @@ namespace Pptcom
             if (pane.IsReadingDocuments)
             {
                 pane.Control.Log("DOC_STILL_CONVERTING");
-                pane.Control.SetBusy(busy: false);
+                RefuseSend(pane, continues);
                 return;
             }
             IsBusy = true;
@@ -1484,6 +1484,17 @@ namespace Pptcom
                 _runPane = null;
                 ShowBusy(running: null);
                 PrunePanes(); // its window may have gone meanwhile
+            }
+        }
+
+        // A send refused before it started: the page waits for an answer to it, and a 続ける pressed (which the page then
+        // took away) is still there to press, as the stopped request was not touched.
+        private static void RefuseSend(WindowPane pane, bool continues)
+        {
+            pane.Control.SetBusy(busy: false);
+            if (continues)
+            {
+                pane.Control.ShowContinue(show: true);
             }
         }
 

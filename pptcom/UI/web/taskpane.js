@@ -13,14 +13,17 @@ const log = $("log"), input = $("input"), action = $("action");
 let busy = false, cancelling = false;
 let sending = false;      // a request was sent and the add-in has not answered with its busy state yet
 let work = null;          // the folded block of the request in progress
-let canContinue = false;  // the last request stopped at the turn limit: 続ける carries it on
+let continueRow = null, continueButton = null;  // 続ける, while the request the turn limit stopped can be carried on
 
 // ---- conversation ------------------------------------------------------------------------------
 
 function nearBottom() { return log.scrollHeight - log.scrollTop - log.clientHeight < 40; }
+// 続ける stays last: what comes while it shows goes above it, so that pressed, its 続けて follows all of the request
+// it carries on.
 function add(el) {
   const stick = nearBottom();
-  log.appendChild(el);
+  if (continueRow && el !== continueRow && continueRow.parentNode === log) log.insertBefore(el, continueRow);
+  else log.appendChild(el);
   if (stick) log.scrollTop = log.scrollHeight;
 }
 function div(cls, text) {
@@ -123,6 +126,7 @@ function onLog(m) {
     }
     case "reset":     // 新しい会話 pressed: start from an empty pane
       work = null;
+      continueRow = continueButton = null;
       log.textContent = "";
       add(div("divider", i18n.t("NEW_CHAT")));
       return;
@@ -161,13 +165,32 @@ action.addEventListener("click", () => {
   post({ type: "cancel" });
 });
 $("retry").addEventListener("click", () => post({ type: "retry" }));
-// Sent like a request: the add-in answers with its busy state.
-$("continue").addEventListener("click", () => {
-  if (busy || sending || converting()) return;
-  sending = true;
-  post({ type: "continue" });
-});
-const showContinue = () => $("continue-bar").classList.toggle("show", canContinue && !busy);
+// 続ける, last in the conversation (add keeps it there), after all that the request the turn limit stopped showed. It
+// goes when pressed, and when the add-in says the request can no longer be carried on (another one started, 新しい会話);
+// while any request runs, here or in another window, it waits disabled. Sent like a request: the add-in answers with
+// its busy state.
+function showContinue(on) {
+  if (!on) {
+    if (continueRow) continueRow.remove();
+    continueRow = continueButton = null;
+    return;
+  }
+  if (continueRow) return;
+  continueRow = div("continue-row");
+  continueButton = document.createElement("button");
+  continueButton.className = "btn";
+  continueButton.textContent = i18n.t("CONTINUE");
+  continueButton.title = i18n.t("CONTINUE_HINT");
+  continueButton.disabled = busy;
+  continueButton.addEventListener("click", () => {
+    if (busy || sending || converting()) return;
+    sending = true;
+    showContinue(false);
+    post({ type: "continue" });
+  });
+  continueRow.appendChild(continueButton);
+  add(continueRow);
+}
 $("new-chat").addEventListener("click", () => { if (!busy && !converting()) post({ type: "newChat" }); });
 
 const endpoint = $("endpoint"), chatModel = $("chat-model"), imageModel = $("image-model");
@@ -213,7 +236,7 @@ function setBusy(on, elsewhere) {
   for (const el of [endpoint, $("fetch"), chatModel, imageModel, $("apikey"), $("new-chat"), $("open-pane"), $("save-progress"), $("external-control")]) el.disabled = on;
   if (waiting) $("status").textContent = i18n.t("STATUS_BUSY_ELSEWHERE");
   if (!on) { $("status").textContent = ""; $("retry-bar").classList.remove("show"); if (work) finishWork("done"); }
-  showContinue();
+  if (continueButton) continueButton.disabled = on;
 }
 
 const handlers = {
@@ -221,8 +244,8 @@ const handlers = {
   status: m => { $("status").textContent = m.code ? i18n.t(m) : ""; },
   busy: m => setBusy(!!m.value, !!m.elsewhere),
   retry: m => $("retry-bar").classList.toggle("show", !!m.value),
-  // whether the conversation's last request stopped at the turn limit; hidden while a request runs
-  continue: m => { canContinue = !!m.value; showContinue(); },
+  // whether the conversation's last request stopped at the turn limit and can be carried on
+  continue: m => showContinue(!!m.value),
   // The settings stay folded once an endpoint is set; with none, they open so it can be entered.
   endpoint: m => { endpoint.value = m.value || ""; $("settings").open = !endpoint.value; updateSummary(); },
   models: m => { fill(chatModel, m.chat || [], m.chatSelected); fill(imageModel, m.image || [], m.imageSelected); updateSummary(); },

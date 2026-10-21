@@ -30,7 +30,7 @@
 
   "RETRY_BAR": "因伺服器端的錯誤而停止。",
   "RETRY": "重試",
-  "CONTINUE_BAR": "已在回合數上限停止的要求，可以從停止處繼續。",
+  "CONTINUE_HINT": "從停止的地方繼續進行",
   "CONTINUE": "繼續",
   "INPUT_PLACEHOLDER": "輸入想製作的投影片內容（拖放或貼上即可附加資料或圖片）",
   "ATTACH": "附加資料或圖片",

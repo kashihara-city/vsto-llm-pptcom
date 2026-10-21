@@ -125,7 +125,10 @@ input[type=text]:focus, select:focus, textarea:focus { outline: 2px solid var(--
   padding: 8px 11px;
 }
 .assistant.error { border-color: var(--err); }
-.note { color: var(--muted); font-size: 12px; padding: 0 2px; }
+/* on the user's side: pressed, it becomes the user's message 続けて */
+.continue-row { display: flex; justify-content: flex-end; margin-top: -4px; }
+/* a long path (the run folder) breaks anywhere rather than making the conversation scroll sideways */
+.note { color: var(--muted); font-size: 12px; padding: 0 2px; overflow-wrap: anywhere; }
 
 /* the turns of one request, folded into one block */
 .work {
@@ -180,7 +183,7 @@ input[type=text]:focus, select:focus, textarea:focus { outline: 2px solid var(--
   text-overflow: ellipsis;
 }
 #status:not(:empty) { padding: 4px 12px; }
-#retry-bar, #continue-bar {
+#retry-bar {
   flex: none;
   display: none;
   align-items: center;
@@ -192,9 +195,8 @@ input[type=text]:focus, select:focus, textarea:focus { outline: 2px solid var(--
   color: var(--warn);
   font-size: 12px;
 }
-#continue-bar { border-color: var(--line); color: var(--muted); }
-#retry-bar.show, #continue-bar.show { display: flex; }
-#retry-bar span, #continue-bar span { flex: 1; }
+#retry-bar.show { display: flex; }
+#retry-bar span { flex: 1; }
 #composer {
   flex: none;
   margin: 0 12px 12px;

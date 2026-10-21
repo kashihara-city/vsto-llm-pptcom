@@ -1,10 +1,10 @@
 // How the task pane's page (pptcom/UI/web/taskpane.js) sends a request and shows how it ends: one request at a
 // time, also before the add-in's busy state arrives and while another window's pane runs one; a refused send does
 // not leave the page waiting; a request that stops (the deck was closed, 中止, an error) closes its block as stopped,
-// one that finishes as done; 続ける shows after a request that stopped at the turn limit, and sends like a request;
-// the line above the input shows what is selected in PowerPoint, and the settings the version. taskpane.js runs
-// as it is, in a stand-in for the browser and WebView2 made of plain objects; messages from the add-in arrive as
-// WebView2 delivers them. No packages.
+// one that finishes as done; 続ける shows last after a request that stopped at the turn limit, and sends like
+// a request; the line above the input shows what is selected in PowerPoint, and the settings the version.
+// taskpane.js runs as it is, in a stand-in for the browser and WebView2 made of plain objects; messages
+// from the add-in arrive as WebView2 delivers them. No packages.
 //
 //   node scripts/test/taskpane.cjs     exit code 0 = all passed
 "use strict";
@@ -25,15 +25,30 @@ function check(name, ok, detail) {
 function element() {
   const classes = new Set();
   return {
-    children: [], value: "", textContent: "", scrollHeight: 0, scrollTop: 0, clientHeight: 0, disabled: false, listeners: {},
+    children: [], parentNode: null, value: "", textContent: "", scrollHeight: 0, scrollTop: 0, clientHeight: 0, disabled: false, listeners: {},
     set className(s) { classes.clear(); for (const c of s.split(/\s+/)) if (c) classes.add(c); },
     get className() { return [...classes].join(" "); },
     classList: {
       add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c),
       toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)),
     },
-    appendChild(e) { this.children.push(e); },
-    insertBefore(e) { this.children.unshift(e); },
+    appendChild(e) { e.parentNode = this; this.children.push(e); },
+    insertBefore(e, ref) {
+      e.parentNode = this;
+      const i = ref ? this.children.indexOf(ref) : -1;
+      if (i < 0) this.children.push(e); else this.children.splice(i, 0, e);
+    },
+    remove() {
+      if (!this.parentNode) return;
+      const siblings = this.parentNode.children;
+      siblings.splice(siblings.indexOf(this), 1);
+      this.parentNode = null;
+    },
+    get nextSibling() {
+      if (!this.parentNode) return null;
+      const siblings = this.parentNode.children;
+      return siblings[siblings.indexOf(this) + 1] || null;
+    },
     addEventListener(type, fn) { this.listeners[type] = fn; }, setAttribute() {}, insertAdjacentHTML() {}, focus() {},
   };
 }
@@ -153,29 +168,49 @@ function options() {
   check("and are locked while a request runs", open.disabled === true && save.disabled === true, `open=${open.disabled} save=${save.disabled}`);
 }
 
-// 続ける: after a request that stopped at the turn limit, hidden while any request runs (here or in another window), and
-// sent like a request - once, until the add-in answers with its busy state.
-function continueBar() {
+// 続ける: last in the conversation, after all that the stopped request showed (what comes later goes above it);
+// sent like a request - once, until the add-in answers with its busy state - and gone once pressed or when the add-in
+// says that request can no longer be carried on. While a request runs elsewhere it stays, disabled.
+function continueButton() {
   const p = page();
-  const bar = p.element("continue-bar");
-  p.host({ type: "continue", value: true });
-  check("続ける shows after a request that stopped at the turn limit", bar.classList.contains("show"), bar.className);
-  p.click("continue");
-  p.click("continue");
-  check("and is sent once until the busy state arrives", p.posted().filter(t => t === "continue").length === 1, p.posted().join(","));
-  p.log("CONTINUE_REQUEST");
+  const log = p.element("log");
+  p.submit("request");
+  p.log("USER_REQUEST", "request");
   p.host({ type: "busy", value: true });
-  check("it shows as the user's message and starts the request's block",
-        p.element("log").children.some(e => e.className === "msg user") && p.work() !== null && !bar.classList.contains("show"),
-        bar.className);
-  p.host({ type: "continue", value: false });
+  p.log("AI_TURN_LIMIT", 20);
+  p.log("REQUEST_DONE", "0:30", "1", 10);
   p.host({ type: "busy", value: false });
-  check("a request carried on to the end leaves no 続ける", !bar.classList.contains("show"), bar.className);
+  p.log("RUN_SAVED", "C:\\run");
+  p.host({ type: "continue", value: true });
+  const classes = () => log.children.map(e => e.className).join(" | ");
+  const row = log.children[log.children.length - 1];
+  check("続ける shows last, after all that the stopped request showed",
+        row.className === "continue-row" && row.children[0].textContent === "CONTINUE" && row.children[0].disabled === false, classes());
+  p.log("MODELS_LISTED", "x", 1, 1);
+  check("what comes while it shows goes above it", log.children[log.children.length - 1] === row && log.children.length >= 2 &&
+        log.children[log.children.length - 2].className === "note", classes());
+  row.children[0].listeners.click();
+  row.children[0].listeners.click();
+  check("pressed, it is sent once and goes", p.posted().filter(t => t === "continue").length === 1 && !log.children.includes(row),
+        p.posted().join(",") + " / " + classes());
+  p.log("CONTINUE_REQUEST");
+  const last = log.children.filter(e => !e.className.startsWith("work")).pop();
+  check("its 続けて comes after all of the stopped request, as the user's message, and starts the request's block",
+        !!last && last.className === "msg user" && p.work() !== null, classes());
+  p.host({ type: "continue", value: false });
+  p.host({ type: "busy", value: true });
+  p.log("AI_TURN_LIMIT", 20);
+  p.host({ type: "busy", value: false });
   p.host({ type: "continue", value: true });
   p.host({ type: "busy", value: true, elsewhere: true });
-  check("hidden while another window's pane runs a request", !bar.classList.contains("show"), bar.className);
+  const again = log.children.find(e => e.className === "continue-row");
+  check("while another window's pane runs a request it stays, disabled", !!again && again.children[0].disabled === true,
+        again ? `disabled=${again.children[0].disabled}` : "(no 続ける)");
   p.host({ type: "busy", value: false });
-  check("and back once it has ended", bar.classList.contains("show"), bar.className);
+  check("and can be pressed once that has ended", again.children[0].disabled === false, `disabled=${again.children[0].disabled}`);
+  p.host({ type: "continue", value: false });
+  check("another request (or 新しい会話) takes it away", !log.children.some(e => e.className === "continue-row"),
+        log.children.map(e => e.className).join(" | "));
 }
 
 // "ready" waits for docs.js as well as the texts: the add-in then sends at once what waited, files to convert among it,
@@ -199,7 +234,7 @@ refused();
 selection();
 about();
 options();
-continueBar();
+continueButton();
 ends("a request whose deck was closed ends as stopped", p => p.log("AI_DECK_CLOSED"), "stopped");
 ends("a request stopped by 中止 ends as stopped", p => p.log("AI_CANCELLED"), "stopped");
 ends("a request that failed ends as stopped", p => p.log("AI_ERROR", "x"), "stopped");

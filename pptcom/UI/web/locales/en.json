@@ -30,7 +30,7 @@
 
   "RETRY_BAR": "Stopped by an error on the server.",
   "RETRY": "Retry",
-  "CONTINUE_BAR": "The request stopped at the turn limit; it can carry on from where it stopped.",
+  "CONTINUE_HINT": "Carry on from where it stopped",
   "CONTINUE": "Continue",
   "INPUT_PLACEHOLDER": "Describe the slides you want (drop or paste documents and pictures to attach them)",
   "ATTACH": "Attach a document or picture",
