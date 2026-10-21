@@ -116,6 +116,45 @@ namespace Pptcom.ComProxy
                 { "SoundFormat", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Import" } },
             };
 
+        // Properties a script may read but not set, by type. The slide size and orientation: PowerPoint moves every
+        // shape on every slide when they change (a smaller slide shrinks them toward its middle, a larger one only
+        // re-centers them), so one line that sets them breaks the whole layout. Reading them stays open (layouts are
+        // computed from SlideWidth); the user changes them in PowerPoint instead.
+        private static readonly Dictionary<string, HashSet<string>> ReadOnlyMembersByType =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                { "PageSetup", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "SlideSize", "SlideWidth", "SlideHeight", "SlideOrientation" } },
+            };
+
+        private const string SlideSizeRefusal =
+            " cannot be set: changing the slide size or orientation moves and rescales every shape on every slide, and the layout breaks. " +
+            "Keep the slide as it is; if the user wants another size or orientation, ask them in your reply to change it in PowerPoint (Design > Slide Size).";
+
+        // For a property set: the refusal for the model, or null when the property may be set on this object.
+        public static string? CheckSetOnTarget(object? target, string? member)
+        {
+            if (member is null || member.Length == 0 || target is null || !Marshal.IsComObject(target))
+            {
+                return null;
+            }
+
+            string? typeName = TryGetTypeName(target);
+            return typeName is not null && !IsSetAllowedOn(typeName, member) ? typeName.TrimStart('_') + "." + member + SlideSizeRefusal : null;
+        }
+
+        public static bool IsSetAllowedOn(string? typeName, string member)
+        {
+            foreach (string? name in new[] { typeName, "_" + typeName, typeName?.TrimStart('_') })
+            {
+                if (name is not null && ReadOnlyMembersByType.TryGetValue(name, out HashSet<string> readOnly) && readOnly.Contains(member))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         // The same rules by type name, for listing a type's members in an error hint (blocked
         // members are never suggested).
         public static bool IsMemberAllowedOn(string? typeName, string member)

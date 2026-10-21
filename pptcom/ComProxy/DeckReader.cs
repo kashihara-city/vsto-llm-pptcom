@@ -28,7 +28,7 @@ namespace Pptcom.ComProxy
             toRender = [];
             dynamic pres = Deck(presentation);
             int count = (int)pres.Slides.Count;
-            string head = Invariant($"Presentation: {count} slide(s), {(int)pres.PageSetup.SlideWidth}x{(int)pres.PageSetup.SlideHeight} pt.");
+            string head = Invariant($"Presentation: {count} slide(s), {SizeText(pres)}.");
             if (count == 0)
             {
                 return head;
@@ -73,6 +73,13 @@ namespace Pptcom.ComProxy
             }
 
             return text;
+        }
+
+        // "960x540 pt": the slide size, in pptread's first line and at the head of every shape list, so that a size that
+        // changed under the model (the user did it) shows at once - a rendering has the slide's shape, not its size.
+        private static string SizeText(dynamic pres)
+        {
+            return R(pres.PageSetup.SlideWidth) + "x" + R(pres.PageSetup.SlideHeight) + " pt";
         }
 
         // The request has no deck when none was open as it started.
@@ -201,16 +208,18 @@ namespace Pptcom.ComProxy
         }
 
         // The shape list that goes with a slide rendering - what a VBA `For Each shp In
-        // slide.Shapes: Debug.Print ...` loop would show - one line per shape:
+        // slide.Shapes: Debug.Print ...` loop would show - one line per shape, after the slide's size:
+        //   Slide 3 (960x540 pt, 14 shapes):
         //   [13] = d2 RoundedRectangle L340 T412 W280 H100 fill RGB(255,255,255) line RGB(223,226,229) 1pt "品種は500以上" & vbCr & "..." | font 16pt RGB(40,40,40)
         // Names PowerPoint made up ("Rounded Rectangle 15") are left out, as the type says the same;
         // names a script gave are kept ('card1'). The text is complete, as a VBA literal.
         public static string Brief(object? presentation, int slideIndex, IDictionary<string, List<string>>? variables = null)
         {
-            dynamic slide = ((dynamic)Deck(presentation)).Slides(slideIndex);
+            dynamic pres = Deck(presentation);
+            dynamic slide = pres.Slides(slideIndex);
             int shapeCount = (int)slide.Shapes.Count;
             StringBuilder sb = new();
-            sb.Append("Slide ").Append(slideIndex).Append(" (").Append(shapeCount).Append(" shapes):\n");
+            sb.Append("Slide ").Append(slideIndex).Append(" (").Append(SizeText(pres)).Append(", ").Append(shapeCount).Append(" shapes):\n");
             for (int i = 1; i <= shapeCount; i++)
             {
                 AppendShape(sb, slide, i, variables);

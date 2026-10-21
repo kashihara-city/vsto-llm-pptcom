@@ -431,6 +431,19 @@ namespace ComScriptTests
                 Report("deck: Application." + member + " is refused", !ComSecurityPolicy.IsMemberAllowedOn("Application", member), "allowed");
             }
             Report("deck: the deck's own Windows stays open", ComSecurityPolicy.IsMemberAllowedOn("Presentation", "Windows"), "refused");
+
+            // The slide size and orientation can be read but not set: changing them moves every shape on every slide.
+            foreach (string member in new[] { "SlideSize", "SlideWidth", "SlideHeight", "SlideOrientation" })
+            {
+                Report("deck: PageSetup." + member + " cannot be set", !ComSecurityPolicy.IsSetAllowedOn("PageSetup", member), "allowed");
+                Report("deck: PageSetup." + member + " can be read", ComSecurityPolicy.IsMemberAllowedOn("PageSetup", member), "refused");
+            }
+            Report("deck: other properties can still be set",
+                   ComSecurityPolicy.IsSetAllowedOn("PageSetup", "FirstSlideNumber") && ComSecurityPolicy.IsSetAllowedOn("Shape", "Width"), "refused");
+
+            // A shape list starts with its slide's size, so a size the user changed meanwhile shows.
+            string brief = DeckReader.Brief(new SelDeck(new SelSlide()), 1);
+            Report("deck: a shape list starts with its slide's size", brief.StartsWith("Slide 1 (720x540 pt, 1 shapes):", StringComparison.Ordinal), brief);
         }
 
         // What the user had selected reaches the model with its place in the shape's text (DeckReader.ReadSelection and
@@ -525,9 +538,11 @@ namespace ComScriptTests
             }
         }
 
-        // ActivePresentation.Slides(i).
+        // ActivePresentation.Slides(i), on a 720x540 slide.
         internal sealed class SelDeck(SelSlide slide) : DynamicObject
         {
+            public StubPageSetup PageSetup = new(720);
+
             public override bool TryInvokeMember(InvokeMemberBinder binder, object?[]? args, out object? result)
             {
                 result = binder.Name == "Slides" && args is { Length: 1 } && (int)args[0]! == 1 ? slide : null;

@@ -678,6 +678,12 @@ namespace Pptcom.ComProxy
                 throw new InvalidOperationException("member is blocked by policy: " + typedBlock);
             }
 
+            string? setBlock = action == ComOpAction.Set ? ComSecurityPolicy.CheckSetOnTarget(targetObj, member) : null;
+            if (setBlock is not null)
+            {
+                throw new InvalidOperationException("member is blocked by policy: " + setBlock);
+            }
+
             if (targetObj is null)
             {
                 throw new InvalidOperationException(target + " holds Nothing");
