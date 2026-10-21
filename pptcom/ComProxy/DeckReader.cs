@@ -236,9 +236,11 @@ namespace Pptcom.ComProxy
         }
 
         // The shape list that goes with a slide rendering - what a VBA `For Each shp In
-        // slide.Shapes: Debug.Print ...` loop would show - one line per shape, after the slide's size:
+        // slide.Shapes: Debug.Print ...` loop would show - one line per shape, after the slide's size, and last the
+        // shapes that overlap partly (Overlaps), when any do:
         //   Slide 3 (960x540 pt, 14 shapes):
         //   [13] = d2 RoundedRectangle L340 T412 W280 H100 fill RGB(255,255,255) line RGB(223,226,229) 1pt "品種は500以上" & vbCr & "..." | font 16pt RGB(40,40,40)
+        //   Partly overlapping (fix it unless it is meant): [4] title and [6] badge, 120 x 6 pt
         // Names PowerPoint made up ("Rounded Rectangle 15") are left out, as the type says the same;
         // names a script gave are kept ('card1'). The text is complete, as a VBA literal.
         public static string Brief(object? presentation, int slideIndex, IDictionary<string, List<string>>? variables = null)
@@ -248,11 +250,161 @@ namespace Pptcom.ComProxy
             int shapeCount = (int)slide.Shapes.Count;
             StringBuilder sb = new();
             sb.Append("Slide ").Append(slideIndex).Append(" (").Append(SizeText(pres)).Append(", ").Append(shapeCount).Append(" shapes):\n");
+            List<ShapeBox> boxes = [];
             for (int i = 1; i <= shapeCount; i++)
             {
                 AppendShape(sb, slide, i, variables);
+                try
+                {
+                    dynamic shape = slide.Shapes(i);
+                    if ((int)shape.Type != 9) // msoLine: a line crossing a box is how lines are drawn
+                    {
+                        string held = VariablesOf(variables, slide, shape);
+                        ShapeBox frame = new(i, held.Length > 2 ? held.Substring(2).Split(',')[0].Trim() : "",
+                                             (double)shape.Left, (double)shape.Top, (double)shape.Width, (double)shape.Height);
+                        bool frameShows = FrameShows(shape);
+                        ShapeBox? text = TextBounds(shape);
+                        ShapeBox? shown = Shown(frame, frameShows, text, (double)pres.PageSetup.SlideWidth, (double)pres.PageSetup.SlideHeight);
+                        if (shown is not null)
+                        {
+                            boxes.Add(shown);
+                        }
+                    }
+                }
+                catch (Exception ex) when (Guard.IsRecoverable(ex))
+                {
+                }
             }
+            sb.Append(Overlaps(boxes));
             return sb.ToString();
+        }
+
+        // ---- shapes that overlap partly ------------------------------------------------------------------
+        //
+        // Two shapes that cross without one lying inside the other: a label that runs into the band above it, a card into
+        // the note below it. A rendering shows such an edge as a few pixels, and the shape list has the numbers, but the
+        // model compares the shapes it thinks of and misses the pair it did not; so every pair is compared here. A shape
+        // wholly inside another (text on a card, anything on a background) is not reported, nor are lines.
+        // What is compared is what shows (Shown): the frame of a text box without fill or line is invisible, and text
+        // boxes stacked a little into each other's frames, as titles and labels often are, look fine.
+
+        public const int MaxOverlapsListed = 10;
+
+        // What of a shape shows on the slide: its frame when that shows (FrameShows), joined with its text's own bounds,
+        // as text may run out of its frame; clipped to the slide, so that a shape running off it is not taken for one
+        // overlapping the background. Null when nothing of it shows.
+        internal static ShapeBox? Shown(ShapeBox frame, bool frameShows, ShapeBox? text, double slideWidth, double slideHeight)
+        {
+            double left = double.MaxValue, top = double.MaxValue, right = double.MinValue, bottom = double.MinValue;
+            foreach (ShapeBox? part in new[] { frameShows ? frame : null, text })
+            {
+                if (part is null)
+                {
+                    continue;
+                }
+
+                left = Math.Min(left, part.Left);
+                top = Math.Min(top, part.Top);
+                right = Math.Max(right, part.Right);
+                bottom = Math.Max(bottom, part.Bottom);
+            }
+            left = Math.Max(left, 0);
+            top = Math.Max(top, 0);
+            right = Math.Min(right, slideWidth);
+            bottom = Math.Min(bottom, slideHeight);
+            return right - left > 0.5 && bottom - top > 0.5 ? new ShapeBox(frame.Index, frame.Variable, left, top, right - left, bottom - top) : null;
+        }
+
+        // A text shape's frame shows only with a fill or a line; that of any other (a picture, a table, a group) does.
+        private static bool FrameShows(dynamic shape)
+        {
+            if ((int)shape.HasTextFrame == 0)
+            {
+                return true;
+            }
+
+            try
+            {
+                if ((int)shape.Fill.Visible != 0 && (double)shape.Fill.Transparency < 1)
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+            }
+            try
+            {
+                return (int)shape.Line.Visible != 0;
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                return false;
+            }
+        }
+
+        // Where the shape's text is drawn (TextRange.BoundLeft ...), or null when it has none.
+        private static ShapeBox? TextBounds(dynamic shape)
+        {
+            if ((int)shape.HasTextFrame == 0 || (int)shape.TextFrame.HasText == 0)
+            {
+                return null;
+            }
+
+            dynamic range = shape.TextFrame.TextRange;
+            return new ShapeBox(0, "", (double)range.BoundLeft, (double)range.BoundTop, (double)range.BoundWidth, (double)range.BoundHeight);
+        }
+
+        internal sealed class ShapeBox(int index, string variable, double left, double top, double width, double height)
+        {
+            public readonly int Index = index;
+            public readonly string Variable = variable;
+            public readonly double Left = left, Top = top, Right = left + width, Bottom = top + height;
+
+            public string Label => Variable.Length > 0 ? Invariant($"[{Index}] {Variable}") : Invariant($"[{Index}]");
+
+            // Inside `other`, allowing half a point.
+            public bool IsInside(ShapeBox other)
+            {
+                return Left >= other.Left - 0.5 && Right <= other.Right + 0.5 && Top >= other.Top - 0.5 && Bottom <= other.Bottom + 0.5;
+            }
+        }
+
+        // "Partly overlapping (fix it unless it is meant): [4] title and [6] badge, 120 x 6 pt; …" or "" when none do.
+        public static string Overlaps(IList<ShapeBox> boxes)
+        {
+            List<string> pairs = [];
+            int more = 0;
+            for (int a = 0; a < boxes.Count; a++)
+            {
+                for (int b = a + 1; b < boxes.Count; b++)
+                {
+                    ShapeBox x = boxes[a], y = boxes[b];
+                    double width = Math.Min(x.Right, y.Right) - Math.Max(x.Left, y.Left);
+                    double height = Math.Min(x.Bottom, y.Bottom) - Math.Max(x.Top, y.Top);
+                    if (width <= 0.5 || height <= 0.5 || x.IsInside(y) || y.IsInside(x))
+                    {
+                        continue;
+                    }
+
+                    if (pairs.Count < MaxOverlapsListed)
+                    {
+                        pairs.Add(x.Label + " and " + y.Label + ", " + R(width) + " x " + R(height) + " pt");
+                    }
+                    else
+                    {
+                        more++;
+                    }
+                }
+            }
+
+            if (pairs.Count == 0)
+            {
+                return "";
+            }
+
+            return "Partly overlapping (fix it unless it is meant): " + string.Join("; ", pairs) +
+                   (more > 0 ? Invariant($"; and {more} more") : "") + "\n";
         }
 
         // One line of Brief: the slide's shape Shapes(i).

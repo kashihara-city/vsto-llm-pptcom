@@ -51,6 +51,7 @@ namespace ComScriptTests
             DeckTests();
             SelectionTests();
             RenderSizeTests();
+            OverlapTests();
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -482,6 +483,50 @@ namespace ComScriptTests
             Report("selection: a text cursor gives its place", caret.Contains("before character 6") && !caret.Contains("selected text"), caret);
             Report("selection: only the selection is to change, the rest is suggested afterwards",
                    first.Contains("change only that") && first.Contains("suggest it in your reply once you are done"), first);
+        }
+
+        // The shape list names the shapes that overlap partly - a label running into a band - and not those meant to be on
+        // one another: text inside a card, anything on a background, boxes that only touch. It compares what shows: the
+        // text of a text box without fill or line, a filled shape's frame with any text running out of it, all on the slide.
+        private static void OverlapTests()
+        {
+            static DeckReader.ShapeBox Box(int i, string v, double l, double t, double w, double h)
+            {
+                return new DeckReader.ShapeBox(i, v, l, t, w, h);
+            }
+
+            static string Text(DeckReader.ShapeBox? b)
+            {
+                return b is null ? "nothing" : Invariant($"{b.Left},{b.Top},{b.Right},{b.Bottom}");
+            }
+
+            string band = DeckReader.Overlaps([Box(4, "band", 40, 100, 880, 60), Box(6, "label", 40, 150, 300, 24)]);
+            Report("overlap: a label running into the band above it is named",
+                   band == "Partly overlapping (fix it unless it is meant): [4] band and [6] label, 300 x 10 pt\n", band);
+            string inside = DeckReader.Overlaps([Box(1, "", 0, 0, 960, 540), Box(2, "card", 48, 200, 300, 200), Box(3, "", 60, 210, 200, 40)]);
+            Report("overlap: text in a card and shapes on a background are not", inside.Length == 0, inside);
+            string touching = DeckReader.Overlaps([Box(1, "a", 48, 100, 400, 60), Box(2, "b", 48, 160, 400, 60), Box(3, "c", 448, 100, 100, 60)]);
+            Report("overlap: boxes that only touch are not", touching.Length == 0, touching);
+            List<DeckReader.ShapeBox> many = [.. Enumerable.Range(1, 6).Select(static i => Box(i, "", i * 10, i * 10, 100, 100))];
+            string crowd = DeckReader.Overlaps(many);
+            Report(Invariant($"overlap: at most {DeckReader.MaxOverlapsListed} pairs are listed, then a count"),
+                   crowd.Split(';').Length == DeckReader.MaxOverlapsListed + 1 && crowd.Contains("; and 5 more"), crowd);
+
+            // a small label above a title, their text boxes' frames into each other but not their text
+            DeckReader.ShapeBox? kicker = DeckReader.Shown(Box(3, "kicker", 50, 20, 600, 30), frameShows: false, Box(0, "", 57, 24, 40, 16), 960, 540);
+            DeckReader.ShapeBox? title = DeckReader.Shown(Box(4, "title", 50, 40, 800, 40), frameShows: false, Box(0, "", 57, 44, 300, 30), 960, 540);
+            Report("overlap: a text box without fill or line shows only its text", Text(kicker) == "57,24,97,40", Text(kicker));
+            string stacked = DeckReader.Overlaps([kicker!, title!]);
+            Report("overlap: text boxes whose frames overlap but not their text are not", stacked.Length == 0, stacked);
+            DeckReader.ShapeBox? card = DeckReader.Shown(Box(5, "card", 600, 100, 300, 200), frameShows: true, Box(0, "", 618, 140, 264, 180), 960, 540);
+            Report("overlap: a filled shape shows its frame and the text running out of it", Text(card) == "600,100,900,320", Text(card));
+            DeckReader.ShapeBox? table = DeckReader.Shown(Box(6, "table", 40, 100, 560, 500), frameShows: true, text: null, 960, 540);
+            string background = DeckReader.Overlaps([DeckReader.Shown(Box(1, "back", 0, 0, 960, 540), frameShows: true, text: null, 960, 540)!, table!]);
+            Report("overlap: a shape running off the slide is cut to it, and is not taken as overlapping the background",
+                   Text(table) == "40,100,600,540" && background.Length == 0, Text(table) + " / " + background);
+            DeckReader.ShapeBox? empty = DeckReader.Shown(Box(7, "", 100, 100, 200, 40), frameShows: false, text: null, 960, 540);
+            DeckReader.ShapeBox? off = DeckReader.Shown(Box(8, "", 970, 100, 200, 40), frameShows: true, text: null, 960, 540);
+            Report("overlap: an empty text box and a shape off the slide show nothing", empty is null && off is null, Text(empty) + " / " + Text(off));
         }
 
         // A slide's rendering keeps the slide's shape at 4/3 px per point (a 4:3 slide is not stretched to 16:9), and
