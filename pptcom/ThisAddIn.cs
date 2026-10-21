@@ -1640,7 +1640,8 @@ namespace Pptcom
                 if (run.Engine?.Presentation is Microsoft.Office.Interop.PowerPoint.Presentation pres && pres.Slides.Count > 0)
                 {
                     pres.SaveCopyAs(Path.Combine(dir, "deck.pptx"));
-                    pres.Export(Path.Combine(dir, "deck_slides"), "PNG", 1280, 720);
+                    (int width, int height) = DeckReader.RenderSize(pres);
+                    pres.Export(Path.Combine(dir, "deck_slides"), "PNG", width, height);
                 }
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))

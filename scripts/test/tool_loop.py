@@ -133,7 +133,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "pptread",
-            "description": "Look at slides of the open presentation without changing them: each slide is rendered (1280x720) and shown to you in the next message, followed by its shape list - the same as after a pptcom call (per shape: [index] = the script variable that holds it, type, Left/Top/Width/Height in points, fill (RGB, gradient colors and GradientAngle, Transparency), line or outline (RGB, weight in points, DashStyle when not solid), the text as a VBA string, and the text's size, bold and color per paragraph). At most 20 slides per call.",
+            "description": "Look at slides of the open presentation without changing them: each slide is rendered at its own size (a 960x540 slide as 1280x720 px; at most 1920 px on the long side) and shown to you in the next message, followed by its shape list - the same as after a pptcom call (per shape: [index] = the script variable that holds it, type, Left/Top/Width/Height in points, fill (RGB, gradient colors and GradientAngle, Transparency), line or outline (RGB, weight in points, DashStyle when not solid), the text as a VBA string, and the text's size, bold and color per paragraph). At most 20 slides per call.",
             "parameters": {
                 "type": "object",
                 "properties": {"slide": {"type": "string", "description": "One slide (\"3\") or a range (\"4-7\"), 1-based. Omit for all slides."}},

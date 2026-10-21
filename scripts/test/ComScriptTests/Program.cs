@@ -50,6 +50,7 @@ namespace ComScriptTests
             StatementTests();
             DeckTests();
             SelectionTests();
+            RenderSizeTests();
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -445,6 +446,25 @@ namespace ComScriptTests
             Report("selection: the shortened request keeps the place", firstSummary.Contains("Characters(1, 4)"), firstSummary);
             string caret = SelectionContext(start: 6, length: 0, out _);
             Report("selection: a text cursor gives its place", caret.Contains("before character 6") && !caret.Contains("selected text"), caret);
+        }
+
+        // A slide's rendering keeps the slide's shape at 4/3 px per point (a 4:3 slide is not stretched to 16:9), and
+        // only a slide too large for MaxRenderSide is drawn smaller.
+        private static void RenderSizeTests()
+        {
+            foreach ((double w, double h, int pw, int ph) in new[]
+                     {
+                         (960.0, 540.0, 1280, 720),    // 16:9, PowerPoint's default
+                         (720.0, 540.0, 960, 720),     // 4:3
+                         (720.0, 405.0, 960, 540),     // the older on-screen 16:9
+                         (540.0, 780.0, 720, 1040),    // A4 upright
+                         (1440.0, 288.0, 1920, 384),   // a banner, just at the limit
+                         (4032.0, 2268.0, 1920, 1080), // very large: fitted to the limit
+                     })
+            {
+                (int width, int height) = DeckReader.RenderSize(w, h);
+                Report(Invariant($"render size: {w}x{h} pt"), width == pw && height == ph, Invariant($"expected {pw}x{ph}, got {width}x{height}"));
+            }
         }
 
         private static string SelectionContext(int start, int length, out string summary)

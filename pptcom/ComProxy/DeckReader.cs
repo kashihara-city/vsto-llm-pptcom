@@ -86,7 +86,7 @@ namespace Pptcom.ComProxy
             return from == to ? from.ToString(CultureInfo.InvariantCulture) : Invariant($"{from}-{to}");
         }
 
-        public static string ExportSlidePng(object? presentation, int slideIndex, int width = 1280, int height = 720)
+        public static string ExportSlidePng(object? presentation, int slideIndex)
         {
             dynamic pres = Deck(presentation);
             int count = (int)pres.Slides.Count;
@@ -96,9 +96,35 @@ namespace Pptcom.ComProxy
             }
 
             string path = ComProxyEngine.TempPath(Invariant($"pptcom_slide{slideIndex}_{Guid.NewGuid():N}.png"));
+            (int width, int height) = RenderSize(presentation);
             // PowerPoint resolves relative paths against its own cwd; this one is absolute.
             pres.Slides(slideIndex).Export(path, "PNG", width, height);
             return path;
+        }
+
+        // The pixel size of a slide's rendering: the slide as a 96 dpi screen shows it at 100 % (4/3 px per point, so
+        // a 960x540 slide is 1280x720), whatever its size, so that text reads alike on every deck and a circle stays
+        // round - PowerPoint stretches a slide to whatever width and height it is given, and a fixed 1280x720 turned a
+        // 4:3 slide 1.33 times wider. A slide whose long side would pass MaxRenderSide is drawn smaller to fit it.
+        public const int MaxRenderSide = 1920;
+
+        public static (int Width, int Height) RenderSize(double slideWidth, double slideHeight)
+        {
+            double scale = 4.0 / 3.0;
+            double longSide = Math.Max(slideWidth, slideHeight) * scale;
+            if (longSide > MaxRenderSide)
+            {
+                scale *= MaxRenderSide / longSide;
+            }
+
+            return (Math.Max(1, (int)Math.Round(slideWidth * scale, MidpointRounding.AwayFromZero)),
+                    Math.Max(1, (int)Math.Round(slideHeight * scale, MidpointRounding.AwayFromZero)));
+        }
+
+        public static (int Width, int Height) RenderSize(object? presentation)
+        {
+            dynamic setup = ((dynamic)Deck(presentation)).PageSetup;
+            return RenderSize((double)setup.SlideWidth, (double)setup.SlideHeight);
         }
 
         // "40pt bold RGB(30,40,35)", or per paragraph when they differ:

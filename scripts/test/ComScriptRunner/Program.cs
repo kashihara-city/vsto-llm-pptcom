@@ -645,7 +645,8 @@ namespace ComScriptRunner
             // PowerPoint resolves relative paths against its own working directory, not ours.
             pngDir = Path.GetFullPath(pngDir);
             Directory.CreateDirectory(pngDir);
-            pres.Export(pngDir, "PNG", 1280, 720);
+            (int width, int height) = DeckReader.RenderSize((object)pres);
+            pres.Export(pngDir, "PNG", width, height);
             if (!quiet)
             {
                 Console.WriteLine("exported: " + pngDir);
