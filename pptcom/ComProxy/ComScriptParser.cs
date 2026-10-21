@@ -778,8 +778,8 @@ namespace Pptcom.ComProxy
             return depth == 0;
         }
 
-        // VBA reserved words: as in VBA, none of them can be a variable name. The system prompt
-        // lists the same words (keep the two in sync).
+        // VBA reserved words: as in VBA, none of them can be a variable name. The system prompt names only a
+        // few (Sub above all: models call a subtitle `sub`); the parser's message says which word it was.
         public static readonly string[] ReservedWordList =
         [
             "And", "As", "Boolean", "ByRef", "Byte", "ByVal", "Call", "Case", "Const", "Currency", "Date", "Declare", "Dim", "Do",
