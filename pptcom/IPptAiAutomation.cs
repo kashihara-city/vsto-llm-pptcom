@@ -21,7 +21,8 @@ namespace Pptcom
     [InterfaceType(ComInterfaceType.InterfaceIsDual)]
     public interface IPptAiAutomation
     {
-        // Same as typing the request and pressing send. Returns at once; the request runs in PowerPoint.
+        // Same as typing the request and pressing send (the pane is shown if it was hidden, as typing needs it).
+        // Returns at once; the request runs in PowerPoint.
         void Send(string request);
         // Same as the stop button.
         void Cancel();
@@ -32,8 +33,8 @@ namespace Pptcom
         // The last finished request as JSON (summary.json's fields, the tool lines the pane showed and the
         // model's reply; run_folder only with 途中経過を保存 on). Empty before the first request.
         string LastRun { get; }
-        // Same as dropping the file on the task pane. Returns at once: the pane converts it, and it shows
-        // up in Documents (or under "failed" there) when done.
+        // Same as dropping the file on the task pane (the pane is shown if it was hidden: its page converts the file).
+        // Returns at once: the pane converts it, and it shows up in Documents (or under "failed" there) when done.
         void Attach(string path);
         // JSON: {documents: [{id, name, format, lines, images}], converting: [names], failed: ["name: reason"]}.
         string Documents { get; }

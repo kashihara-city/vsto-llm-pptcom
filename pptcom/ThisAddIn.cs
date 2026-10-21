@@ -447,7 +447,19 @@ namespace Pptcom
         {
             if (ActivePane() is WindowPane pane)
             {
+                ShowForOutside(pane);
                 _ = SendAsync(pane, request, fromOutside: true);
+            }
+        }
+
+        // A request or a file from outside needs the pane's page (it converts files, draws PDF pages), and a pane kept
+        // hidden (OpenPane off) has none until it is first shown: it is shown, as a user has it to type or drop. Without
+        // it an attached file would wait for the page for good, and every later request with it.
+        private static void ShowForOutside(WindowPane pane)
+        {
+            if (!pane.Pane.Visible)
+            {
+                pane.Pane.Visible = true;
             }
         }
 
@@ -1117,6 +1129,7 @@ namespace Pptcom
                 throw new InvalidOperationException("50MB を超えるファイルは添付できません: " + path);
             }
 
+            ShowForOutside(pane);
             // Read before the ticket exists, and the ticket dropped if the page cannot be given the file: a ticket
             // left pending would keep this conversation from sending (IsReadingDocuments).
             string ticket = Invariant($"a{++_attachTickets}");
