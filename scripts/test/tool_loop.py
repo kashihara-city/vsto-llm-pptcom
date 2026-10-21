@@ -207,9 +207,10 @@ def strip_private(messages):
 
 MAX_AUTO_RENDERS = 20
 
-# Same as the add-in (ThisAddIn.ElideOldScripts): once a prompt passes this many tokens, the pptcom
+# The add-in's rule before its context limit, kept here: once a prompt passes this many tokens, the pptcom
 # scripts older than the last KEEP_RECENT_SCRIPTS assistant turns that ran one are replaced, once, by a
-# one-line VBA comment, so the conversation shrinks back and the prefix cache keeps working after.
+# one-line VBA comment, so the conversation shrinks back and the prefix cache keeps working after. The add-in
+# now also has the model write notes and leaves out older reasoning (Agent/Compaction.cs, ThisAddIn.CompactAsync).
 SCRIPT_ELISION_PROMPT_TOKENS = 100000
 KEEP_RECENT_SCRIPTS = 2
 ELIDED_SCRIPT_MARK = "' ("

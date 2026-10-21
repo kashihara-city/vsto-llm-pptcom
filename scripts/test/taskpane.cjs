@@ -2,8 +2,8 @@
 // time, also before the add-in's busy state arrives and while another window's pane runs one; a refused send does
 // not leave the page waiting; a request that stops (the deck was closed, 中止, an error) closes its block as stopped,
 // one that finishes as done; 続ける shows last after a request that stopped at the turn limit, and sends like
-// a request; the line above the input shows what is selected in PowerPoint, and the settings the version.
-// taskpane.js runs as it is, in a stand-in for the browser and WebView2 made of plain objects; messages
+// a request; the line above the input shows what is selected in PowerPoint, and the settings the version and the
+// context limit. taskpane.js runs as it is, in a stand-in for the browser and WebView2 made of plain objects; messages
 // from the add-in arrive as WebView2 delivers them. No packages.
 //
 //   node scripts/test/taskpane.cjs     exit code 0 = all passed
@@ -76,6 +76,7 @@ function page({ texts = () => new Promise(() => {}), readyState = "complete" } =
   const run = code => vm.runInContext(code, context);
   return {
     sends: () => sent.filter(m => m.type === "send").map(m => m.text),
+    sent: type => sent.filter(m => m.type === type),
     posted: () => sent.map(m => m.type),
     fire: type => { if (onDocument[type]) onDocument[type](); },
     submit: text => { context.text = text; run("input.value = text; submit();"); },
@@ -168,6 +169,21 @@ function options() {
   check("and are locked while a request runs", open.disabled === true && save.disabled === true, `open=${open.disabled} save=${save.disabled}`);
 }
 
+// The context limit shows the add-in's value, a changed one goes to the add-in as typed (it checks the number), and it is
+// locked while a request runs like the other settings.
+function contextLimit() {
+  const p = page();
+  const input = p.element("context-limit");
+  p.host({ type: "options", openPane: true, saveProgress: false, externalControl: false, contextLimit: 196608 });
+  check("the context limit shows the add-in's value", input.value === "196608", input.value);
+  input.value = " 50000 ";
+  input.listeners.change({ target: input });
+  const posted = p.sent("contextLimit").map(m => m.value).join(",");
+  check("a changed limit goes to the add-in", posted === "50000", posted);
+  p.host({ type: "busy", value: true });
+  check("and is locked while a request runs", input.disabled === true, `disabled=${input.disabled}`);
+}
+
 // 続ける: last in the conversation, after all that the stopped request showed (what comes later goes above it);
 // sent like a request - once, until the add-in answers with its busy state - and gone once pressed or when the add-in
 // says that request can no longer be carried on. While a request runs elsewhere it stays, disabled.
@@ -234,6 +250,7 @@ refused();
 selection();
 about();
 options();
+contextLimit();
 continueButton();
 ends("a request whose deck was closed ends as stopped", p => p.log("AI_DECK_CLOSED"), "stopped");
 ends("a request stopped by 中止 ends as stopped", p => p.log("AI_CANCELLED"), "stopped");

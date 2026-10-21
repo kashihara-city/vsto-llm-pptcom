@@ -19,8 +19,9 @@ namespace ChatStreamTests
     // How the add-in reads a chat reply's stream (OpenAiCompatibleClient.ChatAsync, StreamedReply): what counts
     // as a whole reply, how the parts of a tool call come together, which failures may be sent again (再試行),
     // and that 中止 and the idle limit end a stream or an error body that stopped sending; for an image
-    // (GenerateImageAsync), that the end of the request ends the wait. A server on the loopback address answers each
-    // request as the test needs; no LLM is called.
+    // (GenerateImageAsync), that the end of the request ends the wait. Also how the notes before a conversation is
+    // shortened are asked for, what the model list says of each model's input, and what shortening leaves out
+    // (Compaction). A server on the loopback address answers each request as the test needs; no LLM is called.
     internal static class Program
     {
         // How a server that does not know mm_processor_kwargs answers.
@@ -36,6 +37,9 @@ namespace ChatStreamTests
             await UnfinishedErrorsAsync().ConfigureAwait(true);
             await RejectedFieldAsync().ConfigureAwait(true);
             await ImagesAsync().ConfigureAwait(true);
+            await ToolChoiceAsync().ConfigureAwait(true);
+            await ModelListAsync().ConfigureAwait(true);
+            CompactionTests();
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -170,6 +174,148 @@ namespace ChatStreamTests
                                     server.Requests[1].IndexOf("mm_processor_kwargs", StringComparison.Ordinal) < 0;
             Check("sent again without it", r.Content == "Hello" && sentAgainWithout,
                   Show(r) + Invariant($" requests={server.Requests.Count}"));
+        }
+
+        // The notes before a conversation is shortened (ThisAddIn.WriteNotesAsync) go with the same tools, which the model
+        // may not call: the tools are part of the prompt the server has cached.
+        private static async Task ToolChoiceAsync()
+        {
+            Console.WriteLine("== the notes' request");
+            Newtonsoft.Json.Linq.JArray tools = [new Newtonsoft.Json.Linq.JObject { ["type"] = "function", ["function"] = new Newtonsoft.Json.Linq.JObject { ["name"] = "pptcom" } }];
+            using (FakeServer server = new(Http(200, Sse(Content("notes"), Finish("stop"))), stall: false))
+            {
+                OpenAiCompatibleClient client = new(server.Url, "", "test-model");
+                ChatReply r = await client.ChatWithoutToolsAsync([new ChatMessage("user", "hi")], tools, cancellationToken: CancellationToken.None).ConfigureAwait(true);
+                await server.Done.ConfigureAwait(true);
+                string sent = server.Requests[0];
+                Check("sent with the tools, which may not be called", r.Content == "notes" && sent.Contains("\"tools\":[") && sent.Contains("\"tool_choice\":\"none\""), sent);
+            }
+            using (FakeServer server = new(Http(200, Sse(Content("ok"), Finish("stop"))), stall: false))
+            {
+                OpenAiCompatibleClient client = new(server.Url, "", "test-model");
+                await client.ChatAsync([new ChatMessage("user", "hi")], tools, cancellationToken: CancellationToken.None).ConfigureAwait(true);
+                await server.Done.ConfigureAwait(true);
+                Check("a turn's request lets the model call them", server.Requests[0].Contains("\"tool_choice\":\"auto\""), server.Requests[0]);
+            }
+        }
+
+        // How many tokens a model takes in, where the endpoint says: LiteLLM's /model/info, or vLLM's /v1/models.
+        private static async Task ModelListAsync()
+        {
+            Console.WriteLine("== the model list");
+            const string modelInfo = "{\"data\":[{\"model_name\":\"chat-a\",\"model_info\":{\"mode\":\"chat\",\"max_input_tokens\":262144}}," +
+                                     "{\"model_name\":\"chat-b\",\"model_info\":{\"mode\":\"chat\",\"max_input_tokens\":null}}," +
+                                     "{\"model_name\":\"img\",\"model_info\":{\"mode\":\"image_generation\"}}]}";
+            using (FakeServer server = new(Http(200, modelInfo), stall: false))
+            {
+                List<ModelInfo> models = await new OpenAiCompatibleClient(server.Url, "", "chat-a").ListModelsAsync(CancellationToken.None).ConfigureAwait(true);
+                Check("LiteLLM: the mode and max_input_tokens, where given",
+                      Describe(models) == "chat-a chat 262144 / chat-b chat - / img image_generation -", Describe(models));
+            }
+            const string v1Models = "{\"data\":[{\"id\":\"m1\",\"object\":\"model\",\"max_model_len\":32768},{\"id\":\"m2\",\"object\":\"model\"}]}";
+            using (FakeServer server = new([Http(404, "not found"), Http(200, v1Models)], stall: false))
+            {
+                List<ModelInfo> models = await new OpenAiCompatibleClient(server.Url, "", "m1").ListModelsAsync(CancellationToken.None).ConfigureAwait(true);
+                Check("vLLM: max_model_len from /v1/models", Describe(models) == "m1 - 32768 / m2 - -", Describe(models));
+            }
+        }
+
+        private static string Describe(List<ModelInfo> models)
+        {
+            return string.Join(" / ", models.ConvertAll(static m => m.Name + " " + (m.Mode ?? "-") + " " + (m.MaxInputTokens?.ToString(CultureInfo.InvariantCulture) ?? "-")));
+        }
+
+        // A conversation shortened after its fourth pptcom turn (ThisAddIn.CompactAsync): the last two turns stay whole;
+        // older turns lose their reasoning and scripts, older docread results their text, older renderings their shape
+        // lists (the renderings stay). Shortening again finds nothing new.
+        private static void CompactionTests()
+        {
+            Console.WriteLine("== shortening a conversation");
+            List<ChatMessage> messages = [new ChatMessage("system", "s"), new ChatMessage("user", "make slides")];
+            for (int i = 1; i <= 3; i++)
+            {
+                AddTurn(messages, Invariant($"d{i}"), "docread", "{\"doc\":\"d1\"}", Invariant($"d1 lines {i}\ntext {i}"), slide: null);
+            }
+
+            for (int i = 1; i <= 4; i++)
+            {
+                AddTurn(messages, Invariant($"p{i}"), "pptcom", "{\"script\":\"a = 1\\nb = 2\"}", "OK: 2 lines executed.", slide: i);
+            }
+
+            int reasoning = Compaction.ElideOldReasoning(messages, Compaction.KeepRecent);
+            int scripts = Compaction.ElideOldScripts(messages, Compaction.KeepRecent);
+            int docReads = Compaction.ElideOldDocReads(messages, Compaction.KeepRecent);
+            int lists = Compaction.ElideOldShapeLists(messages, Compaction.KeepRecent);
+            Check("older turns: reasoning 5, scripts 2, document texts 1, shape lists 2", reasoning == 5 && scripts == 2 && docReads == 1 && lists == 2,
+                  Invariant($"reasoning {reasoning}, scripts {scripts}, docread {docReads}, lists {lists}"));
+
+            List<ChatMessage> turns = messages.FindAll(static m => m.Role == "assistant");
+            Check("the last two turns keep their reasoning", turns[5].ReasoningContent == "p3" && turns[6].ReasoningContent == "p4" && turns[4].ReasoningContent is null,
+                  string.Join(",", turns.ConvertAll(static m => m.ReasoningContent ?? "-")));
+            Check("an older script becomes a comment saying it ran", turns[3].ToolCalls![0].Arguments.Contains(Compaction.ElidedScriptMark + "2 lines, already run") &&
+                  turns[6].ToolCalls![0].Arguments.Contains("a = 1"), turns[3].ToolCalls![0].Arguments);
+            List<ChatMessage> docResults = messages.FindAll(static m => m.Role == "tool" && (m.Content ?? "").StartsWith("d1 lines", StringComparison.Ordinal));
+            Check("an older document text keeps its first line", docResults[0].Content!.StartsWith("d1 lines 1\n(the text is left out", StringComparison.Ordinal) &&
+                  docResults[1].Content == "d1 lines 2\ntext 2", docResults[0].Content + " / " + docResults[1].Content);
+            List<SlideImage> images = messages.FindAll(static m => m.Images is not null).ConvertAll(static m => m.Images![0]);
+            Check("older renderings stay without their shape lists", images.TrueForAll(static i => i.Png is not null) &&
+                  images[0].Inventory is null && images[1].Inventory is null && images[2].Inventory == "list 3" && images[3].Inventory == "list 4",
+                  string.Join(",", images.ConvertAll(static i => i.Inventory ?? "-")));
+            int again = Compaction.ElideOldReasoning(messages, Compaction.KeepRecent) + Compaction.ElideOldScripts(messages, Compaction.KeepRecent) +
+                        Compaction.ElideOldDocReads(messages, Compaction.KeepRecent) + Compaction.ElideOldShapeLists(messages, Compaction.KeepRecent);
+            Check("shortening again leaves nothing more out", again == 0, Invariant($"{again}"));
+            string? inReply = Compaction.NotesOf(new ChatReply { Content = " Next: a ", Reasoning = "thinking", FinishReason = "stop" });
+            string? inReasoning = Compaction.NotesOf(new ChatReply { Content = "", Reasoning = "Next: b", FinishReason = "stop" });
+            string? cut = Compaction.NotesOf(new ChatReply { Content = "Next: c", FinishReason = "length" });
+            Check("the notes are the reply, or the reasoning when the reply is empty; none from one cut off",
+                  inReply == "Next: a" && inReasoning == "Next: b" && cut is null, (inReply ?? "-") + " / " + (inReasoning ?? "-") + " / " + (cut ?? "-"));
+            List<ChatMessage> notes = Compaction.NotesMessages("Next: slide 5\n");
+            Check("the notes go last as the model's own words, and a line has it carry on",
+                  notes.Count == 2 && notes[0].Role == "assistant" && notes[0].Content == "Next: slide 5" && notes[1].Role == "user" &&
+                  (notes[1].Content ?? "").EndsWith("Carry on from Next.", StringComparison.Ordinal) && notes.TrueForAll(static m => m.Notes),
+                  string.Join(" / ", notes.ConvertAll(static m => m.Role + ": " + m.Content)));
+            messages.AddRange(notes);
+            int removed = Compaction.RemoveNotes(messages);
+            Check("newer notes replace them", removed == 2 && !messages.Exists(static m => m.Notes), Invariant($"{removed} removed"));
+            ShortenForLaterTests();
+        }
+
+        // What the requests after one get of it (Compaction.ShortenForLater): the request as written, each turn without
+        // reasoning or script, each result's first line, no renderings or other user messages; a call left unanswered
+        // says so. A request that stopped before it finished ends with what the user was shown, as the model's words,
+        // and keeps the model's notes; one that finished loses them.
+        private static void ShortenForLaterTests()
+        {
+            List<ChatMessage> run = [new ChatMessage("system", "s"), new ChatMessage("user", "Current date and time: ...\n\nRequest:\nmake slides")];
+            AddTurn(run, "p1", "pptcom", "{\"script\":\"a = 1\\nb = 2\"}", "OK: 2 lines executed. Defined: a, b.\nRenderings of changed slide(s) 1 are attached", slide: 1);
+            run.AddRange(Compaction.NotesMessages("Next: slide 2"));
+            run.Add(new ChatMessage("assistant", content: null) { ToolCalls = [new ToolCall { Id = "call_x", Name = "pptcom", Arguments = "{\"script\":\"c = 3\"}" }] });
+
+            List<ChatMessage> stopped = Compaction.ShortenForLater(run, 1, "make slides", "ここで止めました。");
+            string shown = string.Join(" | ", stopped.ConvertAll(static m => m.Role + ": " + (m.Content ?? string.Join(",", (m.ToolCalls ?? []).ConvertAll(static c => c.Arguments)))));
+            Check("a stopped request: the request, the turns shortened, its notes, an unanswered call, and how it ended last",
+                  stopped.Count == 7 && stopped[0].Content == "make slides" && stopped[1].ToolCalls![0].Arguments.Contains(Compaction.ElidedScriptMark + "2 lines") &&
+                  stopped[1].ReasoningContent is null && stopped[2].Content == "OK: 2 lines executed. Defined: a, b." && stopped[3].Content == "Next: slide 2" &&
+                  stopped[5].Content == "(not run: the user stopped the request)" && stopped[6].Role == "assistant" && stopped[6].Content == "ここで止めました。", shown);
+
+            List<ChatMessage> finished = Compaction.ShortenForLater(run, 1, "make slides", ending: null);
+            Check("a request that finished keeps no notes and no ending", finished.Count == 5 && !finished.Exists(static m => m.Content == "Next: slide 2"),
+                  string.Join(" | ", finished.ConvertAll(static m => m.Role + ": " + m.Content)));
+        }
+
+        // One assistant turn calling `tool`, its result, and for a pptcom turn the rendering of `slide` with its shape list.
+        private static void AddTurn(List<ChatMessage> messages, string reasoning, string tool, string arguments, string result, int? slide)
+        {
+            string id = "call_" + reasoning;
+            messages.Add(new ChatMessage("assistant", content: null) { ReasoningContent = reasoning, ToolCalls = [new ToolCall { Id = id, Name = tool, Arguments = arguments }] });
+            messages.Add(ChatMessage.ToolResult(id, result));
+            if (slide is int n)
+            {
+                messages.Add(new ChatMessage("user", "Image(s) for the tool results above:")
+                {
+                    Images = [new SlideImage { Label = Invariant($"slide {n}"), Png = [1, 2, 3], Inventory = Invariant($"list {n}") }],
+                });
+            }
         }
 
         // ---- the server ---------------------------------------------------------------------------------

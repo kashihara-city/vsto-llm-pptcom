@@ -103,7 +103,24 @@ namespace Pptcom.Agent
             Action<StreamProgress>? onProgress = null,
             CancellationToken cancellationToken = default)
         {
-            JObject payload = Payload(MessagesJson(messages), tools);
+            return await StreamChatAsync(messages, tools, "auto", onProgress, cancellationToken).ConfigureAwait(true);
+        }
+
+        // The same, but the model may not call the tools (tool_choice "none"). They are sent all the same: they are part
+        // of the prompt the server has cached, and a request without them would be read again from the start.
+        public async Task<ChatReply> ChatWithoutToolsAsync(
+            List<ChatMessage> messages,
+            JArray? tools,
+            Action<StreamProgress>? onProgress = null,
+            CancellationToken cancellationToken = default)
+        {
+            return await StreamChatAsync(messages, tools, "none", onProgress, cancellationToken).ConfigureAwait(true);
+        }
+
+        private async Task<ChatReply> StreamChatAsync(List<ChatMessage> messages, JArray? tools, string toolChoice, Action<StreamProgress>? onProgress,
+                                                      CancellationToken cancellationToken)
+        {
+            JObject payload = Payload(MessagesJson(messages), tools, toolChoice);
             HttpRequestMessage makeRequest()
             {
                 return Request(HttpMethod.Post, "/v1/chat/completions",
@@ -212,7 +229,7 @@ namespace Pptcom.Agent
             return jm;
         }
 
-        private JObject Payload(JArray messagesJson, JArray? tools)
+        private JObject Payload(JArray messagesJson, JArray? tools, string toolChoice)
         {
             JObject payload = new()
             {
@@ -236,7 +253,7 @@ namespace Pptcom.Agent
             if (tools is not null && tools.Count > 0)
             {
                 payload["tools"] = tools;
-                payload["tool_choice"] = "auto";
+                payload["tool_choice"] = toolChoice;
             }
             if (Temperature is not null)
             {
@@ -385,11 +402,13 @@ namespace Pptcom.Agent
             return streamed.Finish();
         }
 
-        // Models the endpoint offers, with their mode when known ("chat", "image_generation", ...).
-        // LiteLLM's /model/info has the mode; plain OpenAI-compatible servers only have /v1/models.
-        public async Task<List<KeyValuePair<string, string?>>> ListModelsAsync(CancellationToken cancellationToken = default)
+        // Models the endpoint offers, with their mode when known ("chat", "image_generation", ...) and how many tokens they
+        // take in when the endpoint says. LiteLLM's /model/info has both (model_info.mode, model_info.max_input_tokens,
+        // the latter only where its administrator or its model list sets it); plain OpenAI-compatible servers only have
+        // /v1/models, where vLLM gives max_model_len.
+        public async Task<List<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken = default)
         {
-            List<KeyValuePair<string, string?>> result = [];
+            List<ModelInfo> result = [];
             try
             {
                 using HttpRequestMessage request = Request(HttpMethod.Get, "/model/info");
@@ -401,10 +420,10 @@ namespace Pptcom.Agent
                         foreach (JToken m in data)
                         {
                             string name = (string?)m["model_name"] ?? "";
-                            string? mode = (string?)m["model_info"]?["mode"];
-                            if (name.Length > 0 && !result.Exists(r => r.Key == name))
+                            JToken? info = m["model_info"];
+                            if (name.Length > 0 && !result.Exists(r => r.Name == name))
                             {
-                                result.Add(new KeyValuePair<string, string?>(name, mode));
+                                result.Add(new ModelInfo(name, (string?)info?["mode"], TokenCount(info?["max_input_tokens"])));
                             }
                         }
                         if (result.Count > 0)
@@ -452,12 +471,20 @@ namespace Pptcom.Agent
                         string id = (string?)m["id"] ?? "";
                         if (id.Length > 0)
                         {
-                            result.Add(new KeyValuePair<string, string?>(id, null));
+                            result.Add(new ModelInfo(id, mode: null, TokenCount(m["max_model_len"]) ?? TokenCount(m["max_input_tokens"])));
                         }
                     }
                 }
             }
             return result;
+        }
+
+        // A positive whole number of tokens, or null (absent, null, or not a number).
+        private static int? TokenCount(JToken? value)
+        {
+            return value is JValue { Type: JTokenType.Integer } v && Convert.ToInt64(v.Value, CultureInfo.InvariantCulture) is long n && n > 0
+                ? (int)Math.Min(n, int.MaxValue)
+                : null;
         }
 
         // How long an image may take, its headers and its body together (the server makes it meanwhile). Images come in

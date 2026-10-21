@@ -17,6 +17,9 @@ namespace Pptcom.Agent
         // data-URI parts next to the text. An image whose Png was cleared (superseded by a newer
         // rendering of the same slide) is sent as a short text note instead.
         public List<SlideImage>? Images;
+        // The model's notes on the request and the line after them (Compaction.NotesMessages): replaced by newer notes,
+        // and left out of the shortened copy of a request that finished.
+        public bool Notes;
 
         public ChatMessage(string role, string? content)
         {

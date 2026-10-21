@@ -181,18 +181,23 @@
     <Compile Include="Agent\AgentFile.cs" />
     <Compile Include="Agent\ChatMessage.cs" />
     <Compile Include="Agent\ChatReply.cs" />
+    <Compile Include="Agent\Compaction.cs" />
     <Compile Include="Agent\LlmServerException.cs" />
     <Compile Include="Agent\LlmServerFailure.cs" />
+    <Compile Include="Agent\ModelInfo.cs" />
     <Compile Include="Agent\SlideImage.cs" />
     <Compile Include="Agent\StreamProgress.cs" />
     <Compile Include="Agent\StreamedReply.cs" />
     <Compile Include="Agent\ToolCall.cs" />
-    <!-- The model's instructions and tool definitions, read by AgentFile. -->
+    <!-- The model's instructions, its tool definitions and what it is asked when its conversation is shortened, read by AgentFile. -->
     <EmbeddedResource Include="Agent\system-prompt.txt">
       <LogicalName>pptcom.agent/system-prompt.txt</LogicalName>
     </EmbeddedResource>
     <EmbeddedResource Include="Agent\tools.json">
       <LogicalName>pptcom.agent/tools.json</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Agent\compaction-prompt.txt">
+      <LogicalName>pptcom.agent/compaction-prompt.txt</LogicalName>
     </EmbeddedResource>
     <Compile Include="Agent\OpenAiCompatibleClient.cs">
       <SubType>Code</SubType>

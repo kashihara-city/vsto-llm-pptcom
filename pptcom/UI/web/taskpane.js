@@ -1,7 +1,7 @@
 "use strict";
 // The add-in (AiTaskPaneControl.cs) and this page talk only through WebView2 web messages:
 //   page -> add-in: {type: "ready" | "send" | "cancel" | "retry" | "continue" | "newChat" | "endpoint" | "chatModel" | "imageModel" | "apiKey", ...}
-//   page -> add-in also: {type: "openPane" | "saveProgress" | "externalControl", value: bool}
+//   page -> add-in also: {type: "openPane" | "saveProgress" | "externalControl", value: bool}, {type: "contextLimit", value: "<digits>"}
 //   add-in -> page: {type: "log" | "status" | "busy" | "retry" | "continue" | "endpoint" | "models" | "apiKeyState" | "options" | "selection" | "about", ...}
 //   ("log" and "status" carry a message: {code, args}, shown with the text of locales/<language>.json, see i18n.js)
 // Attached documents (drop, attach button, chips, PDF pages) have their own messages: see docs.js.
@@ -75,6 +75,7 @@ const logKinds = {
   USER_REQUEST: "user", CONTINUE_REQUEST: "user", TOOL_RESULT: "tool", TURN_SIZE: "turn", REQUEST_DONE: "done",
   AI_REPLY: "reply", AI_DONE: "reply",
   AI_ERROR: "stopped", AI_CANCELLED: "stopped", AI_SERVER_ERROR: "error", AI_TURN_LIMIT: "error", AI_REPLY_CUT: "error",
+  AI_CONTEXT_FULL: "error", AI_COMPACTION_FAILED: "error",
   AI_DECK_CLOSED: "stopped",
   // a request refused before it started: its block ends with the reason
   NO_ENDPOINT_OR_MODEL: "stopped", DOC_STILL_CONVERTING: "stopped",
@@ -203,6 +204,8 @@ $("apikey").addEventListener("click", () => post({ type: "apiKey" }));
 $("open-pane").addEventListener("change", e => post({ type: "openPane", value: e.target.checked }));
 $("save-progress").addEventListener("change", e => post({ type: "saveProgress", value: e.target.checked }));
 $("external-control").addEventListener("change", e => post({ type: "externalControl", value: e.target.checked }));
+// The add-in checks the number; one it refuses is replaced by the limit in use (options).
+$("context-limit").addEventListener("change", e => post({ type: "contextLimit", value: String(e.target.value).trim() }));
 
 function updateSummary() {
   const host = endpoint.value.replace(/^https?:\/\//, "");
@@ -233,7 +236,7 @@ function setBusy(on, elsewhere) {
   action.disabled = waiting;
   action.title = i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND_TITLE");
   action.setAttribute("aria-label", i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND"));
-  for (const el of [endpoint, $("fetch"), chatModel, imageModel, $("apikey"), $("new-chat"), $("open-pane"), $("save-progress"), $("external-control")]) el.disabled = on;
+  for (const el of [endpoint, $("fetch"), chatModel, imageModel, $("apikey"), $("new-chat"), $("open-pane"), $("save-progress"), $("external-control"), $("context-limit")]) el.disabled = on;
   if (waiting) $("status").textContent = i18n.t("STATUS_BUSY_ELSEWHERE");
   if (!on) { $("status").textContent = ""; $("retry-bar").classList.remove("show"); if (work) finishWork("done"); }
   if (continueButton) continueButton.disabled = on;
@@ -254,6 +257,7 @@ const handlers = {
     $("open-pane").checked = !!m.openPane;
     $("save-progress").checked = !!m.saveProgress;
     $("external-control").checked = !!m.externalControl;
+    if (m.contextLimit) $("context-limit").value = String(m.contextLimit);
   },
   // the add-in's version and the commit it was built from, at the bottom of the settings
   about: m => { $("about").textContent = m.text ? i18n.t(m.text) : ""; },

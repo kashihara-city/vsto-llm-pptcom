@@ -1,0 +1,11 @@
+Your older reasoning, pptcom scripts, document texts and shape lists are about to be left out of this conversation to keep it short. The deck, your variables, the tool results and the latest renderings stay. Before that, write notes for yourself that stand in for what leaves, so that you can carry on without starting over.
+
+Do not call any tool. Keep your thinking short and write the notes as your reply, under these headings:
+Request: what the user asked for, quoted, and anything they added since.
+Plan: each slide in order, with its role and its state (done, in progress, to do).
+Design: what you settled on: colors as RGB, fonts and sizes, the positions and spacing the slides share, how you name variables.
+Sources: which parts of the documents (docread lines or pages) the slides still to do need, if any.
+Learned: what failed and how to avoid it.
+Next: the very next thing to do.
+
+Write the notes in English, but quote any text that goes on the slides exactly, in the language it is in. Facts and values only, no reasoning.

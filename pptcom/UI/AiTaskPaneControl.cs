@@ -71,6 +71,8 @@ namespace Pptcom.UI
         public event EventHandler<SwitchEventArgs>? SaveProgressChanged;
         // Whether each window opens with its pane shown (AddinSettings.OpenPane).
         public event EventHandler<SwitchEventArgs>? OpenPaneChanged;
+        // The context limit as typed (AddinSettings.ContextLimit), checked by the add-in.
+        public event EventHandler<TextEventArgs>? ContextLimitChanged;
         // The page started converting a document (UI\web\docs.js): its ticket and name.
         public event EventHandler<DocumentStartedEventArgs>? DocumentStarted;
         // A document the page converted (UI\web\docs.js): {ticket, name, size, format, text, images, thumb}.
@@ -239,8 +241,13 @@ namespace Pptcom.UI
             {
                 return;
             }
-            string value = (string?)m["value"] ?? "";
-            switch ((string?)m["type"])
+            string? type = (string?)m["type"];
+            if (OnSettingMessage(type, m))
+            {
+                return;
+            }
+
+            switch (type)
             {
                 case "ready":
                     _pageReady = true;
@@ -272,34 +279,8 @@ namespace Pptcom.UI
                 case "continue":
                     ContinueRequested?.Invoke(this, EventArgs.Empty); // ThisAddIn.SendAsync shows it (CONTINUE_REQUEST)
                     break;
-                case "endpoint":
-                    EndpointSubmitted?.Invoke(this, new TextEventArgs(value.Trim()));
-                    break;
-                case "chatModel":
-                    if (value.Length > 0)
-                    {
-                        ChatModelSelected?.Invoke(this, new TextEventArgs(value));
-                    }
-
-                    break;
-                case "imageModel":
-                    if (value.Length > 0)
-                    {
-                        ImageModelSelected?.Invoke(this, new TextEventArgs(value));
-                    }
-
-                    break;
                 case "newChat":
                     NewConversationRequested?.Invoke(this, EventArgs.Empty);
-                    break;
-                case "externalControl":
-                    ExternalControlChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
-                    break;
-                case "saveProgress":
-                    SaveProgressChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
-                    break;
-                case "openPane":
-                    OpenPaneChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
                     break;
                 case "attachStarted":
                     DocumentStarted?.Invoke(this, new DocumentStartedEventArgs((string?)m["ticket"] ?? "", (string?)m["name"] ?? ""));
@@ -320,6 +301,44 @@ namespace Pptcom.UI
                 case "detach":
                     DocumentRemoved?.Invoke(this, new TextEventArgs((string?)m["id"] ?? ""));
                     break;
+            }
+        }
+
+        // The settings area's messages; false for any other.
+        private bool OnSettingMessage(string? type, JObject m)
+        {
+            string value = (string?)m["value"] ?? "";
+            switch (type)
+            {
+                case "endpoint":
+                    EndpointSubmitted?.Invoke(this, new TextEventArgs(value.Trim()));
+                    break;
+                case "chatModel":
+                    if (value.Length > 0)
+                    {
+                        ChatModelSelected?.Invoke(this, new TextEventArgs(value));
+                    }
+
+                    break;
+                case "imageModel":
+                    if (value.Length > 0)
+                    {
+                        ImageModelSelected?.Invoke(this, new TextEventArgs(value));
+                    }
+
+                    break;
+                case "externalControl":
+                    ExternalControlChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
+                    break;
+                case "saveProgress":
+                    SaveProgressChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
+                    break;
+                case "openPane":
+                    OpenPaneChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
+                    break;
+                case "contextLimit":
+                    ContextLimitChanged?.Invoke(this, new TextEventArgs(value.Trim()));
+                    break;
                 case "apiKey":
                     string key = (AskApiKey(FindForm()) ?? "").Trim();
                     if (key.Length > 0)
@@ -328,7 +347,10 @@ namespace Pptcom.UI
                     }
 
                     break;
+                default:
+                    return false;
             }
+            return true;
         }
 
         // ---- add-in -> page --------------------------------------------------------------------
@@ -507,9 +529,16 @@ namespace Pptcom.UI
             Post(new JObject { ["type"] = "about", ["text"] = text.ToJson() });
         }
 
-        public void SetOptions(bool externalControl, bool saveProgress, bool openPane)
+        public void SetOptions(bool externalControl, bool saveProgress, bool openPane, int contextLimit)
         {
-            Post(new JObject { ["type"] = "options", ["externalControl"] = externalControl, ["saveProgress"] = saveProgress, ["openPane"] = openPane });
+            Post(new JObject
+            {
+                ["type"] = "options",
+                ["externalControl"] = externalControl,
+                ["saveProgress"] = saveProgress,
+                ["openPane"] = openPane,
+                ["contextLimit"] = contextLimit,
+            });
         }
 
         public void SetEndpoint(string endpoint)

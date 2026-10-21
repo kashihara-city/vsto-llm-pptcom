@@ -7,7 +7,8 @@ namespace Pptcom
     // rig and scripts/test/tool_loop.py all read the same places:
     //
     //   HKCU\Software\KashiharaCity\pptcom  endpoint, chat_model, image_model (REG_SZ);
-    //                                        external_control, save_progress, open_pane (REG_DWORD 0/1, add-in only)
+    //                                        external_control, save_progress, open_pane (REG_DWORD 0/1, add-in only);
+    //                                        context_limit (REG_DWORD, tokens, add-in only)
     //   Windows Credential Manager           generic credential "KashiharaCity/pptcom:api_key" (the API key,
     //                                        sent as the Bearer token; never written to disk in plain text)
     //
@@ -36,6 +37,15 @@ namespace Pptcom
         // OpenPane: each presentation window opens with its task pane shown (on unless the user turns it off: the
         // pane always opened before this setting). Off, the pane waits hidden for the ribbon's AIアシスタント button.
         public bool OpenPane = true;
+        // ContextLimit: when a turn's prompt passes this many tokens, the request's conversation is shortened after it
+        // (ThisAddIn.CompactAsync). Set to three quarters of what the chat model takes in when the model is chosen
+        // (ThisAddIn.SetContextLimitFromModel), DefaultContextLimit when the endpoint does not say; the user may change it.
+        // ContextLimitSaved: the registry has one (set once from the model otherwise).
+        public int ContextLimit = DefaultContextLimit;
+        public bool ContextLimitSaved;
+        public const int DefaultContextLimit = 100000;
+        public const int MinContextLimit = 8000;
+        public const int MaxContextLimit = 10000000;
 
         // %LOCALAPPDATA%\KashiharaCity\pptcom: app\ (installed by the MSI), temp\ (temporary files and the
         // WebView2 profile; safe to delete while PowerPoint is closed) and, with SaveProgress, the records.
@@ -59,6 +69,11 @@ namespace Pptcom
                     s.ExternalControl = key.GetValue("external_control") is int ec && ec != 0;
                     s.SaveProgress = key.GetValue("save_progress") is int sp && sp != 0;
                     s.OpenPane = key.GetValue("open_pane") is not int op || op != 0;
+                    if (key.GetValue("context_limit") is int cl && cl >= MinContextLimit && cl <= MaxContextLimit)
+                    {
+                        s.ContextLimit = cl;
+                        s.ContextLimitSaved = true;
+                    }
                 }
             }
             catch (Exception ex) when (IsRegistryFailure(ex))
@@ -81,6 +96,10 @@ namespace Pptcom
                 key.SetValue("external_control", ExternalControl ? 1 : 0, RegistryValueKind.DWord);
                 key.SetValue("save_progress", SaveProgress ? 1 : 0, RegistryValueKind.DWord);
                 key.SetValue("open_pane", OpenPane ? 1 : 0, RegistryValueKind.DWord);
+                if (ContextLimitSaved)
+                {
+                    key.SetValue("context_limit", ContextLimit, RegistryValueKind.DWord);
+                }
             }
             catch (Exception ex) when (IsRegistryFailure(ex))
             {

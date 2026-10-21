@@ -114,7 +114,9 @@ jobs:
         shell: pwsh
         run: |
           # How a reply's stream is read (whole replies, tool calls in pieces, failures, 中止 and the idle limit on a
-          # stream or an error's body), against a server on the loopback address; no LLM is called.
+          # stream or an error's body), how the notes before a conversation is shortened are asked for, each model's
+          # input from the model list and what shortening leaves out, against a server on the loopback address; no LLM
+          # is called.
           $ErrorActionPreference = "Stop"
           & $env:MSBUILD scripts\test\ChatStreamTests\ChatStreamTests.csproj -restore -p:Configuration=Debug -p:Platform=AnyCPU -nologo -v:minimal "-flp:logfile=$env:RUNNER_TEMP\stream.log;warningsonly"
           if ($LASTEXITCODE -ne 0) { throw "ChatStreamTests build failed" }

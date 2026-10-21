@@ -39,14 +39,12 @@ namespace Pptcom
         private const int MaxTurns = 20;
         private const int MaxScriptLinesPerCall = 2000;
 
-        // The conversation is resent whole every turn and only grows, so the server's prefix cache
-        // covers all but the newest part. When a request's prompt passes this many tokens, the pptcom
-        // scripts older than the last KeepRecentScripts calls are replaced, once, by a one-line comment
-        // (ElideOldScripts), and so is the text of older docread results (ElideOldDocReads); the prompt falls
-        // back below and keeps growing from there. An 8-slide deck stays well under it (~50-70k); the model
-        // takes 262k. Reasoning, other results and renderings stay.
-        private const int ScriptElisionPromptTokens = 100000;
-        private const int KeepRecentScripts = 2;
+        // The conversation is resent whole every turn and only grows, so the server's prefix cache covers all but the
+        // newest part. When a turn's prompt passes the context limit (AddinSettings.ContextLimit), the conversation is
+        // shortened all at once after that turn (CompactAsync, Agent\Compaction.cs): the model writes notes on the
+        // request (Agent\compaction-prompt.txt), its older reasoning, scripts, document texts and shape lists leave,
+        // and the notes go last. The prompt falls back below and keeps growing from there.
+        private static readonly string CompactionPrompt = AgentFile.Text("compaction-prompt.txt");
 
         // Agent\system-prompt.txt. Deliberately short and in the coding-agent register (no design directions, brevity
         // rules up front): the run8 (old/experiment/out) and run10 experiments showed this framing - not the model and not any
@@ -200,6 +198,8 @@ namespace Pptcom
         // every pane, also one made later.
         private List<string> _chatModels = [];
         private List<string> _imageModels = [];
+        // How many tokens each model takes in, where the endpoint said (SetContextLimitFromModel).
+        private Dictionary<string, int?> _modelInputs = new(StringComparer.Ordinal);
 
         private static List<string> Only(string model)
         {
@@ -267,7 +267,7 @@ namespace Pptcom
             try
             {
                 OpenAiCompatibleClient probe = new(endpoint, _settings.ApiKey, _settings.ChatModel);
-                List<KeyValuePair<string, string?>> models = await probe.ListModelsAsync(CancellationToken.None).ConfigureAwait(true); // not the request's 中止
+                List<ModelInfo> models = await probe.ListModelsAsync(CancellationToken.None).ConfigureAwait(true); // not the request's 中止
                 if (request == _modelsRequest)
                 {
                     UseModelList(endpoint, asker, models);
@@ -335,11 +335,12 @@ namespace Pptcom
         }
 
         // The endpoint answered with its models: it becomes the active one (saved), and the drop-downs show them.
-        private void UseModelList(string endpoint, WindowPane? asker, List<KeyValuePair<string, string?>> models)
+        private void UseModelList(string endpoint, WindowPane? asker, List<ModelInfo> models)
         {
-            bool modesKnown = models.Exists(static m => m.Value is not null);
-            List<string> chat = [.. models.Where(m => !modesKnown || m.Value == "chat").Select(static m => m.Key)];
-            List<string> image = [.. models.Where(m => !modesKnown || m.Value == "image_generation").Select(static m => m.Key)];
+            bool modesKnown = models.Exists(static m => m.Mode is not null);
+            List<string> chat = [.. models.Where(m => !modesKnown || m.Mode == "chat").Select(static m => m.Name)];
+            List<string> image = [.. models.Where(m => !modesKnown || m.Mode == "image_generation").Select(static m => m.Name)];
+            _modelInputs = models.GroupBy(static m => m.Name, StringComparer.Ordinal).ToDictionary(static g => g.Key, static g => g.First().MaxInputTokens, StringComparer.Ordinal);
 
             if (endpoint != _settings.Endpoint)
             {
@@ -348,11 +349,11 @@ namespace Pptcom
                 _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
             }
             // No model chosen yet (fresh install): take the first one the endpoint lists.
-            bool changed = false;
+            bool changed = false, chatChosen = false;
             if (_settings.ChatModel.Length == 0 && chat.Count > 0)
             {
                 _settings.ChatModel = chat[0];
-                changed = true;
+                changed = chatChosen = true;
             }
             if (_settings.ImageModel.Length == 0 && image.Count > 0)
             {
@@ -382,6 +383,12 @@ namespace Pptcom
             {
                 Tell(asker, PaneText.Of("MODEL_NOT_LISTED", _settings.ChatModel));
             }
+            // The limit follows the chat model when one is chosen; one that was never set (an add-in from before the
+            // setting) is set once from the model in use.
+            else if (_settings.ChatModel.Length > 0 && (chatChosen || !_settings.ContextLimitSaved))
+            {
+                SetContextLimitFromModel(asker);
+            }
         }
 
         private void OnChatModelSelected(WindowPane pane, string model)
@@ -396,6 +403,46 @@ namespace Pptcom
             _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
             ShowModels(except: pane);
             pane.Control.Log("CHAT_MODEL_SET", model);
+            SetContextLimitFromModel(pane);
+        }
+
+        // The context limit for the chat model: three quarters of what it takes in, as the endpoint lists it - the rest is
+        // room for the turn that passes the limit, its results, and the notes (CompactAsync) - or DefaultContextLimit
+        // when the endpoint does not say. Told to `asker` (null: every pane) with the numbers it came from.
+        private void SetContextLimitFromModel(WindowPane? asker)
+        {
+            string model = _settings.ChatModel;
+            int? max = _modelInputs.TryGetValue(model, out int? known) ? known : null;
+            _settings.ContextLimit = max is int n ? Math.Min(Math.Max(n / 4 * 3, AddinSettings.MinContextLimit), AddinSettings.MaxContextLimit) : AddinSettings.DefaultContextLimit;
+            _settings.ContextLimitSaved = true;
+            _settings.Save();
+            ShowOptions(except: null);
+            Tell(asker, max is int m
+                ? PaneText.Of("CONTEXT_LIMIT_FROM_MODEL", Tokens(_settings.ContextLimit), model, Tokens(m))
+                : PaneText.Of("CONTEXT_LIMIT_DEFAULT", Tokens(_settings.ContextLimit), model));
+        }
+
+        // A limit typed in the settings: a whole number of tokens in AddinSettings' range, or the pane shows the one in use again.
+        private void OnContextLimitChanged(WindowPane pane, string text)
+        {
+            if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int limit) ||
+                limit < AddinSettings.MinContextLimit || limit > AddinSettings.MaxContextLimit)
+            {
+                pane.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit);
+                pane.Control.Log("CONTEXT_LIMIT_INVALID", Tokens(AddinSettings.MinContextLimit), Tokens(AddinSettings.MaxContextLimit));
+                return;
+            }
+
+            if (limit == _settings.ContextLimit)
+            {
+                return;
+            }
+
+            _settings.ContextLimit = limit;
+            _settings.ContextLimitSaved = true;
+            _settings.Save();
+            ShowOptions(except: pane);
+            pane.Control.Log("CONTEXT_LIMIT_SET", Tokens(limit));
         }
 
         private void OnImageModelSelected(WindowPane pane, string model)
@@ -460,7 +507,7 @@ namespace Pptcom
             if (ActivePane() is WindowPane pane)
             {
                 ShowForOutside(pane);
-                _ = SendAsync(pane, ContinueRequest, fromOutside: true, continues: true);
+                _ = SendAsync(pane, Texts.Get("CONTINUE_REQUEST"), fromOutside: true, continues: true);
             }
         }
 
@@ -494,11 +541,11 @@ namespace Pptcom
             }
         }
 
-        private void ShowOptions(WindowPane except)
+        private void ShowOptions(WindowPane? except)
         {
             foreach (WindowPane p in _panes.Values.Where(p => !ReferenceEquals(p, except)))
             {
-                p.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane);
+                p.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit);
             }
         }
 
@@ -617,11 +664,12 @@ namespace Pptcom
             control.SendRequested += (s, e) => _ = SendAsync(pane, e.Text, fromOutside: false);
             control.CancelRequested += (s, e) => _cancel.Cancel();
             control.RetryRequested += (s, e) => _retryWait?.TrySetResult(true);
-            control.ContinueRequested += (s, e) => _ = SendAsync(pane, ContinueRequest, fromOutside: false, continues: true);
+            control.ContinueRequested += (s, e) => _ = SendAsync(pane, Texts.Get("CONTINUE_REQUEST"), fromOutside: false, continues: true);
             control.NewConversationRequested += (s, e) => OnNewConversationRequested(pane);
             control.ExternalControlChanged += (s, e) => OnExternalControlChanged(pane, e.On);
             control.SaveProgressChanged += (s, e) => OnSaveProgressChanged(pane, e.On);
             control.OpenPaneChanged += (s, e) => OnOpenPaneChanged(pane, e.On);
+            control.ContextLimitChanged += (s, e) => OnContextLimitChanged(pane, e.Text);
             control.EndpointSubmitted += (s, e) => _ = RefreshModelsAsync(e.Text, pane);
             control.ChatModelSelected += (s, e) => OnChatModelSelected(pane, e.Text);
             control.ImageModelSelected += (s, e) => OnImageModelSelected(pane, e.Text);
@@ -632,7 +680,7 @@ namespace Pptcom
             control.DocumentRemoved += (s, e) => OnDocumentRemoved(pane, e.Text);
             control.SetEndpoint(_settings.Endpoint);
             control.SetApiKeyState(_settings.HasApiKey);
-            control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane);
+            control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit);
             control.SetAbout(PaneText.Of("ABOUT_VERSION", BuildInfo.Version,
                                          PaneText.Join("DETAIL_SEPARATOR", BuildInfo.IsDebug ? [BuildInfo.Commit, "Debug"] : [BuildInfo.Commit])));
             control.SetModelChoices(_chatModels, _settings.ChatModel, _imageModels, _settings.ImageModel);
@@ -758,9 +806,7 @@ namespace Pptcom
             public readonly List<string> KnownIds = [];
             // The earlier requests, shortened; sent between the system prompt and the new request.
             public readonly List<ChatMessage> Earlier = [];
-            // How the last request ended, when it did not finish ("stopped by the user after 3 s ...").
-            public string? LastEnding;
-            // The last request, when it stopped at the turn limit: 続ける carries it on (ContinueRequest). Null otherwise.
+            // The last request, when it stopped at the turn limit: 続ける carries it on. Null otherwise.
             public StoppedRequest? Stopped;
             // The deck as the last request left it, to tell the next one what the user changed since.
             public DeckReader.Fingerprint? LastSeen;
@@ -787,9 +833,6 @@ namespace Pptcom
             public readonly int EarlierBefore = earlierBefore;
             public readonly List<ChatMessage> Messages = messages;
         }
-
-        // What 続ける sends as the request, after the stopped one (see ContextBeforeRequest).
-        private const string ContinueRequest = "Continue the request from where it stopped, and reply to the user when it is done.";
 
         // The pane's conversation, made the first time. Its engine binds the window's presentation as ActivePresentation.
         private Conversation ConversationOf(WindowPane pane)
@@ -1215,11 +1258,6 @@ namespace Pptcom
             }
 
             System.Text.StringBuilder sb = new(documents);
-            if (c.LastEnding is not null)
-            {
-                sb.Append("Your previous request above ").Append(c.LastEnding).Append("\n\n");
-            }
-
             if (c.LastSeen is not null)
             {
                 try
@@ -1255,147 +1293,22 @@ namespace Pptcom
             return sb.ToString();
         }
 
-        // This request's part of the conversation, shortened for the requests after it: the request as
-        // the user wrote it, each assistant turn without reasoning (pptcom scripts and zimage prompts
-        // replaced by a note), each tool result cut to its first line (plus Changed), no renderings. A
-        // tool call left without a result (the user stopped the request) gets one saying so.
-        private static List<ChatMessage> ShortenForLater(List<ChatMessage> messages, int from, string request)
+        // What the user was shown when the request stopped before it finished, in their language (the page shows the
+        // same codes): the last thing said in its part of the conversation, as the model's (Compaction.ShortenForLater,
+        // StoppedRequest). Null for one that finished, or whose window is gone with its conversation.
+        private static string? EndingText(RunRecord run)
         {
-            List<ChatMessage> shortened = [];
-            for (int i = from; i < messages.Count; i++)
+            return run.Outcome switch
             {
-                ChatMessage m = messages[i];
-                if (i == from)
-                {
-                    shortened.Add(new ChatMessage("user", request));
-                    continue;
-                }
-                if (m.Role == "user")
-                {
-                    continue; // the renderings' carrier
-                }
-
-                if (m.Role == "tool")
-                {
-                    string[] lines = (m.Content ?? "").Split('\n');
-                    string kept = lines[0] + string.Concat(lines.Skip(1).Where(static l => l.StartsWith("Changed:", StringComparison.Ordinal)).Select(static l => "\n" + l));
-                    shortened.Add(ChatMessage.ToolResult(m.ToolCallId ?? "", kept));
-                    continue;
-                }
-                ChatMessage a = new(m.Role, m.Content);
-                if (m.ToolCalls is not null)
-                {
-                    a.ToolCalls = [.. m.ToolCalls.Select(static call => new ToolCall { Id = call.Id, Name = call.Name, Arguments = ShortenArguments(call) })];
-                    shortened.Add(a);
-                    foreach (ToolCall call in m.ToolCalls)
-                    {
-                        bool answered = false;
-                        for (int j = i + 1; j < messages.Count && messages[j].Role == "tool"; j++)
-                        {
-                            if (messages[j].ToolCallId == call.Id)
-                            {
-                                answered = true;
-                                break;
-                            }
-                        }
-
-                        if (!answered)
-                        {
-                            shortened.Add(ChatMessage.ToolResult(call.Id, "(not run: the user stopped the request)"));
-                        }
-                    }
-                    continue;
-                }
-                shortened.Add(a);
-            }
-            // tool results must follow their assistant message: put any added "not run" results after the
-            // real ones of the same turn
-            return OrderToolResults(shortened);
-        }
-
-        private static List<ChatMessage> OrderToolResults(List<ChatMessage> list)
-        {
-            List<ChatMessage> ordered = [];
-            for (int i = 0; i < list.Count; i++)
-            {
-                ChatMessage m = list[i];
-                if (m.Role != "assistant" || m.ToolCalls is null)
-                {
-                    ordered.Add(m);
-                    continue;
-                }
-                ordered.Add(m);
-                int j = i + 1;
-                List<ChatMessage> results = [];
-                while (j < list.Count && list[j].Role == "tool")
-                {
-                    results.Add(list[j++]);
-                }
-
-                foreach (ToolCall call in m.ToolCalls)
-                {
-                    ChatMessage? r = results.Find(x => x.ToolCallId == call.Id);
-                    if (r is not null)
-                    {
-                        ordered.Add(r);
-                    }
-                }
-                i = j - 1;
-            }
-            return ordered;
-        }
-
-        private static string ShortenArguments(ToolCall call)
-        {
-            JObject args;
-            try
-            {
-                args = JObject.Parse(string.IsNullOrWhiteSpace(call.Arguments) ? "{}" : call.Arguments);
-            }
-            catch (Newtonsoft.Json.JsonReaderException)
-            {
-                return call.Arguments;
-            }
-            if (call.Name == "pptcom")
-            {
-                string script = (string?)args["script"] ?? "";
-                if (!script.StartsWith(ElidedScriptMark, StringComparison.Ordinal))
-                {
-                    args["script"] = Invariant($"{ElidedScriptMark}{script.Split('\n').Length} lines, already run - left out of this conversation to keep it short)");
-                }
-            }
-            else if (call.Name == "zimage" && args["prompt"] is not null)
-            {
-                args["prompt"] = "(left out)";
-            }
-            return args.ToString(Newtonsoft.Json.Formatting.None);
-        }
-
-        // "stopped by the user after 3 s; 12 pptcom lines had run." - for the next request.
-        private static string? DescribeEnding(RunRecord run)
-        {
-            if (run.Outcome == "completed")
-            {
-                return null;
-            }
-
-            string lines = run.ScriptLines > 0 ? Invariant($"{run.ScriptLines} pptcom lines had run") : "no pptcom lines had run, so nothing was changed";
-            if (run.Outcome == "cancelled")
-            {
-                return Invariant($"was stopped by the user after {Math.Round((DateTime.Now - run.Started).TotalSeconds, MidpointRounding.AwayFromZero)} s; {lines}.");
-            }
-
-            if (run.Outcome == "max_turns")
-            {
-                return "stopped at the turn limit; " + lines + ".";
-            }
-
-            if (run.Outcome == "max_tokens")
-            {
-                return "stopped because a reply reached the output token limit before it was done; " + lines + ".";
-            }
-
-            return "ended with an error (" + ClipText(run.Outcome, 200) + "); " + lines + ".";
+                "completed" or "window_closed" => null,
+                "cancelled" => Texts.Get("AI_CANCELLED"),
+                "max_turns" => Texts.Get("AI_TURN_LIMIT", MaxTurns),
+                "max_tokens" => Texts.Get("AI_REPLY_CUT", run.Conversation?.Llm.MaxTokens ?? 0),
+                "deck_closed" => Texts.Get("AI_DECK_CLOSED"),
+                "context_full" => Texts.Get("AI_CONTEXT_FULL"),
+                "compaction_failed" => Texts.Get("AI_COMPACTION_FAILED"),
+                _ => Texts.Get("AI_ERROR", ClipText(run.ErrorDetail ?? run.Outcome, 300)),
+            };
         }
 
         private static string ClipText(string s, int max)
@@ -1409,7 +1322,8 @@ namespace Pptcom
         // one runs (the page sent it before its busy state arrived) is dropped before anything shows it, and the
         // busy state is taken before the first await. AddinAutomation.Send refuses one with an exception first.
         // A request runs in the pane it was sent from, on that window's conversation; the other panes wait meanwhile.
-        // `continues`: 続ける, which carries on the request that stopped at the turn limit (userMessage is ContinueRequest).
+        // `continues`: 続ける, which carries on the request that stopped at the turn limit; userMessage is then what the pane
+        // shows for it (CONTINUE_REQUEST), as the conversation shows it to the model too.
         private async Task SendAsync(WindowPane pane, string userMessage, bool fromOutside, bool continues = false)
         {
             if (IsBusy)
@@ -1512,6 +1426,7 @@ namespace Pptcom
             {
                 Request = userMessage,
                 Continues = continues,
+                ContextLimit = _settings.ContextLimit,
                 Started = DateTime.Now,
                 Pane = pane,
                 Endpoint = _llm.BaseUrl,
@@ -1525,7 +1440,8 @@ namespace Pptcom
                 await RunAgentAsync(userMessage, run).ConfigureAwait(true);
                 // max_turns: the model was still calling tools when the turn limit stopped it. max_tokens: a reply
                 // reached the output limit before it said anything to do (see RunAgentAsync).
-                run.Outcome = run.DeckClosed ? "deck_closed" : run.HitTurnLimit ? "max_turns" : run.HitTokenLimit ? "max_tokens" : "completed";
+                run.Outcome = run.DeckClosed ? "deck_closed" : run.HitTurnLimit ? "max_turns" : run.HitTokenLimit ? "max_tokens" :
+                              run.ContextFull ? "context_full" : run.CompactionFailed ? "compaction_failed" : "completed";
             }
             catch (OperationCanceledException)
             {
@@ -1535,6 +1451,7 @@ namespace Pptcom
             catch (Exception ex)
             {
                 run.Outcome = "error: " + ex.Message;
+                run.ErrorDetail = MessagesOf(ex);
                 throw;
             }
             finally
@@ -1557,13 +1474,26 @@ namespace Pptcom
 
             try
             {
-                c.Earlier.AddRange(ShortenForLater(run.Messages, run.FirstOwnMessage, (run.HandEdits is not null ? run.HandEdits + "\n" : "") + run.Request +
-                                                                                      (run.Selection is not null ? "\n" + run.Selection : "")));
+                // The ending, what the user was shown, goes last as the model's own words, in their language: a reply in
+                // English there would draw the next replies into English.
+                string? ending = EndingText(run);
+                c.Earlier.AddRange(Compaction.ShortenForLater(run.Messages, run.FirstOwnMessage, (run.HandEdits is not null ? run.HandEdits + "\n" : "") + run.Request +
+                                                                                                   (run.Selection is not null ? "\n" + run.Selection : ""), ending));
                 // From after the earlier requests it was sent with: a request that carried on another one keeps that one too.
-                int own = 1 + run.EarlierMessages;
-                c.Stopped = run.Outcome == "max_turns" ? new StoppedRequest(run.EarlierMessages, run.Messages.GetRange(own, run.Messages.Count - own)) : null;
+                c.Stopped = null;
+                if (run.Outcome == "max_turns")
+                {
+                    int own = 1 + run.EarlierMessages;
+                    List<ChatMessage> kept = run.Messages.GetRange(own, run.Messages.Count - own);
+                    if (ending is not null)
+                    {
+                        kept.Add(new ChatMessage("assistant", ending));
+                    }
+
+                    c.Stopped = new StoppedRequest(run.EarlierMessages, kept);
+                }
+
                 run.Pane.Control.ShowContinue(c.Stopped is not null);
-                c.LastEnding = DescribeEnding(run);
                 c.LastSeen = DeckReader.TakeFingerprint(c.Engine.Presentation, c.Engine.ShapeVariables());
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
@@ -1580,12 +1510,18 @@ namespace Pptcom
             public DateTime Started;
             public string Outcome = "unknown";
             public int Turns;
+            public int ContextLimit;           // AddinSettings.ContextLimit when it started
+            public int Compactions;            // how many times its conversation was shortened with notes (CompactAsync)
+            public int CompactedAfter;         // the turn after which it was last shortened; 0: not yet
             public int ReasoningChars;
             public int ScriptLines;
             public int ServerErrors;
             public bool HitTurnLimit;
             public bool HitTokenLimit;
             public bool DeckClosed;
+            public bool ContextFull;           // stopped: still near the context limit right after being shortened
+            public bool CompactionFailed;      // stopped: its conversation passed the context limit and could not be shortened
+            public string? ErrorDetail;        // the error it ended with, as the pane showed it (AI_ERROR)
             public bool WindowGone;            // its window was closed while it ran (StopForGoneWindow)
             // The endpoint and models it was sent with (a model list may arrive meanwhile and change the settings).
             public required string Endpoint;
@@ -1810,6 +1746,8 @@ namespace Pptcom
                 ["missing_set_examples"] = run.Engine is not null ? new JArray(run.Engine.MissingSetStatements.Skip(run.MissingSetBefore).Take(5)) : [],
                 ["earlier_messages"] = run.EarlierMessages,
                 ["continues"] = run.Continues, // 続ける: carried on the request before it, which stopped at the turn limit
+                ["context_limit"] = run.ContextLimit,
+                ["compactions"] = run.Compactions,
                 ["hand_edits"] = run.HandEdits,
                 ["documents"] = run.Conversation is not null ? new JArray(run.Conversation.Documents.Select(static d => d.Describe())) : [],
                 // what the task pane showed: each tool call's first result line, and the model's reply
@@ -1958,11 +1896,6 @@ namespace Pptcom
                 run.ScriptLines = totalLines;
                 messages.Add(reply.AsMessage());
                 LogTurn(run, turn, reply);
-                if (reply.PromptTokens > ScriptElisionPromptTokens)
-                {
-                    ShortenConversation(run, messages, reply);
-                }
-
                 if (reply.ToolCalls.Count == 0)
                 {
                     // finish_reason "length": the reply reached max_tokens before it was done (a thinking model can
@@ -2009,6 +1942,10 @@ namespace Pptcom
                 {
                     run.HitTurnLimit = true;
                     run.Pane.Control.Log("AI_TURN_LIMIT", MaxTurns);
+                }
+                else if (!await KeepsRoomAsync(run, messages, conversation, turn, reply.PromptTokens, ct).ConfigureAwait(true))
+                {
+                    break;
                 }
             }
 
@@ -2088,21 +2025,107 @@ namespace Pptcom
             LogTurnSize(run, turn, reply);
         }
 
-        // The prompt passed ScriptElisionPromptTokens: older scripts and docread results leave the conversation.
-        private static void ShortenConversation(RunRecord run, List<ChatMessage> messages, ChatReply reply)
+        // After a turn whose prompt took `promptTokens`: false when the request stops for want of room. A turn right after a
+        // shortening that still takes 90% of the context limit stops it (ContextFull): shortening again would leave little
+        // out. One past the limit has the conversation shortened (CompactAsync) - not again before the turns kept whole
+        // have gone by, as there would be nothing new to leave out - and stops it when that fails (CompactionFailed).
+        // Either way the next request goes with the shortened copy of this one, its notes and how it ended in it.
+        private async Task<bool> KeepsRoomAsync(RunRecord run, List<ChatMessage> messages, Conversation conversation, int turn, int promptTokens,
+                                                CancellationToken ct)
         {
-            int elided = ElideOldScripts(messages, KeepRecentScripts);
-            if (elided > 0)
+            if (run.CompactedAfter > 0 && turn == run.CompactedAfter + 1 && promptTokens > run.ContextLimit / 10 * 9)
             {
-                run.Pane.Control.Log("SCRIPTS_ELIDED", elided);
-                LogToFile(Invariant($"(prompt {reply.PromptTokens} tok > {ScriptElisionPromptTokens}: {elided} older pptcom scripts replaced by a comment)"));
+                run.ContextFull = true;
+                run.Pane.Control.Log("AI_CONTEXT_FULL");
+                LogToFile(Invariant($"!!! prompt {promptTokens} tok right after the conversation was shortened, over 90% of the context limit {run.ContextLimit}: the request stops"));
+                return false;
             }
-            int docReads = ElideOldDocReads(messages, KeepRecentScripts);
-            if (docReads > 0)
+
+            if (promptTokens <= run.ContextLimit || turn - run.CompactedAfter <= Compaction.KeepRecent)
             {
-                run.Pane.Control.Log("DOC_READS_ELIDED", docReads);
-                LogToFile(Invariant($"(prompt {reply.PromptTokens} tok > {ScriptElisionPromptTokens}: {docReads} older docread results cut to their first line)"));
+                return true;
             }
+
+            if (await CompactAsync(run, messages, conversation, turn, promptTokens, ct).ConfigureAwait(true))
+            {
+                return true;
+            }
+
+            run.CompactionFailed = true;
+            run.Pane.Control.Log("AI_COMPACTION_FAILED");
+            LogToFile(Invariant($"!!! prompt {promptTokens} tok over the context limit {run.ContextLimit} and no notes to shorten the conversation with: the request stops"));
+            return false;
+        }
+
+        // The turn's prompt passed the context limit: the conversation is shortened all at once (Agent\Compaction.cs).
+        // The model writes notes on the request first, with all of it in view; then the notes of an earlier shortening
+        // and the older reasoning, scripts, document texts and shape lists leave, and the notes go last as the model's
+        // own words. False when there are no notes: nothing is left out then (the request stops).
+        private async Task<bool> CompactAsync(RunRecord run, List<ChatMessage> messages, Conversation conversation, int turn, int promptTokens, CancellationToken ct)
+        {
+            run.CompactedAfter = turn;
+            string? notes = await WriteNotesAsync(run, messages, conversation, turn, ct).ConfigureAwait(true);
+            if (notes is null)
+            {
+                return false;
+            }
+
+            int oldNotes = Compaction.RemoveNotes(messages);
+            int reasoning = Compaction.ElideOldReasoning(messages, Compaction.KeepRecent);
+            int scripts = Compaction.ElideOldScripts(messages, Compaction.KeepRecent);
+            int docReads = Compaction.ElideOldDocReads(messages, Compaction.KeepRecent);
+            int lists = Compaction.ElideOldShapeLists(messages, Compaction.KeepRecent);
+            messages.AddRange(Compaction.NotesMessages(notes));
+            run.Compactions++;
+            run.Pane.Control.Log("CONVERSATION_COMPACTED", Tokens(promptTokens), Tokens(run.ContextLimit));
+            LogToFile(Invariant($"(prompt {promptTokens} tok > context limit {run.ContextLimit}: left out the reasoning of {reasoning} turns, {scripts} pptcom scripts, ") +
+                      Invariant($"{docReads} docread texts, {lists} shape lists and {oldNotes / 2} earlier notes; the notes go last)"));
+            return true;
+        }
+
+        // The model's notes on the request (Agent\compaction-prompt.txt), or null when there are none. Asked for after
+        // the conversation as it is, with the same tools, which it may not call: the server has all of it but that last
+        // message and the turn's results in its prefix cache, so the notes cost little more than writing them. A failure
+        // on the server's side waits for 再試行 as a turn does (中止 ends the request); any other gives no notes.
+        private async Task<string?> WriteNotesAsync(RunRecord run, List<ChatMessage> messages, Conversation conversation, int turn, CancellationToken ct)
+        {
+            List<ChatMessage> asking = [.. messages, new ChatMessage("user", CompactionPrompt)];
+            ChatReply reply;
+            while (true)
+            {
+                run.Pane.Control.SetStatus("STATUS_COMPACTING", turn);
+                try
+                {
+                    reply = await conversation.Llm.ChatWithoutToolsAsync(asking, ToolsFor(conversation.Documents.Count > 0), p =>
+                        run.Pane.Control.SetStatus("STATUS_COMPACTING_PROGRESS", turn, Chars(p.ReasoningChars), Chars(p.ContentChars),
+                                                   p.Elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture)),
+                        ct).ConfigureAwait(true);
+                    break;
+                }
+                catch (LlmServerException ex)
+                {
+                    run.ServerErrors++;
+                    LogToFile(Invariant($"!!! server error while writing the notes after turn {turn}: {ex.Message}"));
+                    run.Pane.Control.Log("AI_SERVER_ERROR", ServerFailureText(ex, conversation.Llm));
+                    run.Pane.Control.SetStatus("STATUS_SERVER_ERROR", turn);
+                    await WaitForRetryAsync(run, ct).ConfigureAwait(true); // throws OperationCanceledException on 中止
+                    LogToFile(Invariant($"(retry requested by the user, the notes after turn {turn})"));
+                }
+                catch (Exception ex) when (Guard.IsRecoverable(ex) && ex is not OperationCanceledException)
+                {
+                    LogToFile(Invariant($"!!! the notes after turn {turn} could not be written: ") + MessagesOf(ex));
+                    return null;
+                }
+            }
+            LogToFile(Invariant($"--- notes after turn {turn} ({reply.Elapsed.TotalSeconds:F0} s, reasoning {reply.Reasoning.Length} chars, finish {reply.FinishReason}") +
+                      Invariant($", first token {Secs(reply.FirstToken)} s, prompt {reply.PromptTokens} tok, completion {reply.CompletionTokens} tok)") +
+                      "\nreasoning:\n" + reply.Reasoning + "\ncontent:\n" + reply.Content);
+            if (reply.Content.Trim().Length == 0 && reply.Reasoning.Trim().Length > 0)
+            {
+                LogToFile("(the notes came as the reasoning, with an empty reply: the reasoning is taken as the notes)");
+            }
+
+            return Compaction.NotesOf(reply);
         }
 
         // The turn's tool calls and their results; the renderings they made follow on a user message.
@@ -2510,69 +2533,6 @@ namespace Pptcom
         {
             return t is not null ? t.Value.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture) : "-";
         }
-
-        // Replaces the script of every pptcom call except those of the last `keep` assistant turns that
-        // made one with a VBA comment saying it ran. A comment, so that a model imitating its own
-        // history writes a script that does nothing rather than a broken one. The calls themselves stay
-        // (their results refer to them). Returns how many scripts were replaced now.
-        private static int ElideOldScripts(List<ChatMessage> messages, int keep)
-        {
-            List<ChatMessage> withScripts = [.. messages.Where(static m => m.ToolCalls is not null && m.ToolCalls.Exists(static c => c.Name == "pptcom"))];
-            int replaced = 0;
-            foreach (ChatMessage m in withScripts.Take(Math.Max(0, withScripts.Count - keep)))
-            {
-                foreach (ToolCall call in m.ToolCalls.Where(static c => c.Name == "pptcom"))
-                {
-                    string script;
-                    try
-                    {
-                        script = (string?)JObject.Parse(call.Arguments)["script"] ?? "";
-                    }
-                    catch (Exception ex) when (ex is Newtonsoft.Json.JsonException or ArgumentException)
-                    {
-                        script = call.Arguments;
-                    }
-                    if (script.StartsWith(ElidedScriptMark, StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    int lines = script.Split('\n').Length;
-                    call.Arguments = new JObject { ["script"] = Invariant($"{ElidedScriptMark}{lines} lines, already run - left out of this conversation to keep it short)") }
-                        .ToString(Newtonsoft.Json.Formatting.None);
-                    replaced++;
-                }
-            }
-            return replaced;
-        }
-
-        private const string ElidedScriptMark = "' (";
-
-        // The same for what docread returned: every docread result but the newest `keep` keeps its first line
-        // (which part of which document it was) and loses the text; the model reads it again if it needs it.
-        // Returns how many results were shortened.
-        private static int ElideOldDocReads(List<ChatMessage> messages, int keep)
-        {
-            HashSet<string> ids = new(messages.Where(static m => m.ToolCalls is not null)
-                .SelectMany(static m => m.ToolCalls).Where(static c => c.Name == "docread").Select(static c => c.Id), StringComparer.Ordinal);
-            List<ChatMessage> results = [.. messages.Where(m => m.Role == "tool" && m.ToolCallId is not null && ids.Contains(m.ToolCallId))];
-            int replaced = 0;
-            foreach (ChatMessage m in results.Take(Math.Max(0, results.Count - keep)))
-            {
-                string content = m.Content ?? "";
-                int nl = content.IndexOf('\n');
-                if (nl < 0 || content.EndsWith(ElidedDocReadNote, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                m.Content = content.Substring(0, nl) + "\n" + ElidedDocReadNote;
-                replaced++;
-            }
-            return replaced;
-        }
-
-        private const string ElidedDocReadNote = "(the text is left out of this conversation to keep it short; read it again with docread if you need it)";
 
         // One line per turn in the pane: how big the request was and what came back, e.g.
         // "ターン3: 入力 5,632 tok / 出力 9,410 tok = 推論 26.6k字 + 本文 3.1k字 / 91秒" in Japanese.

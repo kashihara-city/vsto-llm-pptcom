@@ -82,7 +82,14 @@ input[type=text], select {
   border-radius: 6px;
   background: var(--bg);
 }
-input[type=text]:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+input[type=number] {
+  width: 8em;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+input[type=text]:focus, input[type=number]:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .btn {
   padding: 5px 10px;
   border: 1px solid var(--line);
@@ -96,6 +103,7 @@ input[type=text]:focus, select:focus, textarea:focus { outline: 2px solid var(--
 #apikey-state { color: var(--muted); font-size: 12px; }
 .checks { display: flex; flex-direction: column; gap: 4px; }
 .grid label.check { color: var(--text); font-size: 12px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.grid label.limit { color: var(--text); font-size: 12px; display: flex; align-items: center; gap: 6px; }
 .check input { accent-color: var(--accent); margin: 0; }
 #about { padding: 0 12px 10px; color: var(--muted); font-size: 11px; text-align: right; user-select: text; }
 #about:empty { display: none; }
