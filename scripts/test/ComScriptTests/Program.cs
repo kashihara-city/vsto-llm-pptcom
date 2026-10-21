@@ -480,6 +480,8 @@ namespace ComScriptTests
             Report("selection: the shortened request keeps the place", firstSummary.Contains("Characters(1, 4)"), firstSummary);
             string caret = SelectionContext(start: 6, length: 0, out _);
             Report("selection: a text cursor gives its place", caret.Contains("before character 6") && !caret.Contains("selected text"), caret);
+            Report("selection: only the selection is to change, the rest is suggested afterwards",
+                   first.Contains("change only that") && first.Contains("suggest it in your reply once you are done"), first);
         }
 
         // A slide's rendering keeps the slide's shape at 4/3 px per point (a 4:3 slide is not stretched to 16:9), and

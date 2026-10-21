@@ -612,8 +612,11 @@ namespace Pptcom.ComProxy
                 return "";
             }
 
+            // Only that: a model that finds the like of it nearby (the other cards of the slide) tends to change them
+            // too, for a uniform look; it may offer that, after the change the user asked for.
             sb.Append("\"This\", \"here\" and the like in the request most likely mean ").Append(meaning)
-              .Append("; ignore it when the request is about something else.\n\n");
+              .Append("; when they do, change only that. If more of the same would look better, suggest it in your reply once you are done. ")
+              .Append("Ignore it when the request is about something else.\n\n");
             return sb.ToString();
         }
 
