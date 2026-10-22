@@ -8,7 +8,10 @@ namespace Pptcom
     //
     //   HKCU\Software\KashiharaCity\pptcom  endpoint, chat_model, image_model (REG_SZ);
     //                                        external_control, save_progress, open_pane (REG_DWORD 0/1, add-in only);
-    //                                        context_limit (REG_DWORD, tokens, add-in only)
+    //                                        context_limit (REG_DWORD, tokens, add-in only);
+    //                                        AppVersion (REG_SZ, the installed version, written by the MSI) and
+    //                                        LatestVersion (REG_SZ, the version an administrator hands out by group
+    //                                        policy), for the logon script that installs it; the add-in reads neither
     //   Windows Credential Manager           generic credential "KashiharaCity/pptcom:api_key" (the API key,
     //                                        sent as the Bearer token; never written to disk in plain text)
     //

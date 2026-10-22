@@ -11,7 +11,7 @@
     public key, so the "publisher cannot be verified" trust prompt does not appear. The key is not in
     this file: build.ps1 reads it from the signed .vsto and writes Signing.wxi (temp\build\pptcom.Installer\obj\generated\).
   - Settings (HKCU\Software\KashiharaCity\pptcom values and the "KashiharaCity/pptcom:api_key" credential) are not
-    touched and survive uninstall.
+    touched and survive uninstall. The one value it writes there is AppVersion, the installed version, removed with it.
   - Language-neutral (Language 0): it has no text of its own, and Windows Installer's own windows (the one that asks
     to close PowerPoint) come in English whatever the package's language. Older versions are found whatever their
     language (IgnoreLanguage): 0.0.6 and before are 1033, and MajorUpgrade otherwise looks for the package's own
@@ -45,6 +45,7 @@
       <ComponentGroupRef Id="AddinFiles" />
       <ComponentRef Id="AddinRegistration" />
       <ComponentRef Id="AddinTrust" />
+      <ComponentRef Id="AppVersion" />
     </Feature>
   </Package>
 
@@ -96,6 +97,13 @@
         <RegistryValue Name="Url" Type="string" Value="file:///[INSTALLFOLDER]pptcom.vsto" KeyPath="yes" />
         <RegistryValue Name="PublicKey" Type="string" Value="$(var.PublicKey)" />
       </RegistryKey>
+    </Component>
+
+    <!-- The installed version, next to the settings: a logon script compares it with LatestVersion, the version an
+         administrator hands out by group policy, and runs the MSI only when they differ. Written when installed and
+         removed with the add-in, so it never names a version that is not there. -->
+    <Component Id="AppVersion" Directory="INSTALLFOLDER" Guid="4C1C9E20-2C1B-4F8B-9D0B-5B1E7E0A1D04">
+      <RegistryValue Root="HKCU" Key="Software\KashiharaCity\pptcom" Name="AppVersion" Type="string" Value="[ProductVersion]" KeyPath="yes" />
     </Component>
   </Fragment>
 </Wix>
