@@ -12,14 +12,18 @@
     this file: build.ps1 reads it from the signed .vsto and writes Signing.wxi (temp\build\pptcom.Installer\obj\generated\).
   - Settings (HKCU\Software\KashiharaCity\pptcom values and the "KashiharaCity/pptcom:api_key" credential) are not
     touched and survive uninstall.
+  - Language-neutral (Language 0): it has no text of its own, and Windows Installer's own windows (the one that asks
+    to close PowerPoint) come in English whatever the package's language. Older versions are found whatever their
+    language (IgnoreLanguage): 0.0.6 and before are 1033, and MajorUpgrade otherwise looks for the package's own
+    language only, so a package of another language would install beside them.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <?include $(var.GeneratedDir)Signing.wxi ?>
 
   <Package Name="vsto-llm-pptcom" Manufacturer="Kashihara City" Version="$(var.Version)" Scope="perUser"
-           UpgradeCode="79570C7A-CBF7-4EBF-9EBA-50A23AAC6154" Language="1033">
+           UpgradeCode="79570C7A-CBF7-4EBF-9EBA-50A23AAC6154" Language="0">
     <SummaryInformation Description="vsto-llm-pptcom - an LLM edits the open PowerPoint presentation through pptcom" />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of vsto-llm-pptcom is already installed." />
+    <MajorUpgrade IgnoreLanguage="yes" DowngradeErrorMessage="A newer version of vsto-llm-pptcom is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <StandardDirectory Id="LocalAppDataFolder">
