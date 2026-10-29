@@ -49,6 +49,7 @@ namespace ComScriptTests
             VbaOnlyTests();
             StatementTests();
             DeckTests();
+            TypeRuleTests();
             SelectionTests();
             RenderSizeTests();
             OverlapTests();
@@ -442,28 +443,6 @@ namespace ComScriptTests
             Report("deck: other properties can still be set",
                    ComSecurityPolicy.IsSetAllowedOn("PageSetup", "FirstSlideNumber") && ComSecurityPolicy.IsSetAllowedOn("Shape", "Width"), "refused");
 
-            // A rule by type holds whether the object's ITypeInfo names the interface with its leading _ or not
-            // (PowerPoint reports _CustomXMLPart, _Presentation...), for the call itself and for the hints alike.
-            foreach ((string type, string member) in new[] { ("CustomXMLPart", "Load"), ("Presentation", "Merge"), ("Application", "Presentations"), ("Slide", "ApplyTheme"), ("PageSetup", "SlideWidth") })
-            {
-                foreach (string name in new[] { type, "_" + type })
-                {
-                    bool refused = member == "SlideWidth" ? !ComSecurityPolicy.IsSetAllowedOn(name, member)
-                                                          : ComSecurityPolicy.CheckMemberOnType(name, member) is not null && !ComSecurityPolicy.IsMemberAllowedOn(name, member);
-                    Report("policy: " + name + "." + member + " is refused", refused, "allowed");
-                }
-            }
-            // The custom XML parts never become a handle, under either name: some of their members read files or put a
-            // schema in the user's settings. Application and CommandBars stay out too; the deck's own objects stay in.
-            foreach (string type in new[] { "CustomXMLParts", "CustomXMLPart", "CustomXMLSchemaCollection", "CustomXMLSchema", "CustomXMLNode", "Application", "CommandBars" })
-            {
-                Report("policy: " + type + " is not kept", !ComSecurityPolicy.IsReturnTypeAllowed(type) && !ComSecurityPolicy.IsReturnTypeAllowed("_" + type), "kept");
-            }
-            Report("policy: the deck's objects are kept",
-                   Array.TrueForAll(["Shapes", "_Slide", "Shape", "TextRange", "_Presentation", "Slides"], ComSecurityPolicy.IsReturnTypeAllowed), "refused");
-            Report("policy: Slides.Add and Shapes.AddShape stay open",
-                   ComSecurityPolicy.IsMemberAllowedOn("Slides", "Add") && ComSecurityPolicy.IsMemberAllowedOn("Shapes", "AddShape"), "refused");
-
             // pptread takes a slide, a range or a list of them; each slide once, in order, at most MaxSlidesPerRead, and
             // the numbers the deck does not have are named.
             foreach ((int slides, string spec, string expected, string inText) in new[]
@@ -488,6 +467,43 @@ namespace ComScriptTests
             // A shape list starts with its slide's size, so a size the user changed meanwhile shows.
             string brief = DeckReader.Brief(new SelDeck(new SelSlide()), 1);
             Report("deck: a shape list starts with its slide's size", brief.StartsWith("Slide 1 (720x540 pt, 1 shapes):", StringComparison.Ordinal), brief);
+        }
+
+        // The policy's rules by type (ComSecurityPolicy): whichever form of a type's name PowerPoint reports, what
+        // may become a handle, and what it refuses when it cannot read a type.
+        private static void TypeRuleTests()
+        {
+            // A rule by type holds whether the object's ITypeInfo names the interface with its leading _ or not
+            // (PowerPoint reports _CustomXMLPart, _Presentation...), for the call itself and for the hints alike.
+            foreach ((string type, string member) in new[] { ("CustomXMLPart", "Load"), ("Presentation", "Merge"), ("Application", "Presentations"), ("Slide", "ApplyTheme"), ("PageSetup", "SlideWidth") })
+            {
+                foreach (string name in new[] { type, "_" + type })
+                {
+                    bool refused = member == "SlideWidth" ? !ComSecurityPolicy.IsSetAllowedOn(name, member)
+                                                          : ComSecurityPolicy.CheckMemberOnType(name, member) is not null && !ComSecurityPolicy.IsMemberAllowedOn(name, member);
+                    Report("policy: " + name + "." + member + " is refused", refused, "allowed");
+                }
+            }
+            // The custom XML parts never become a handle, under either name: some of their members read files or put a
+            // schema in the user's settings. Application and CommandBars stay out too; the deck's own objects stay in.
+            foreach (string type in new[] { "CustomXMLParts", "CustomXMLPart", "CustomXMLSchemaCollection", "CustomXMLSchema", "CustomXMLNode", "Application", "CommandBars" })
+            {
+                Report("policy: " + type + " is not kept", !ComSecurityPolicy.IsReturnTypeAllowed(type) && !ComSecurityPolicy.IsReturnTypeAllowed("_" + type), "kept");
+            }
+            Report("policy: the deck's objects are kept",
+                   Array.TrueForAll(["Shapes", "_Slide", "Shape", "TextRange", "_Presentation", "Slides"], ComSecurityPolicy.IsReturnTypeAllowed), "refused");
+            Report("policy: Slides.Add and Shapes.AddShape stay open",
+                   ComSecurityPolicy.IsMemberAllowedOn("Slides", "Add") && ComSecurityPolicy.IsMemberAllowedOn("Shapes", "AddShape"), "refused");
+            // What the policy cannot check, it refuses: a COM object whose type name could not be read is not kept as a
+            // result, and nothing is called or set on one.
+            Guid powerPointLibrary = new("91493440-5A91-11CF-8700-00AA0060263B");
+            Report("policy: a result is kept only from an Office type library, with a name that may be kept",
+                   ComSecurityPolicy.IsReturnKindAllowed(powerPointLibrary, "Shapes") && !ComSecurityPolicy.IsReturnKindAllowed(powerPointLibrary, typeName: null) &&
+                   !ComSecurityPolicy.IsReturnKindAllowed(typeLib: null, "Shapes") && !ComSecurityPolicy.IsReturnKindAllowed(Guid.Empty, "Shapes") &&
+                   !ComSecurityPolicy.IsReturnKindAllowed(powerPointLibrary, "_CustomXMLParts"), "kept");
+            Report("policy: nothing is called or set on an object whose type could not be read",
+                   ComSecurityPolicy.CheckMemberOnType(typeName: null, "Count") is not null && ComSecurityPolicy.CheckSetOnType(typeName: null, "Left") is not null &&
+                   ComSecurityPolicy.CheckMemberOnType("Shapes", "Count") is null && ComSecurityPolicy.CheckSetOnType("Shape", "Left") is null, "allowed");
         }
 
         // What the user had selected reaches the model with its place in the shape's text (DeckReader.ReadSelection and

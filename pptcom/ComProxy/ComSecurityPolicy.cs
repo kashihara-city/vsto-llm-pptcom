@@ -142,6 +142,10 @@ namespace Pptcom.ComProxy
             " cannot be set: changing the slide size or orientation moves and rescales every shape on every slide, and the layout breaks. " +
             "Keep the slide as it is; if the user wants another size or orientation, ask them in your reply to change it in PowerPoint (Design > Slide Size).";
 
+        // The policy refuses what it cannot check: a COM object whose type name cannot be read is refused by every rule
+        // by type, as a result (IsReturnKindAllowed) and as a target (CheckMemberOnType, CheckSetOnType).
+        private const string UnreadableType = " (the object's type could not be read, so its rules cannot be checked)";
+
         // For a property set: the refusal for the model, or null when the property may be set on this object.
         public static string? CheckSetOnTarget(object? target, string? member)
         {
@@ -150,8 +154,18 @@ namespace Pptcom.ComProxy
                 return null;
             }
 
-            string? typeName = TryGetTypeName(target);
-            return typeName is not null && !IsSetAllowedOn(typeName, member) ? typeName.TrimStart('_') + "." + member + SlideSizeRefusal : null;
+            return CheckSetOnType(TryGetTypeName(target), member);
+        }
+
+        // The same by type name (null: it could not be read).
+        internal static string? CheckSetOnType(string? typeName, string member)
+        {
+            if (typeName is null)
+            {
+                return member + UnreadableType;
+            }
+
+            return IsSetAllowedOn(typeName, member) ? null : typeName.TrimStart('_') + "." + member + SlideSizeRefusal;
         }
 
         public static bool IsSetAllowedOn(string? typeName, string member)
@@ -174,14 +188,19 @@ namespace Pptcom.ComProxy
                 return null;
             }
 
-            string? typeName = TryGetTypeName(target);
-            return typeName is null ? null : CheckMemberOnType(typeName, member);
+            return CheckMemberOnType(TryGetTypeName(target), member);
         }
 
         // The rule for `member` on an object of `typeName` (either form, NameForms), as CheckMemberOnTarget and the
-        // error hints (IsMemberAllowedOn) both apply it; null when there is none.
-        internal static string? CheckMemberOnType(string typeName, string member)
+        // error hints (IsMemberAllowedOn) both apply it; null when there is none. A name that could not be read (null)
+        // is a refusal.
+        internal static string? CheckMemberOnType(string? typeName, string member)
         {
+            if (typeName is null)
+            {
+                return member + UnreadableType;
+            }
+
             foreach (string name in NameForms(typeName))
             {
                 if (BlockedMembersByType.TryGetValue(name, out HashSet<string> blocked) && blocked.Contains(member))
@@ -253,14 +272,15 @@ namespace Pptcom.ComProxy
                 return false;
             }
 
-            Guid? libGuid = TryGetTypeLibGuid(value);
-            if (libGuid is null || !AllowedTypeLibGuids.Contains(libGuid.Value))
-            {
-                return false;
-            }
+            return IsReturnKindAllowed(TryGetTypeLibGuid(value), TryGetTypeName(value));
+        }
 
-            string? typeName = TryGetTypeName(value);
-            return typeName is null || IsReturnTypeAllowed(typeName);
+        // A COM result by its type library and its type name, either of them null when it could not be read: kept only
+        // from an Office type library, and with a name that may be kept (IsReturnTypeAllowed). An unread name is refused,
+        // as an unread type library is.
+        internal static bool IsReturnKindAllowed(Guid? typeLib, string? typeName)
+        {
+            return typeLib is Guid lib && AllowedTypeLibGuids.Contains(lib) && typeName is not null && IsReturnTypeAllowed(typeName);
         }
 
         private static Guid? TryGetTypeLibGuid(object comObject)
