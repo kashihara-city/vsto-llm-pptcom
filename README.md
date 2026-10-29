@@ -72,7 +72,7 @@ HKEY_CURRENT_USER\Software\
 └─ Microsoft\
    ├─ Office\PowerPoint\Addins\pptcom\  起動時にアドインを読み込む設定（インストーラが保存）
    │  └─ Description, FriendlyName, LoadBehavior (3), Manifest
-   ├─ VSTO\Security\Inclusion\{9E192468-0F34-4BCE-9263-052B3358849B}\
+   ├─ VSTO\Security\Inclusion\9E192468-0F34-4BCE-9263-052B3358849B\
    │  └─ Url, PublicKey                 アドインの信頼済み一覧（インストーラが保存）
    ├─ VSTO\SolutionMetadata\            読み込んだ.vstoごとの情報（アドインが保存）
    └─ Office\16.0\PowerPoint\AddInLoadTimes\
@@ -193,8 +193,6 @@ C#のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.N
 | `python -X utf8 scripts/test/no-secrets.py` | Gitが追跡するファイルに、私有IP、社内のホスト名、APIキー、開発機のパス、鍵や証明書が無いこと。`--history`で全コミット、`--self-test`で自分自身を確かめる。パターンで見分けられない語は`notes/secrets-denylist.txt`（Gitの管理外、1行に1語）に書くと照合する |
 | `python -X utf8 scripts/deps/netanalyzers-config.py --check` | NetAnalyzersの規則の一覧が、固定した版のパッケージと合うこと |
 | `python -X utf8 scripts/test/build-warnings.py <ログ>...` | ビルドの警告が、解析器1つが読み込めない既知のCS8032だけであること（ログはMSBuildの`-flp:logfile=<ログ>;warningsonly`） |
-
-SBOMの検査（`scripts/test/sbom.py`）は「リリースと検証」を見てください。
 
 ### 実機でのテスト
 
