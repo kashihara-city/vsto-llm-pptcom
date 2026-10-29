@@ -32,12 +32,13 @@ PowerPointで開いているプレゼンテーションを、LLMが作ったり�
 
 - 接続先URL（必須）
 - LLMモデル名（必須）
+- コンテキスト上限: このトークン数を超えると、経過を要約します。既定値は、そのモデルの最大入力の75%です（自動検出できなければ100,000）。
 - 画像生成モデル名（使用する場合）
+- 画像生成プロンプト: AIが画像を頼むときの指示の書き方と大きさ（今はZ-Image用のみ）
 - APIキー（必要な場合）
 - スライドを開いたらAIアシスタントを表示する: アドインを自動で表示するかどうか（既定でオン）
 - 途中経過を保存する: 記録を`%LOCALAPPDATA%\KashiharaCity\pptcom\`に残すかどうか（既定でオフ）
 - 他のプログラムからの操作を許可する: 他のプログラムからの操作を受け付けるか（既定でオフ）
-- コンテキスト上限: このトークン数を超えると、経過を要約します。既定値は、そのモデルの最大入力の75%です（自動検出できなければ100,000）。
 
 ## インストールされるものと書き込む場所
 
@@ -60,11 +61,12 @@ PowerPointで開いているプレゼンテーションを、LLMが作ったり�
 ```
 HKEY_CURRENT_USER\Software\
 ├─ KashiharaCity\pptcom\
-│  ├─ endpoint, chat_model, image_model ＊接続先とモデル（アドインが保存、REG_SZ）
-│  ├─ open_pane, save_progress, external_control   ＊3つのスイッチ（アドインが保存、REG_DWORD 0/1）
-│  ├─ context_limit                    ＊コンテキスト上限（アドインが保存、REG_DWORD）
-│  ├─ AppVersion                       入っているバージョン（インストーラが保存、REG_SZ）
-│  ├─ LatestVersion                    ＊配布するバージョン（管理者がグループポリシーで設定、REG_SZ）
+│  ├─ endpoint                         ＊接続先（アドインが保存）
+│  ├─ chat_model, context_limit        ＊LLMモデルとコンテキスト上限（アドインが保存）
+│  ├─ image_model, image_prompt        ＊画像生成モデルと画像生成プロンプト（アドインが保存）
+│  ├─ open_pane, save_progress, external_control   ＊3つのスイッチ（アドインが保存）
+│  ├─ AppVersion                       入っているバージョン（インストーラが保存）
+│  ├─ LatestVersion                    ＊配布するバージョン（管理者がグループポリシーで設定）
 │  └─ Installer\                        インストーラの参照情報（インストーラが保存）
 │     └─ Files, WebView2LoaderX86, WebView2LoaderX64
 └─ Microsoft\
@@ -77,9 +79,21 @@ HKEY_CURRENT_USER\Software\
       └─ pptcom                         読み込みにかかった時間（Office本体が保存）
 ```
 
-＊は、組織で配布する際に、グループポリシーで設定する意味がある設定です。
 
-`AppVersion`と`LatestVersion`は、アドイン自身は読み書きしません。ログオンスクリプト等で配布したり、組織でバージョンコントロールする際の目印です。
+＊は、組織で配布する際に、グループポリシーで設定する意味がある設定です。以下はその設定例です。
+
+| 値の名前 | 型 | 例 | 書き方 |
+|---|---|---|---|
+| `endpoint` | REG_SZ | `https://litellm.example.com` | スキームとホスト名（とポート）まで。パスは使わない（`/v1/chat/completions`などはアドインが付ける） |
+| `chat_model` | REG_SZ | `Qwen3-VL-32B-Instruct` | 接続先のモデル一覧（`/v1/models`）に出る名前。スライドの描画を画像で渡すので、画像を読めるモデル |
+| `context_limit` | REG_DWORD | `100000` | トークン数（8000〜10000000）。無いときや範囲外なら、モデルの最大入力の75%（分からなければ100,000）になる |
+| `image_model` | REG_SZ | `z-image-turbo` | 接続先のモデル一覧に出る、画像生成（`/v1/images/generations`）のモデル。空なら画像を作らない |
+| `image_prompt` | REG_SZ | `zimage` | 画像生成プロンプト。今は`zimage`（Z-Image用）だけ。無いときや知らない値はこれになる |
+| `open_pane` | REG_DWORD | `1` | 1でスライドを開いたらAIアシスタントを表示する。無ければ1 |
+| `save_progress` | REG_DWORD | `0` | 1で途中経過を保存する。無ければ0 |
+| `external_control` | REG_DWORD | `0` | 1で他のプログラムからの操作を許可する。無ければ0 |
+| `LatestVersion` | REG_SZ | `0.0.7` | 配布するバージョン。`AppVersion`と同じ書き方 |
+
 
 ### `%LOCALAPPDATA%\KashiharaCity\pptcom\`
 
@@ -114,7 +128,7 @@ PowerPoint
    │   ├─ ThisAddIn             ウィンドウごとの作業ウィンドウと会話（添付資料も会話に属す）、エージェントのループ
    │   ├─ AddinSettings         設定（レジストリ）とAPIキー（資格情報マネージャー）
    │   ├─ AddinAutomation       他のプログラムからの操作（「他のプログラムからの操作を許可する」がオンのときだけ）
-   │   ├─ Agent                 LLMとの通信（OpenAI互換のAPI、ストリーミング）、会話を短くする処理
+   │   ├─ Agent                 LLMとの通信（OpenAI互換のAPI、ストリーミング）、会話を短くする処理、依頼ごとに渡すツールと指示の組み立て
    │   ├─ ComProxy              pptcom（資料の画像もd1_img3などの変数として貼れる）
    │   ├─ Documents             添付資料の保持、docread、画像の変換
    │   ├─ AiTaskPaneControl     作業ウィンドウ（WebView2）の土台。DLL内のファイルを返す
@@ -123,6 +137,7 @@ PowerPoint
    ├─ 結合したライブラリ         Newtonsoft.Json、WebView2 SDK（Core、WinForms）
    ├─ 埋め込みのファイル（Agent/）
    │   ├─ system-prompt.txt / tools.json   モデルへの指示とツールの定義（AgentFileが読む）
+   │   ├─ image-prompts/zimage.json        画像生成プロンプト（Z-Image用）。
    │   └─ compaction-prompt.txt            会話を短くする前に、モデルに経過のメモを書かせる指示
    └─ 埋め込みのファイル（UI/web/）
        ├─ 画面          index.html / taskpane.js / taskpane.css
@@ -169,9 +184,9 @@ C#のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.N
 | 実行するもの | 調べること |
 |---|---|
 | `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcomスクリプトの解析と実行。式の値をVBScriptの値（`expected.tsv`。式を足したら`make_expected.vbs`で作り直す）と、VBScriptと違うところはVBAの値と照らす。受け付ける文と断る文、モデルへの報告の文、依頼のプレゼンテーションの固定、ほかのプレゼンテーションに届くメンバーを断ること |
-| `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMの応答の読み取り（模擬サーバー）。終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答、サーバー側の失敗、中止と待ち時間の上限、`mm_processor_kwargs`の送り直し、画像の待ちの終わり方。要約の頼み方（ツールを付けたまま`tool_choice: none`）、モデル一覧の最大入力の読み取り、会話を短くするときに省くもの、メモの置き方、後の依頼に渡す短い経過 |
+| `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMの応答の読み取り（模擬サーバー）。終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答、サーバー側の失敗と接続先に届かない失敗の見分け、中止と待ち時間の上限、`mm_processor_kwargs`の送り直し、画像の待ちの終わり方。要約の頼み方（ツールを付けたまま`tool_choice: none`）、モデル一覧の最大入力の読み取り、会話を短くするときに省くもの、メモの置き方、後の依頼に渡す短い経過。依頼ごとに渡すツールとシステムプロンプト（資料が無ければdocread、画像生成モデルが無ければimagegenと画像の行を外す） |
 | `node scripts/test/docs-queue.cjs` | 作業ウィンドウの添付の受け付け（`docs.js`）。読み出す前に「読み取り中」になり、どこで失敗しても添付か失敗で終わり、後のファイルが続くこと。画像は変換せずにそのまま添付し、貼り付けは文字が無いときだけ添付すること |
-| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼が1つだけ送られること、依頼の終わり方の表示、ターンの上限で止まったあとの「続ける」、コンテキスト上限の入力 |
+| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼が1つだけ送られること、依頼の終わり方の表示、ターンの上限で止まったあとの「続ける」、コンテキスト上限の入力、モデルの選択肢（未選択、使わない）と画像生成プロンプト、APIキーの入力（一度だけ送り、欄に残さない） |
 | `python -X utf8 scripts/test/rig-stream.py` | リグ（`tool_loop.py`）の応答の読み取りと失敗の分け方、証明書の検証、失敗した回も記録が残ること（模擬サーバーと模擬のランナー） |
 | `python -X utf8 scripts/test/js-syntax.py` | 作業ウィンドウのJavaScriptが構文として読めること（Nodeの`--check`） |
 | `python -X utf8 scripts/test/i18n.py` | 文言のコードが`ja.json`にあり、値の数と言語がそろい、コードに日本語の文が無いこと |

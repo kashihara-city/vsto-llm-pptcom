@@ -61,8 +61,9 @@ namespace Pptcom.UI
         // Settings area: the endpoint is applied with the 取得 button (or Enter), models on selection.
         public event EventHandler<TextEventArgs>? EndpointSubmitted;
         public event EventHandler<TextEventArgs>? ChatModelSelected;
+        // Empty: （使わない）, no image generation.
         public event EventHandler<TextEventArgs>? ImageModelSelected;
-        // The API key typed into the masked dialog (never shown back; stored in Windows Credential Manager).
+        // The API key typed into the settings' password field (never shown back; stored in Windows Credential Manager).
         public event EventHandler<TextEventArgs>? ApiKeyEntered;
         // 新しい会話: forget the earlier requests on this deck (their summary, variables and images).
         public event EventHandler? NewConversationRequested;
@@ -73,6 +74,8 @@ namespace Pptcom.UI
         public event EventHandler<SwitchEventArgs>? OpenPaneChanged;
         // The context limit as typed (AddinSettings.ContextLimit), checked by the add-in.
         public event EventHandler<TextEventArgs>? ContextLimitChanged;
+        // The image prompt chosen (AddinSettings.ImagePrompt), checked by the add-in.
+        public event EventHandler<TextEventArgs>? ImagePromptChanged;
         // The page started converting a document (UI\web\docs.js): its ticket and name.
         public event EventHandler<DocumentStartedEventArgs>? DocumentStarted;
         // A document the page converted (UI\web\docs.js): {ticket, name, size, format, text, images, thumb}.
@@ -321,11 +324,7 @@ namespace Pptcom.UI
 
                     break;
                 case "imageModel":
-                    if (value.Length > 0)
-                    {
-                        ImageModelSelected?.Invoke(this, new TextEventArgs(value));
-                    }
-
+                    ImageModelSelected?.Invoke(this, new TextEventArgs(value));
                     break;
                 case "externalControl":
                     ExternalControlChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
@@ -339,11 +338,13 @@ namespace Pptcom.UI
                 case "contextLimit":
                     ContextLimitChanged?.Invoke(this, new TextEventArgs(value.Trim()));
                     break;
+                case "imagePrompt":
+                    ImagePromptChanged?.Invoke(this, new TextEventArgs(value));
+                    break;
                 case "apiKey":
-                    string key = (AskApiKey(FindForm()) ?? "").Trim();
-                    if (key.Length > 0)
+                    if (value.Trim().Length > 0)
                     {
-                        ApiKeyEntered?.Invoke(this, new TextEventArgs(key));
+                        ApiKeyEntered?.Invoke(this, new TextEventArgs(value.Trim()));
                     }
 
                     break;
@@ -387,57 +388,6 @@ namespace Pptcom.UI
         public void SetApiKeyState(bool isSet)
         {
             Post(new JObject { ["type"] = "apiKeyState", ["value"] = isSet });
-        }
-
-        // Small masked input dialog. Returns null when cancelled; the key is never displayed.
-        // The key typed, or null when the dialog was cancelled.
-        private static string? AskApiKey(IWin32Window owner)
-        {
-            Font font = new("Yu Gothic UI", 9F);
-            using Form form = new()
-            {
-                Text = Texts.Get("API_KEY_DIALOG_TITLE"),
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                StartPosition = FormStartPosition.CenterScreen,
-                MinimizeBox = false,
-                MaximizeBox = false,
-                ShowInTaskbar = false,
-                ClientSize = new Size(360, 118),
-                Font = font,
-            };
-            Label note = new()
-            {
-                Text = Texts.Get("API_KEY_DIALOG_NOTE"),
-                Location = new Point(12, 10),
-                Size = new Size(336, 34),
-            };
-            TextBox box = new()
-            {
-                UseSystemPasswordChar = true,
-                Location = new Point(12, 48),
-                Size = new Size(336, 24),
-            };
-            Button ok = new()
-            {
-                Text = Texts.Get("DIALOG_SAVE"),
-                DialogResult = DialogResult.OK,
-                Location = new Point(192, 82),
-                Size = new Size(75, 26),
-            };
-            Button cancel = new()
-            {
-                Text = Texts.Get("DIALOG_CANCEL"),
-                DialogResult = DialogResult.Cancel,
-                Location = new Point(273, 82),
-                Size = new Size(75, 26),
-            };
-            form.Controls.Add(note);
-            form.Controls.Add(box);
-            form.Controls.Add(ok);
-            form.Controls.Add(cancel);
-            form.AcceptButton = ok;
-            form.CancelButton = cancel;
-            return form.ShowDialog(owner) == DialogResult.OK ? box.Text : null;
         }
 
         // A file attached from outside (AddinAutomation.Attach): the page converts it like a dropped one and
@@ -529,7 +479,7 @@ namespace Pptcom.UI
             Post(new JObject { ["type"] = "about", ["text"] = text.ToJson() });
         }
 
-        public void SetOptions(bool externalControl, bool saveProgress, bool openPane, int contextLimit)
+        public void SetOptions(bool externalControl, bool saveProgress, bool openPane, int contextLimit, string imagePrompt)
         {
             Post(new JObject
             {
@@ -538,6 +488,7 @@ namespace Pptcom.UI
                 ["saveProgress"] = saveProgress,
                 ["openPane"] = openPane,
                 ["contextLimit"] = contextLimit,
+                ["imagePrompt"] = imagePrompt,
             });
         }
 

@@ -162,8 +162,8 @@ namespace ComScriptRunner
             return 0;
         }
 
-        // Same as the add-in's zimage path (ThisAddIn.RunToolAsync): VBA string rules, line breaks as spaces.
-        private static string ZimageLine(JObject req)
+        // Same as the add-in's imagegen path (ThisAddIn.RunToolAsync): VBA string rules, line breaks as spaces.
+        private static string ImageLine(JObject req)
         {
             static string lit(string? s)
             {
@@ -497,17 +497,17 @@ namespace ComScriptRunner
             return null;
         }
 
-        // A script, or {"zimage": ...}: parsed and run as the add-in does, with its report.
+        // A script, or {"imagegen": ...}: parsed and run as the add-in does, with its report.
         private static JObject ScriptReply(JObject req, ComProxyEngine engine, List<string> knownIds)
         {
             JObject reply;
-            // {"zimage": {"name", "prompt", "size"}}: the rig's zimage tool, built into the same
+            // {"imagegen": {"name", "prompt", "size"}}: the rig's imagegen tool, built into the same
             // `name = Image(...)` line the add-in uses - the only way Image() is accepted.
-            JObject? zimageRequest = req["zimage"] as JObject;
-            bool zimage = zimageRequest is not null;
-            string script = zimageRequest is not null ? ZimageLine(zimageRequest) : (string?)req["script"] ?? "";
+            JObject? imageRequest = req["imagegen"] as JObject;
+            bool image = imageRequest is not null;
+            string script = imageRequest is not null ? ImageLine(imageRequest) : (string?)req["script"] ?? "";
             int maxLines = (int?)req["maxLines"] ?? 2000; // same as the add-in
-            ComScriptParser.ParseResult parsed = ComScriptParser.Parse(script, knownIds, maxLines, allowImage: zimage);
+            ComScriptParser.ParseResult parsed = ComScriptParser.Parse(script, knownIds, maxLines, allowImage: image);
             if (!parsed.Success)
             {
                 reply = new JObject

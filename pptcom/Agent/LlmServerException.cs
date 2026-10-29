@@ -4,7 +4,8 @@ namespace Pptcom.Agent
 {
     // A failure on the server side that may go away if the same request is sent again: HTTP 5xx,
     // a connection dropped before or during the stream, an error event inside the stream, a stream that
-    // stopped sending or ended before the reply was complete.
+    // stopped sending or ended before the reply was complete. Also a request that did not reach the server (its
+    // name not resolved, no connection), which the network being back mends.
     // The add-in offers a 再試行 button for these (never retries on its own); 4xx and other
     // errors stay ordinary exceptions and end the request.
     internal sealed class LlmServerException : Exception

@@ -1,7 +1,8 @@
 "use strict";
 // The add-in (AiTaskPaneControl.cs) and this page talk only through WebView2 web messages:
 //   page -> add-in: {type: "ready" | "send" | "cancel" | "retry" | "continue" | "newChat" | "endpoint" | "chatModel" | "imageModel" | "apiKey", ...}
-//   page -> add-in also: {type: "openPane" | "saveProgress" | "externalControl", value: bool}, {type: "contextLimit", value: "<digits>"}
+//   page -> add-in also: {type: "openPane" | "saveProgress" | "externalControl", value: bool}, {type: "contextLimit", value: "<digits>"},
+//   {type: "imagePrompt", value: "<name>"}, {type: "apiKey", value: "<the key typed>"}; "imageModel" may be "" (（使わない）)
 //   add-in -> page: {type: "log" | "status" | "busy" | "retry" | "continue" | "endpoint" | "models" | "apiKeyState" | "options" | "selection" | "about", ...}
 //   ("log" and "status" carry a message: {code, args}, shown with the text of locales/<language>.json, see i18n.js)
 // Attached documents (drop, attach button, chips, PDF pages) have their own messages: see docs.js.
@@ -74,7 +75,7 @@ function finishWork(state, footer) {
 const logKinds = {
   USER_REQUEST: "user", CONTINUE_REQUEST: "user", TOOL_RESULT: "tool", TURN_SIZE: "turn", REQUEST_DONE: "done",
   AI_REPLY: "reply", AI_DONE: "reply",
-  AI_ERROR: "stopped", AI_CANCELLED: "stopped", AI_SERVER_ERROR: "error", AI_TURN_LIMIT: "error", AI_REPLY_CUT: "error",
+  AI_ERROR: "stopped", AI_CANCELLED: "stopped", AI_SERVER_ERROR: "error", AI_SERVER_UNREACHABLE: "error", AI_TURN_LIMIT: "error", AI_REPLY_CUT: "error",
   AI_CONTEXT_FULL: "error", AI_COMPACTION_FAILED: "error",
   AI_DECK_CLOSED: "stopped",
   // a request refused before it started: its block ends with the reason
@@ -200,7 +201,17 @@ $("fetch").addEventListener("click", submitEndpoint);
 endpoint.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); submitEndpoint(); } });
 chatModel.addEventListener("change", () => { post({ type: "chatModel", value: chatModel.value }); updateSummary(); });
 imageModel.addEventListener("change", () => { post({ type: "imageModel", value: imageModel.value }); updateSummary(); });
-$("apikey").addEventListener("click", () => post({ type: "apiKey" }));
+$("image-prompt").addEventListener("change", e => post({ type: "imagePrompt", value: e.target.value }));
+// The key goes to the add-in, which keeps it in Windows Credential Manager, and leaves the field at once; it is never
+// shown back (apiKeyState says only whether one is set). An empty field sends nothing.
+const apiKey = $("apikey-input");
+const submitApiKey = () => {
+  const key = apiKey.value.trim();
+  apiKey.value = "";
+  if (key) post({ type: "apiKey", value: key });
+};
+$("apikey").addEventListener("click", submitApiKey);
+apiKey.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); submitApiKey(); } });
 $("open-pane").addEventListener("change", e => post({ type: "openPane", value: e.target.checked }));
 $("save-progress").addEventListener("change", e => post({ type: "saveProgress", value: e.target.checked }));
 $("external-control").addEventListener("change", e => post({ type: "externalControl", value: e.target.checked }));
@@ -211,16 +222,25 @@ function updateSummary() {
   const host = endpoint.value.replace(/^https?:\/\//, "");
   $("settings-summary").textContent = host ? (chatModel.value || i18n.t("SETTINGS_NO_MODEL")) + i18n.t("PART_SEPARATOR") + host : i18n.t("SETTINGS_NOT_SET");
 }
-function fill(select, items, selected) {
+// `none`: the first choice, the empty model - one that may be chosen (（使わない）), or one shown only while no model is
+// chosen (（選んでください）), which cannot be chosen back.
+function fill(select, items, selected, none) {
   select.textContent = "";
   const list = items.slice();
   if (selected && !list.includes(selected)) list.unshift(selected);   // keep a saved model the endpoint no longer lists
+  if (none.choosable || !selected) {
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = none.label;
+    o.disabled = !none.choosable;
+    select.appendChild(o);
+  }
   for (const name of list) {
     const o = document.createElement("option");
     o.value = o.textContent = name;
     select.appendChild(o);
   }
-  if (selected) select.value = selected;
+  select.value = selected || "";
 }
 
 // ---- messages from the add-in -------------------------------------------------------------------
@@ -236,7 +256,7 @@ function setBusy(on, elsewhere) {
   action.disabled = waiting;
   action.title = i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND_TITLE");
   action.setAttribute("aria-label", i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND"));
-  for (const el of [endpoint, $("fetch"), chatModel, imageModel, $("apikey"), $("new-chat"), $("open-pane"), $("save-progress"), $("external-control"), $("context-limit")]) el.disabled = on;
+  for (const el of [endpoint, $("fetch"), chatModel, imageModel, apiKey, $("apikey"), $("new-chat"), $("open-pane"), $("save-progress"), $("external-control"), $("context-limit"), $("image-prompt")]) el.disabled = on;
   if (waiting) $("status").textContent = i18n.t("STATUS_BUSY_ELSEWHERE");
   if (!on) { $("status").textContent = ""; $("retry-bar").classList.remove("show"); if (work) finishWork("done"); }
   if (continueButton) continueButton.disabled = on;
@@ -251,13 +271,18 @@ const handlers = {
   continue: m => showContinue(!!m.value),
   // The settings stay folded once an endpoint is set; with none, they open so it can be entered.
   endpoint: m => { endpoint.value = m.value || ""; $("settings").open = !endpoint.value; updateSummary(); },
-  models: m => { fill(chatModel, m.chat || [], m.chatSelected); fill(imageModel, m.image || [], m.imageSelected); updateSummary(); },
-  apiKeyState: m => { $("apikey-state").textContent = i18n.t(m.value ? "API_KEY_SET" : "API_KEY_NOT_SET"); },
+  models: m => {
+    fill(chatModel, m.chat || [], m.chatSelected, { label: i18n.t("CHAT_MODEL_NONE"), choosable: false });
+    fill(imageModel, m.image || [], m.imageSelected, { label: i18n.t("IMAGE_MODEL_NONE"), choosable: true });
+    updateSummary();
+  },
+  apiKeyState: m => { apiKey.placeholder = i18n.t(m.value ? "API_KEY_SET" : "API_KEY_NOT_SET"); },
   options: m => {
     $("open-pane").checked = !!m.openPane;
     $("save-progress").checked = !!m.saveProgress;
     $("external-control").checked = !!m.externalControl;
     if (m.contextLimit) $("context-limit").value = String(m.contextLimit);
+    if (m.imagePrompt) $("image-prompt").value = m.imagePrompt;
   },
   // the add-in's version and the commit it was built from, at the bottom of the settings
   about: m => { $("about").textContent = m.text ? i18n.t(m.text) : ""; },

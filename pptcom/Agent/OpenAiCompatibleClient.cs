@@ -143,7 +143,7 @@ namespace Pptcom.Agent
             }
             catch (HttpRequestException ex)
             {
-                throw new LlmServerException(statusCode: null, "LLM connection failed: " + ex.Message, ex);
+                throw new LlmServerException(statusCode: null, "LLM connection failed: " + ex.Message, ex, FailureOf(ex));
             }
             catch (IOException ex)
             {
@@ -153,6 +153,18 @@ namespace Pptcom.Agent
             {
                 throw new LlmServerException(statusCode: null, "LLM request timed out", ex);
             }
+        }
+
+        // Why a request failed before any answer came. HttpClient says only that sending failed; the WebException
+        // inside it says whether the request reached the endpoint at all.
+        internal static LlmServerFailure FailureOf(HttpRequestException ex)
+        {
+            return (ex.InnerException as WebException)?.Status switch
+            {
+                WebExceptionStatus.NameResolutionFailure or WebExceptionStatus.ProxyNameResolutionFailure => LlmServerFailure.NameNotResolved,
+                WebExceptionStatus.ConnectFailure => LlmServerFailure.NotConnected,
+                _ => LlmServerFailure.Error,
+            };
         }
 
         private static JArray MessagesJson(List<ChatMessage> messages)

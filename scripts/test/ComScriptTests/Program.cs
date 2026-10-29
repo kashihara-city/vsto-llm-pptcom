@@ -316,7 +316,7 @@ namespace ComScriptTests
             Reject("End With", "control statement 'End'");
             Reject("sub = 1", "Not valid VBA: 'sub' is a reserved word");
             Reject("x = $p", "Not valid VBA: '$p'");
-            Reject("img = Image(\"a cat\")", "Image");                 // only the zimage tool may write it
+            Reject("img = Image(\"a cat\")", "Image");                 // only the imagegen tool may write it
             Reject("x = (1 + 2", "unbalanced parentheses");
             Reject("x = 1 +", "incomplete value");
             Reject(Vars + "x = p Mod", "incomplete value");

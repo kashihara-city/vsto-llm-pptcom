@@ -1,4 +1,4 @@
-"""Tool-calling driver: the model gets two tools, `zimage` (generate an illustration) and
+"""Tool-calling driver: the model gets two tools, `imagegen` (generate an illustration) and
 `pptcom` (run ComScript against the live deck), and drives itself - the same shape as the
 opencode session whose reasoning stayed short. Execution goes through `ComScriptRunner serve`
 (persistent PowerPoint + the add-in's own parser/engine/policy).
@@ -91,7 +91,7 @@ You must be concise and direct. Minimize output tokens. Do not explain what you 
 # Doing tasks
 - Decide the slide structure and design once, then write the script. Rough coordinates are fine; do not compute exact text fit in your head.
 - Every pptcom result comes with renderings of the slides that call changed (up to 20). Look at them and fix only what looks wrong (overflow, overlap, clipping, unreadable text) in your next pptcom call. When the latest renderings look right, the deck is done: reply immediately. Each rendering is followed by the slide's shape list ([index] = the variable that holds the shape, type, position, size, fill and line with their colors, text, text size/bold/color): refer to a shape by that variable, not by a guessed index.
-- If you want illustrations, first decide only which slides get one and its aspect, and call `zimage` right away (one call per image, in parallel is fine). Plan the layout and coordinates after you have seen the images, not before; then use the returned variable name in `pptcom`.
+- If you want illustrations, first decide only which slides get one and its aspect, and call `imagegen` right away (one call per image, in parallel is fine). Plan the layout and coordinates after you have seen the images, not before; then use the returned variable name in `pptcom`.
 - `pptread` shows slides you have not changed in this request, the same way (rendering + shape list; "3", "4-7", or all): use it first when the user asks to change an existing deck. The slides you changed are already rendered for you. Judge renderings visually (overflow, overlap, readability); do not measure pixels or recompute coordinates from them.
 - `pptcom` runs every statement in order. If one fails (or pptcom cannot read it), it and the statements that use a variable it should have set are reported as FAILED / SKIPPED; everything else is applied. Resend only the reported lines, fixed.
 - Do not probe the deck with extra pptcom reads, and do not pptread slides you just changed.
@@ -128,7 +128,7 @@ Fonts: do not set font names - text then uses the deck's theme fonts, which are 
 """
 
 TOOLS = [
-    {"type": "function", "function": {"name": "zimage", "description": "Generate an image with the internal Z-Image Turbo model and bind it to a variable usable in pptcom by that name. Returns the variable name and pixel size, and the image itself is attached in the next message: check it for garbled text or a wrong subject BEFORE placing it, and if it is wrong call zimage again with the same name (the older version is then dropped). Calling again with the same name rebinds the name to the new image; pictures already placed are not changed. Prompt rules: (1) Write one concrete, objective English paragraph (60-150 words): subject and count, composition/viewpoint, style/medium (e.g. flat vector illustration, isometric 3D render, photo), color palette (name the deck's colors), lighting, background. (2) Negative prompts do not work; put exclusions in the prompt itself, e.g. 'no text, no letters, no logos, no watermark'. (3) Text renders reliably only in English or Chinese and only when the exact words are in double quotes with position and size (e.g. a sign reading \"LiteLLM\" at the top center). Never request Japanese text in an image; put it on the slide instead. (4) Screens, dashboards, signs and documents get garbled pseudo-text unless you say they show only abstract shapes and bars. (5) No metaphors, no emotional words, no meta tags such as 8K or masterpiece. (6) For slides: use a plain background in the deck's background color and leave empty space where slide text will go. (7) The generated background never matches the slide background exactly. Show each image as a deliberate panel (a framed card, or a large area of the slide); do not try to hide its edge by cropping, recoloring or regenerating. Regenerate an image at most once, and only for a wrong subject or garbled text. (8) Do not use zimage for small icons or badges (anything under about 200 pt). Draw those with shapes instead: an oval or rounded square in an accent color with a number or one short word in it. Use zimage for 1-3 large visuals per deck (hero image, illustration, scene). (9) zimage is for illustrations and photos (objects, scenes, atmosphere). Do not use it for diagrams, flowcharts, comparisons, timelines, charts or other infographics: they come out as decorative pseudo-diagrams that explain nothing. Draw those with shapes, arrows and tables in pptcom.", "parameters": {"type": "object", "properties": {"name": {"type": "string", "description": "Variable name for the image, e.g. img1"}, "prompt": {"type": "string", "description": "English prompt following the rules above."}, "size": {"type": "string", "enum": ["1024x1024", "1024x768", "768x1024", "1024x512", "512x1024"], "description": "Pixel size. 1024x1024 square (icons, side images); 1024x768 or 1024x512 wide (hero, banner, background strip); 768x1024 or 512x1024 tall. Default 1024x1024."}}, "required": ["name", "prompt"]}}},
+    {"type": "function", "function": {"name": "imagegen", "description": "Generate an image with the image model chosen in the settings and bind it to a variable usable in pptcom by that name. Returns the variable name and pixel size, and the image itself is attached in the next message: check it for garbled text or a wrong subject BEFORE placing it, and if it is wrong call imagegen again with the same name (the older version is then dropped). Calling again with the same name rebinds the name to the new image; pictures already placed are not changed. Prompt rules: (1) Write one concrete, objective English paragraph (60-150 words): subject and count, composition/viewpoint, style/medium (e.g. flat vector illustration, isometric 3D render, photo), color palette (name the deck's colors), lighting, background. (2) Negative prompts do not work; put exclusions in the prompt itself, e.g. 'no text, no letters, no logos, no watermark'. (3) Text renders reliably only in English or Chinese and only when the exact words are in double quotes with position and size (e.g. a sign reading \"LiteLLM\" at the top center). Never request Japanese text in an image; put it on the slide instead. (4) Screens, dashboards, signs and documents get garbled pseudo-text unless you say they show only abstract shapes and bars. (5) No metaphors, no emotional words, no meta tags such as 8K or masterpiece. (6) For slides: use a plain background in the deck's background color and leave empty space where slide text will go. (7) The generated background never matches the slide background exactly. Show each image as a deliberate panel (a framed card, or a large area of the slide); do not try to hide its edge by cropping, recoloring or regenerating. Regenerate an image at most once, and only for a wrong subject or garbled text. (8) Do not use imagegen for small icons or badges (anything under about 200 pt). Draw those with shapes instead: an oval or rounded square in an accent color with a number or one short word in it. Use imagegen for 1-3 large visuals per deck (hero image, illustration, scene). (9) imagegen is for illustrations and photos (objects, scenes, atmosphere). Do not use it for diagrams, flowcharts, comparisons, timelines, charts or other infographics: they come out as decorative pseudo-diagrams that explain nothing. Draw those with shapes, arrows and tables in pptcom.", "parameters": {"type": "object", "properties": {"name": {"type": "string", "description": "Variable name for the image, e.g. img1"}, "prompt": {"type": "string", "description": "The prompt, following the rules above."}, "size": {"type": "string", "enum": ["1024x1024", "1024x768", "768x1024", "1024x512", "512x1024"], "description": "Pixel size. 1024x1024 square (icons, side images); 1024x768 or 1024x512 wide (hero, banner, background strip); 768x1024 or 512x1024 tall. Default 1024x1024."}}, "required": ["name", "prompt"]}}},
     {
         "type": "function",
         "function": {
@@ -156,13 +156,13 @@ TOOLS = [
 
 
 
-ZIMAGE_ATTACHED = "Returns the variable name and pixel size, and the image itself is attached in the next message: check it for garbled text or a wrong subject BEFORE placing it, and if it is wrong call zimage again with the same name (the older version is then dropped). "
-ZIMAGE_NOT_ATTACHED = "Returns the variable name and pixel size; the image itself is not shown to you here - you see it in the slide renderings once it is placed. If it looks wrong there, call zimage again with the same name and replace the picture. "
+IMAGE_ATTACHED = "Returns the variable name and pixel size, and the image itself is attached in the next message: check it for garbled text or a wrong subject BEFORE placing it, and if it is wrong call imagegen again with the same name (the older version is then dropped). "
+IMAGE_NOT_ATTACHED = "Returns the variable name and pixel size; the image itself is not shown to you here - you see it in the slide renderings once it is placed. If it looks wrong there, call imagegen again with the same name and replace the picture. "
 if not ATTACH_GENERATED_IMAGES:
     for _t in TOOLS:
-        if _t["function"]["name"] == "zimage":
-            assert ZIMAGE_ATTACHED in _t["function"]["description"]
-            _t["function"]["description"] = _t["function"]["description"].replace(ZIMAGE_ATTACHED, ZIMAGE_NOT_ATTACHED)
+        if _t["function"]["name"] == "imagegen":
+            assert IMAGE_ATTACHED in _t["function"]["description"]
+            _t["function"]["description"] = _t["function"]["description"].replace(IMAGE_ATTACHED, IMAGE_NOT_ATTACHED)
 
 class Runner:
     def __init__(self):
@@ -277,13 +277,13 @@ def run_tool(runner: Runner, name: str, args: dict):
             return ("read failed: " + str(r.get("error")), None)
         renders = [x for x in (render_slide(runner, n) for n in r.get("slides") or []) if x]
         return (r["text"], renders or None)
-    if name == "zimage":
+    if name == "imagegen":
         var = args.get("name") or "img"
         prompt = args.get("prompt") or ""
         size = args.get("size") or "1024x1024"
         # The runner builds the `name = Image(...)` line itself, as the add-in does; Image() is not
         # accepted in a pptcom script.
-        r = runner.call({"zimage": {"name": var, "prompt": prompt, "size": size}})
+        r = runner.call({"imagegen": {"name": var, "prompt": prompt, "size": size}})
         if r.get("success"):
             w, h = (int(x) for x in size.split("x"))
             import math

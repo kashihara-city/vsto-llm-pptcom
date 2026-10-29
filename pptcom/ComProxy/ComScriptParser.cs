@@ -67,7 +67,7 @@ namespace Pptcom.ComProxy
         // `priorKnownIds`: ids already bound in earlier rounds (see ParseResult.DefinedIds) that
         // this script may reference without redefining.
         // `maxLines`: required - each host sets its own per-call limit (the add-in uses 1000).
-        // `allowImage`: accept `name = Image("prompt", "size")` - only for the hosts' zimage tool,
+        // `allowImage`: accept `name = Image("prompt", "size")` - only for the hosts' imagegen tool,
         // never for a model's pptcom script.
         public static ParseResult Parse(string script, IEnumerable<string>? priorKnownIds, int maxLines, bool allowImage = false)
         {
@@ -885,7 +885,7 @@ namespace Pptcom.ComProxy
                 return;
             }
 
-            // id = Image("prompt", "size") -- not a COM hop. Only the hosts' own zimage path may
+            // id = Image("prompt", "size") -- not a COM hop. Only the hosts' own imagegen path may
             // write it (Parse(..., allowImage: true)); in a model's script it is not VBA and is
             // reported like any unknown name.
             if (state.AllowImage && rhsText.StartsWith("Image(", StringComparison.OrdinalIgnoreCase) && rhsText.EndsWith(")", StringComparison.Ordinal))

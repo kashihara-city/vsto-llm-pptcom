@@ -44,10 +44,10 @@ namespace Pptcom.ComProxy
         // Temp files written by the image action (copied into the run folder, then deleted).
         public IEnumerable<string> GeneratedFiles => _generatedFiles;
 
-        // AddPicture and the like take only the variable of an image of this conversation - one zimage
+        // AddPicture and the like take only the variable of an image of this conversation - one imagegen
         // generated, or one from a document the user attached (AddImageFile) - see the image check in
         // ExecuteOneAsync; the usage log counts this refusal as a block.
-        private const string GeneratedImagesOnly = " only accepts an image of this conversation (from zimage or an attached document)";
+        private const string GeneratedImagesOnly = " only accepts an image of this conversation (from imagegen or an attached document)";
 
         // The locale of every COM call (the LCID that IDispatch::Invoke receives): en-US, what .NET Framework
         // passes when Type.InvokeMember gets no culture ("to match the behavior of VB"), and the locale the
@@ -866,7 +866,7 @@ namespace Pptcom.ComProxy
                         if (fileArg is null || !_generatedFiles.Contains(fileArg))
                         {
                             throw new InvalidOperationException(
-                                method + GeneratedImagesOnly + ": pass the image's name (from zimage, or d1_img2 from docread) as a variable, without quotes - " +
+                                method + GeneratedImagesOnly + ": pass the image's name (from imagegen, or d1_img2 from docread) as a variable, without quotes - " +
                                 method + "(img1, msoFalse, msoTrue, left, top, width, height) - not a string or a file path");
                         }
                     }

@@ -179,6 +179,7 @@
       <LogicalName>pptcom.web/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
     <Compile Include="Agent\AgentFile.cs" />
+    <Compile Include="Agent\AgentTools.cs" />
     <Compile Include="Agent\ChatMessage.cs" />
     <Compile Include="Agent\ChatReply.cs" />
     <Compile Include="Agent\Compaction.cs" />
@@ -189,7 +190,8 @@
     <Compile Include="Agent\StreamProgress.cs" />
     <Compile Include="Agent\StreamedReply.cs" />
     <Compile Include="Agent\ToolCall.cs" />
-    <!-- The model's instructions, its tool definitions and what it is asked when its conversation is shortened, read by AgentFile. -->
+    <!-- The model's instructions, its tool definitions, the image prompts (the rules and sizes of imagegen, one for each
+         kind of image model) and what it is asked when its conversation is shortened, read by AgentFile. -->
     <EmbeddedResource Include="Agent\system-prompt.txt">
       <LogicalName>pptcom.agent/system-prompt.txt</LogicalName>
     </EmbeddedResource>
@@ -198,6 +200,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Agent\compaction-prompt.txt">
       <LogicalName>pptcom.agent/compaction-prompt.txt</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Agent\image-prompts\*.json">
+      <LogicalName>pptcom.agent/image-prompts/%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
     <Compile Include="Agent\OpenAiCompatibleClient.cs">
       <SubType>Code</SubType>

@@ -53,23 +53,20 @@ namespace Pptcom
 
         // A method, not a field: static field initializers run in source order, and
         // ToolsTemplate is declared below.
-        // docread is offered only while the conversation has attached documents.
-        private static JArray ToolsFor(bool withDocuments)
+        // docread is offered only while the conversation has attached documents, imagegen only with an image model
+        // (AgentTools). Both are fixed for a request, so its turns and its notes (WriteNotesAsync) get the same tools.
+        private static JArray ToolsFor(Conversation conversation)
         {
-            JArray tools = (JArray)ToolsTemplate.DeepClone();
-            if (!withDocuments)
-            {
-                foreach (JToken tool in tools.Where(static x => (string?)x["function"]?["name"] == "docread").ToList())
-                {
-                    tool.Remove();
-                }
-            }
-
-            return tools;
+            return AgentTools.Tools(ToolsTemplate, conversation.Documents.Count > 0,
+                                    conversation.ImageModel.Length > 0 ? ImagePromptFiles[conversation.ImagePrompt] : null);
         }
 
         // The tools the model calls (OpenAI "tools" format): Agent\tools.json.
         private static readonly JArray ToolsTemplate = JArray.Parse(AgentFile.Text("tools.json"));
+
+        // imagegen's rules and sizes for each image prompt of the settings: Agent\image-prompts\<name>.json.
+        private static readonly Dictionary<string, JObject> ImagePromptFiles = AddinSettings.ImagePrompts.ToDictionary(
+            static name => name, static name => JObject.Parse(AgentFile.Text("image-prompts/" + name + ".json")), StringComparer.Ordinal);
 
         private void ThisAddIn_Startup(object sender, System.EventArgs e)
         {
@@ -212,8 +209,18 @@ namespace Pptcom
             return one is not null ? [one] : [.. _panes.Values];
         }
 
+        // Told to every pane while there is none yet - PowerPoint started without a window, and the model list fetched at
+        // startup answered first: kept for the first pane (PaneFor), or the failure of that fetch would never show.
+        private readonly List<PaneText> _forFirstPane = [];
+
         private void Tell(WindowPane? to, PaneText text)
         {
+            if (to is null && _panes.Count == 0)
+            {
+                _forFirstPane.Add(text);
+                return;
+            }
+
             foreach (WindowPane p in PanesOrAll(to))
             {
                 p.Control.LogText(text);
@@ -328,7 +335,11 @@ namespace Pptcom
             string text = ex.Message;
             for (Exception inner = ex.InnerException; inner is not null; inner = inner.InnerException)
             {
-                text += " -> " + inner.Message;
+                // an outer message that already ends with its inner one (LlmServerException) says it once
+                if (!text.EndsWith(inner.Message, StringComparison.Ordinal))
+                {
+                    text += " -> " + inner.Message;
+                }
             }
 
             return text;
@@ -348,44 +359,28 @@ namespace Pptcom
                 _settings.Save();
                 _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
             }
-            // No model chosen yet (fresh install): take the first one the endpoint lists.
-            bool changed = false, chatChosen = false;
-            if (_settings.ChatModel.Length == 0 && chat.Count > 0)
-            {
-                _settings.ChatModel = chat[0];
-                changed = chatChosen = true;
-            }
-            if (_settings.ImageModel.Length == 0 && image.Count > 0)
-            {
-                _settings.ImageModel = image[0];
-                changed = true;
-            }
-            if (changed)
-            {
-                _settings.Save();
-                _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
-            }
+            // No model is chosen for the user: with none (a fresh install), the drop-down asks for one, and the image
+            // model stays unused until one is chosen.
             _chatModels = chat;
             _imageModels = image;
             ShowEndpoint();
             ShowModels();
-            if (asker is not null || changed)
+            if (asker is not null)
             {
                 Tell(asker, PaneText.Of("MODELS_LISTED", endpoint, chat.Count, image.Count));
             }
 
-            if (asker is null && changed)
+            if (_settings.ChatModel.Length == 0)
             {
-                Tell(to: null, PaneText.Of("READY"));
+                Tell(asker, PaneText.Of("CHAT_MODEL_CHOOSE"));
             }
-
-            if (_settings.ChatModel.Length > 0 && !chat.Contains(_settings.ChatModel))
+            else if (!chat.Contains(_settings.ChatModel))
             {
                 Tell(asker, PaneText.Of("MODEL_NOT_LISTED", _settings.ChatModel));
             }
-            // The limit follows the chat model when one is chosen; one that was never set (an add-in from before the
-            // setting) is set once from the model in use.
-            else if (_settings.ChatModel.Length > 0 && (chatChosen || !_settings.ContextLimitSaved))
+            // The limit follows the chat model when one is chosen (OnChatModelSelected); one that was never set (an
+            // add-in from before the setting) is set once from the model in use.
+            else if (!_settings.ContextLimitSaved)
             {
                 SetContextLimitFromModel(asker);
             }
@@ -428,7 +423,7 @@ namespace Pptcom
             if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int limit) ||
                 limit < AddinSettings.MinContextLimit || limit > AddinSettings.MaxContextLimit)
             {
-                pane.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit);
+                pane.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit, _settings.ImagePrompt);
                 pane.Control.Log("CONTEXT_LIMIT_INVALID", Tokens(AddinSettings.MinContextLimit), Tokens(AddinSettings.MaxContextLimit));
                 return;
             }
@@ -445,9 +440,11 @@ namespace Pptcom
             pane.Control.Log("CONTEXT_LIMIT_SET", Tokens(limit));
         }
 
+        // An empty model is （使わない）: the requests from then on get no imagegen tool.
         private void OnImageModelSelected(WindowPane pane, string model)
         {
-            if (string.IsNullOrEmpty(model) || model == _settings.ImageModel)
+            model ??= "";
+            if (model == _settings.ImageModel)
             {
                 return;
             }
@@ -455,7 +452,35 @@ namespace Pptcom
             _settings.ImageModel = model;
             _settings.Save();
             ShowModels(except: pane);
-            pane.Control.Log("IMAGE_MODEL_SET", model);
+            if (model.Length > 0)
+            {
+                pane.Control.Log("IMAGE_MODEL_SET", model);
+            }
+            else
+            {
+                pane.Control.Log("IMAGE_MODEL_OFF");
+            }
+        }
+
+        // One of AddinSettings.ImagePrompts; the pane shows it by the code IMAGE_PROMPT_<NAME>, as its drop-down does.
+        private void OnImagePromptChanged(WindowPane pane, string name)
+        {
+            if (Array.IndexOf(AddinSettings.ImagePrompts, name) < 0)
+            {
+                ShowOptions(except: null);
+                return;
+            }
+
+            if (name == _settings.ImagePrompt)
+            {
+                return;
+            }
+
+            _settings.ImagePrompt = name;
+            _settings.Save();
+            ShowOptions(except: pane);
+            string code = "IMAGE_PROMPT_" + name.ToUpperInvariant();
+            pane.Control.Log("IMAGE_PROMPT_SET", PaneText.Of(code));
         }
 
         // While PowerPoint closes, the task pane may already be gone: nothing is shown any more.
@@ -545,7 +570,7 @@ namespace Pptcom
         {
             foreach (WindowPane p in _panes.Values.Where(p => !ReferenceEquals(p, except)))
             {
-                p.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit);
+                p.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit, _settings.ImagePrompt);
             }
         }
 
@@ -673,6 +698,7 @@ namespace Pptcom
             control.EndpointSubmitted += (s, e) => _ = RefreshModelsAsync(e.Text, pane);
             control.ChatModelSelected += (s, e) => OnChatModelSelected(pane, e.Text);
             control.ImageModelSelected += (s, e) => OnImageModelSelected(pane, e.Text);
+            control.ImagePromptChanged += (s, e) => OnImagePromptChanged(pane, e.Text);
             control.ApiKeyEntered += (s, e) => OnApiKeyEntered(pane, e.Text);
             control.DocumentStarted += (s, e) => OnDocumentStarted(pane, e.Ticket, e.Name);
             control.DocumentConverted += (s, e) => OnDocumentConverted(pane, e.Message);
@@ -680,11 +706,17 @@ namespace Pptcom
             control.DocumentRemoved += (s, e) => OnDocumentRemoved(pane, e.Text);
             control.SetEndpoint(_settings.Endpoint);
             control.SetApiKeyState(_settings.HasApiKey);
-            control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit);
+            control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit, _settings.ImagePrompt);
             control.SetAbout(PaneText.Of("ABOUT_VERSION", BuildInfo.Version,
                                          PaneText.Join("DETAIL_SEPARATOR", BuildInfo.IsDebug ? [BuildInfo.Commit, "Debug"] : [BuildInfo.Commit])));
             control.SetModelChoices(_chatModels, _settings.ChatModel, _imageModels, _settings.ImageModel);
             control.Log(_settings.HasEndpoint ? "READY" : "NO_ENDPOINT_HELP");
+            foreach (PaneText text in _forFirstPane)
+            {
+                control.LogText(text);
+            }
+
+            _forFirstPane.Clear();
             if (IsBusy)
             {
                 control.SetBusy(busy: true, elsewhere: true);
@@ -813,7 +845,9 @@ namespace Pptcom
             // Generated images already copied into a run folder. The temp files themselves stay until
             // the conversation ends: later requests may still place them by their variable.
             public readonly HashSet<string> SavedImages = new(StringComparer.OrdinalIgnoreCase);
-            public string ImageModel = "";  // set at each request, fixed for that request
+            // The image model (empty: none, no imagegen) and the image prompt, set at each request and fixed for it.
+            public string ImageModel = "";
+            public string ImagePrompt = AddinSettings.ImagePrompts[0];
             // The client of the endpoint and chat model, set at each request and fixed for it: a model list that
             // arrives meanwhile (RefreshModelsAsync) changes the next request's.
             public OpenAiCompatibleClient Llm;
@@ -1041,7 +1075,7 @@ namespace Pptcom
                 return;
             }
 
-            // Each image becomes a variable (d1_img3) that pptcom's AddPicture accepts, like a zimage image.
+            // Each image becomes a variable (d1_img3) that pptcom's AddPicture accepts, like an imagegen image.
             foreach (AttachedImage img in doc.Images)
             {
                 DocumentImages.Prepare(img);
@@ -1412,7 +1446,7 @@ namespace Pptcom
             }
         }
 
-        // Agent loop: the model calls `zimage` / `pptcom` until it answers with plain text.
+        // Agent loop: the model calls `imagegen` / `pptcom` until it answers with plain text.
         // Every tool call goes through the same ComScript parser + ComProxy engine (the
         // security boundary); the tools are just the transport. Variables and generated images
         // live in the engine for the whole conversation (see Conversation).
@@ -1432,6 +1466,7 @@ namespace Pptcom
                 Endpoint = _llm.BaseUrl,
                 Model = _llm.Model,
                 ImageModel = _settings.ImageModel,
+                ImagePrompt = _settings.ImagePrompt,
             };
             _currentRun = run;
             try
@@ -1527,6 +1562,7 @@ namespace Pptcom
             public required string Endpoint;
             public required string Model;
             public required string ImageModel;
+            public required string ImagePrompt;
             public string? FinalReply;
             public Conversation? Conversation; // null until the request has one (it may fail before)
             public ComProxyEngine? Engine;
@@ -1755,6 +1791,7 @@ namespace Pptcom
                 ["reply"] = run.FinalReply,
                 ["model"] = run.Model,
                 ["image_model"] = run.ImageModel,
+                ["image_prompt"] = run.ImagePrompt,
                 ["endpoint"] = run.Endpoint,
                 ["addin"] = BuildInfo.Describe, // the build that ran it: version, commit, Debug
                 ["deck_defaults"] = run.DeckDefaults?.Summary(),
@@ -1851,7 +1888,8 @@ namespace Pptcom
             // The selection is left out when carrying on: the user pressed 続ける, they did not point at anything.
             string selection = stopped is not null ? "" : SelectionContext(run, conversation);
             string context = ContextBeforeRequest(conversation, run, selection, new HashSet<string>(pictures.Select(static p => p.Label), StringComparer.Ordinal));
-            List<ChatMessage> messages = [new ChatMessage("system", CurrentDeckDefaults(run).Fill(SystemPrompt)), .. earlier];
+            string systemPrompt = AgentTools.SystemPrompt(CurrentDeckDefaults(run).Fill(SystemPrompt), withImages: conversation.ImageModel.Length > 0);
+            List<ChatMessage> messages = [new ChatMessage("system", systemPrompt), .. earlier];
             if (stopped is not null)
             {
                 messages.AddRange(stopped.Messages);
@@ -1862,6 +1900,7 @@ namespace Pptcom
             run.Messages = messages;
             LogToFile("=== request: " + userMessage +
                 "\n(add-in " + BuildInfo.Describe + ")" +
+                "\n(tools: " + AgentTools.Names(ToolsFor(conversation)) + ")" +
                 (earlier.Count > 0 ? Invariant($"\n(sent after {earlier.Count} shortened messages of the earlier requests)") : "") +
                 (stopped is not null ? Invariant($"\n(carries on the request that stopped at the turn limit: its {stopped.Messages.Count} messages as sent)") : "") +
                 (context.Length > 0 ? "\n(with this context:)\n" + context.TrimEnd() : "") +
@@ -1875,6 +1914,7 @@ namespace Pptcom
             // the earlier requests on this deck, and so does their conversation, shortened (see Conversation).
             Conversation conversation = ConversationOf(run.Pane);
             conversation.ImageModel = _settings.ImageModel; // fixed for this request
+            conversation.ImagePrompt = _settings.ImagePrompt;
             conversation.Llm = _llm;
             ComProxyEngine engine = conversation.Engine;
             run.Conversation = conversation;
@@ -1984,21 +2024,30 @@ namespace Pptcom
             {
                 try
                 {
-                    return await conversation.Llm.ChatAsync(messages, ToolsFor(conversation.Documents.Count > 0), p =>
+                    return await conversation.Llm.ChatAsync(messages, ToolsFor(conversation), p =>
                         run.Pane.Control.SetStatus("STATUS_TURN", turn, Chars(p.ReasoningChars), Chars(p.ContentChars + p.ToolArgChars),
                                                p.Elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture)),
                         ct).ConfigureAwait(true);
                 }
                 catch (LlmServerException ex)
                 {
-                    run.ServerErrors++;
-                    LogToFile(Invariant($"!!! server error at turn {turn}: {ex.Message}"));
-                    run.Pane.Control.Log("AI_SERVER_ERROR", ServerFailureText(ex, conversation.Llm));
-                    run.Pane.Control.SetStatus("STATUS_SERVER_ERROR", turn);
+                    ShowServerFailure(run, ex, conversation.Llm, turn, Invariant($"at turn {turn}"));
                     await WaitForRetryAsync(run, ct).ConfigureAwait(true); // throws OperationCanceledException on 中止
                     LogToFile(Invariant($"(retry requested by the user, turn {turn})"));
                 }
             }
+        }
+
+        // A failure on the server side, or on the way to it, as the pane and the session log tell it; the run then waits
+        // for 再試行. The log has every inner exception: the outer ones only say that sending failed. A request that did
+        // not reach the endpoint is told apart, as the network is to be looked at, not the server.
+        private static void ShowServerFailure(RunRecord run, LlmServerException ex, OpenAiCompatibleClient llm, int turn, string when)
+        {
+            run.ServerErrors++;
+            LogToFile("!!! server error " + when + ": " + MessagesOf(ex));
+            bool unreachable = ex.Failure is LlmServerFailure.NameNotResolved or LlmServerFailure.NotConnected;
+            run.Pane.Control.Log(unreachable ? "AI_SERVER_UNREACHABLE" : "AI_SERVER_ERROR", ServerFailureText(ex, llm));
+            run.Pane.Control.SetStatus(unreachable ? "STATUS_SERVER_UNREACHABLE" : "STATUS_SERVER_ERROR", turn);
         }
 
         private static PaneText ServerFailureText(LlmServerException ex, OpenAiCompatibleClient llm)
@@ -2008,8 +2057,11 @@ namespace Pptcom
                 return PaneText.Of("HTTP_STATUS", ex.StatusCode.Value);
             }
 
+            string host = Uri.TryCreate(llm.BaseUrl, UriKind.Absolute, out Uri? uri) ? uri.Authority : llm.BaseUrl;
             return ex.Failure switch
             {
+                LlmServerFailure.NameNotResolved => PaneText.Of("NAME_NOT_RESOLVED", host),
+                LlmServerFailure.NotConnected => PaneText.Of("NOT_CONNECTED", host),
                 LlmServerFailure.Stalled => PaneText.Of("STREAM_STALLED", (int)llm.StreamIdleLimit.TotalMinutes),
                 LlmServerFailure.Incomplete => PaneText.Of("STREAM_INCOMPLETE"),
                 _ => PaneText.Of("CONNECTION_DROPPED"),
@@ -2096,7 +2148,7 @@ namespace Pptcom
                 run.Pane.Control.SetStatus("STATUS_COMPACTING", turn);
                 try
                 {
-                    reply = await conversation.Llm.ChatWithoutToolsAsync(asking, ToolsFor(conversation.Documents.Count > 0), p =>
+                    reply = await conversation.Llm.ChatWithoutToolsAsync(asking, ToolsFor(conversation), p =>
                         run.Pane.Control.SetStatus("STATUS_COMPACTING_PROGRESS", turn, Chars(p.ReasoningChars), Chars(p.ContentChars),
                                                    p.Elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture)),
                         ct).ConfigureAwait(true);
@@ -2104,10 +2156,7 @@ namespace Pptcom
                 }
                 catch (LlmServerException ex)
                 {
-                    run.ServerErrors++;
-                    LogToFile(Invariant($"!!! server error while writing the notes after turn {turn}: {ex.Message}"));
-                    run.Pane.Control.Log("AI_SERVER_ERROR", ServerFailureText(ex, conversation.Llm));
-                    run.Pane.Control.SetStatus("STATUS_SERVER_ERROR", turn);
+                    ShowServerFailure(run, ex, conversation.Llm, turn, Invariant($"while writing the notes after turn {turn}"));
                     await WaitForRetryAsync(run, ct).ConfigureAwait(true); // throws OperationCanceledException on 中止
                     LogToFile(Invariant($"(retry requested by the user, the notes after turn {turn})"));
                 }
@@ -2317,7 +2366,9 @@ namespace Pptcom
             {
                 "pptread" => ReadSlidesTool(engine, args),
                 "docread" => await ReadDocumentToolAsync(run, args).ConfigureAwait(true),
-                "zimage" => await ImageToolAsync(engine, knownIds, args).ConfigureAwait(true),
+                // not offered without an image model (ToolsFor); an earlier request's call may still be copied
+                AgentTools.ImageTool when run.ImageModel.Length == 0 => new ToolOutcome("imagegen is not available: no image model is chosen in the settings."),
+                AgentTools.ImageTool => await ImageToolAsync(engine, knownIds, args).ConfigureAwait(true),
                 "pptcom" => await ScriptToolAsync(engine, knownIds, args, countLines).ConfigureAwait(true),
                 _ => new ToolOutcome("Unknown tool: " + call.Name),
             };
@@ -2373,7 +2424,7 @@ namespace Pptcom
             return o;
         }
 
-        // zimage: an image generated and bound to a variable.
+        // imagegen: an image generated and bound to a variable.
         private static async Task<ToolOutcome> ImageToolAsync(ComProxyEngine engine, List<string> knownIds, JObject args)
         {
             string name = (string?)args["name"] ?? "";
@@ -2381,7 +2432,7 @@ namespace Pptcom
             string size = (string?)args["size"] ?? "1024x1024";
             if (name.Trim().Length == 0 || prompt.Trim().Length == 0)
             {
-                return new ToolOutcome("zimage needs both name and prompt.");
+                return new ToolOutcome("imagegen needs both name and prompt.");
             }
             // Routed through the normal script path so the engine (not this code) owns the
             // image file and the variable binding.
@@ -2414,7 +2465,7 @@ namespace Pptcom
             ToolOutcome generated = new("Generated image bound to " + name + " (" + size + " px, aspect " + AspectText(size) + "). Use it in pptcom: shapes.AddPicture(" + name + ", msoFalse, msoTrue, left, top, width, height) with width/height in the same aspect ratio.");
             // The image goes to the model with the result, so it can check it before placing it. Without it
             // (run18) the model discovered the background-tint mismatch only after placement and spent more
-            // turns regenerating and cropping; the zimage rules (7)/(8) tell it to frame images instead of
+            // turns regenerating and cropping; the Z-Image prompt's rules (7)/(8) tell it to frame images instead of
             // chasing an exact background match and not to generate small icons.
             if (engine.TryGetHandle(name, out object? handle) && handle is string imgPath)
             {

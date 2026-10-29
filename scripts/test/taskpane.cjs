@@ -2,8 +2,8 @@
 // time, also before the add-in's busy state arrives and while another window's pane runs one; a refused send does
 // not leave the page waiting; a request that stops (the deck was closed, 中止, an error) closes its block as stopped,
 // one that finishes as done; 続ける shows last after a request that stopped at the turn limit, and sends like
-// a request; the line above the input shows what is selected in PowerPoint, and the settings the version and the
-// context limit. taskpane.js runs as it is, in a stand-in for the browser and WebView2 made of plain objects; messages
+// a request; the line above the input shows what is selected in PowerPoint, and the settings the version, the
+// context limit, the models (none chosen yet, 使わない), the image prompt and the API key. taskpane.js runs as it is, in a stand-in for the browser and WebView2 made of plain objects; messages
 // from the add-in arrive as WebView2 delivers them. No packages.
 //
 //   node scripts/test/taskpane.cjs     exit code 0 = all passed
@@ -24,8 +24,12 @@ function check(name, ok, detail) {
 
 function element() {
   const classes = new Set();
+  let text = "";
   return {
-    children: [], parentNode: null, value: "", textContent: "", scrollHeight: 0, scrollTop: 0, clientHeight: 0, disabled: false, listeners: {},
+    children: [], parentNode: null, value: "", scrollHeight: 0, scrollTop: 0, clientHeight: 0, disabled: false, listeners: {},
+    // as in a browser, setting the text replaces what the element held
+    get textContent() { return text; },
+    set textContent(s) { text = s; this.children.length = 0; },
     set className(s) { classes.clear(); for (const c of s.split(/\s+/)) if (c) classes.add(c); },
     get className() { return [...classes].join(" "); },
     classList: {
@@ -184,6 +188,60 @@ function contextLimit() {
   check("and is locked while a request runs", input.disabled === true, `disabled=${input.disabled}`);
 }
 
+// The model drop-downs: with no chat model chosen, a first choice that asks for one and cannot be chosen back; the image
+// model's first choice is （使わない）, the empty model, which goes to the add-in like any other; a saved model the endpoint
+// does not list stays.
+function modelChoices() {
+  const p = page();
+  const chat = p.element("chat-model"), image = p.element("image-model");
+  const choices = select => select.children.map(o => (o.disabled ? "!" : "") + (o.value || "''") + "=" + o.textContent).join(" ");
+  p.host({ type: "models", chat: ["c1", "c2"], chatSelected: "", image: ["i1"], imageSelected: "" });
+  check("no chat model chosen: the first choice asks for one", choices(chat) === "!''=CHAT_MODEL_NONE c1=c1 c2=c2" && chat.value === "", choices(chat) + " / " + chat.value);
+  check("no image model: （使わない）", choices(image) === "''=IMAGE_MODEL_NONE i1=i1" && image.value === "", choices(image) + " / " + image.value);
+  p.host({ type: "models", chat: ["c1", "c2"], chatSelected: "old", image: ["i1"], imageSelected: "i1" });
+  check("a chosen chat model: no first choice, and a saved one the endpoint does not list stays", choices(chat) === "old=old c1=c1 c2=c2" && chat.value === "old",
+        choices(chat) + " / " + chat.value);
+  check("a chosen image model: （使わない） can still be chosen", choices(image) === "''=IMAGE_MODEL_NONE i1=i1" && image.value === "i1", choices(image) + " / " + image.value);
+  image.value = "";
+  image.listeners.change();
+  const posted = p.sent("imageModel").map(m => JSON.stringify(m.value)).join(",");
+  check("（使わない） goes to the add-in as the empty model", posted === '""', posted);
+}
+
+// The image prompt shows the add-in's value, a changed one goes to the add-in, and it is locked while a request runs.
+function imagePrompt() {
+  const p = page();
+  const select = p.element("image-prompt");
+  p.host({ type: "options", openPane: true, saveProgress: false, externalControl: false, contextLimit: 196608, imagePrompt: "zimage" });
+  check("the image prompt shows the add-in's value", select.value === "zimage", select.value);
+  select.value = "other";
+  select.listeners.change({ target: select });
+  const posted = p.sent("imagePrompt").map(m => m.value).join(",");
+  check("a changed image prompt goes to the add-in", posted === "other", posted);
+  p.host({ type: "busy", value: true });
+  check("and is locked while a request runs", select.disabled === true, `disabled=${select.disabled}`);
+}
+
+// The API key: typed into the settings and sent with 設定 or Enter, once, and gone from the field at once; the field
+// says only whether a key is set; an empty field sends nothing; locked while a request runs.
+function apiKey() {
+  const p = page();
+  const input = p.element("apikey-input"), button = p.element("apikey");
+  const sent = () => JSON.stringify(p.sent("apiKey").map(m => m.value));
+  p.host({ type: "apiKeyState", value: true });
+  check("the field says a key is set, and holds nothing", input.placeholder === "API_KEY_SET" && input.value === "", `${input.placeholder} / ${input.value}`);
+  p.click("apikey");
+  check("an empty field sends nothing", sent() === "[]", sent());
+  input.value = " test-key-1 ";
+  p.click("apikey");
+  check("設定 sends the key once and empties the field", sent() === '["test-key-1"]' && input.value === "", sent() + " / " + input.value);
+  input.value = "test-key-2";
+  input.listeners.keydown({ key: "Enter", preventDefault() {} });
+  check("Enter sends it too", sent() === '["test-key-1","test-key-2"]' && input.value === "", sent() + " / " + input.value);
+  p.host({ type: "busy", value: true });
+  check("and both are locked while a request runs", input.disabled === true && button.disabled === true, `${input.disabled} ${button.disabled}`);
+}
+
 // 続ける: last in the conversation, after all that the stopped request showed (what comes later goes above it);
 // sent like a request - once, until the add-in answers with its busy state - and gone once pressed or when the add-in
 // says that request can no longer be carried on. While a request runs elsewhere it stays, disabled.
@@ -251,6 +309,9 @@ selection();
 about();
 options();
 contextLimit();
+modelChoices();
+imagePrompt();
+apiKey();
 continueButton();
 ends("a request whose deck was closed ends as stopped", p => p.log("AI_DECK_CLOSED"), "stopped");
 ends("a request stopped by 中止 ends as stopped", p => p.log("AI_CANCELLED"), "stopped");

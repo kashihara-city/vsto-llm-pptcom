@@ -51,7 +51,7 @@ namespace Pptcom.Agent
         }
 
         // A request's part of the conversation, shortened for the requests after it: the request as the user wrote it,
-        // each assistant turn without reasoning (pptcom scripts and zimage prompts replaced by a note), each tool result
+        // each assistant turn without reasoning (pptcom scripts and imagegen prompts replaced by a note), each tool result
         // cut to its first line (plus Changed), no renderings. A tool call left without a result (the user stopped the
         // request) gets one saying so. `ending`: what the user was shown when the request stopped before it finished,
         // which goes last as the model's own words; the model's notes stay then too, as they tell what was left to do.
@@ -167,7 +167,7 @@ namespace Pptcom.Agent
                     args["script"] = Invariant($"{ElidedScriptMark}{script.Split('\n').Length} lines, already run - left out of this conversation to keep it short)");
                 }
             }
-            else if (call.Name == "zimage" && args["prompt"] is not null)
+            else if (call.Name == AgentTools.ImageTool && args["prompt"] is not null)
             {
                 args["prompt"] = "(left out)";
             }

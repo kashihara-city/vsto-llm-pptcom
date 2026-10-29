@@ -33,6 +33,7 @@
     <Compile Include="..\..\..\pptcom\Agent\StreamedReply.cs" />
     <Compile Include="..\..\..\pptcom\Agent\ChatMessage.cs" />
     <Compile Include="..\..\..\pptcom\Agent\ChatReply.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\AgentTools.cs" />
     <Compile Include="..\..\..\pptcom\Agent\Compaction.cs" />
     <Compile Include="..\..\..\pptcom\Agent\ModelInfo.cs" />
     <Compile Include="..\..\..\pptcom\Agent\ToolCall.cs" />

@@ -43,8 +43,9 @@ def trial(k):
         for m in msgs[:fail_idx]:
             for tc in m.get("tool_calls") or []:
                 args = json.loads(tc["function"]["arguments"])
-                if tc["function"]["name"] in ("zimage", "pptcom"):
-                    text, _ = tool_loop.run_tool(runner, tc["function"]["name"], args)
+                name = tc["function"]["name"]
+                if name in ("imagegen", "zimage", "pptcom"):   # zimage: imagegen's name in older logs
+                    text, _ = tool_loop.run_tool(runner, "imagegen" if name == "zimage" else name, args)
                     if not text.startswith(("OK", "Generated")):
                         print("   rebuild step failed:", text.splitlines()[0])
 

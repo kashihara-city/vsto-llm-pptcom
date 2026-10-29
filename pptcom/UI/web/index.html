@@ -22,10 +22,18 @@
       <button class="btn" id="fetch" data-i18n="SETTINGS_FETCH"></button>
       <label for="chat-model" data-i18n="SETTINGS_CHAT_MODEL"></label>
       <select id="chat-model" class="span2"></select>
+      <!-- each under the model it is for, with a short heading; the hint names it in full -->
+      <label for="context-limit" data-i18n="SETTINGS_CONTEXT_LIMIT" data-i18n-title="SETTINGS_CONTEXT_LIMIT_HINT"></label>
+      <span class="span2 limit" data-i18n-title="SETTINGS_CONTEXT_LIMIT_HINT">
+        <input type="number" id="context-limit" min="8000" max="10000000" step="1000">
+        <span data-i18n="SETTINGS_CONTEXT_LIMIT_UNIT"></span></span>
       <label for="image-model" data-i18n="SETTINGS_IMAGE_MODEL"></label>
       <select id="image-model" class="span2"></select>
-      <label data-i18n="SETTINGS_API_KEY"></label>
-      <span id="apikey-state" data-i18n="API_KEY_NOT_SET"></span>
+      <!-- one option for each of AddinSettings.ImagePrompts, shown by the code IMAGE_PROMPT_<NAME> -->
+      <label for="image-prompt" data-i18n="SETTINGS_IMAGE_PROMPT" data-i18n-title="SETTINGS_IMAGE_PROMPT_HINT"></label>
+      <select id="image-prompt" class="span2" data-i18n-title="SETTINGS_IMAGE_PROMPT_HINT"><option value="zimage" data-i18n="IMAGE_PROMPT_ZIMAGE"></option></select>
+      <label for="apikey-input" data-i18n="SETTINGS_API_KEY"></label>
+      <input type="password" id="apikey-input" autocomplete="off" spellcheck="false" data-i18n-placeholder="API_KEY_NOT_SET" data-i18n-title="SETTINGS_API_KEY_HINT">
       <button class="btn" id="apikey" data-i18n="SETTINGS_API_KEY_BUTTON"></button>
       <label data-i18n="SETTINGS_OTHER"></label>
       <div class="span2 checks">
@@ -34,10 +42,6 @@
         <label class="check"><input type="checkbox" id="save-progress"> <span data-i18n="SETTINGS_SAVE_PROGRESS"></span></label>
         <label class="check" data-i18n-title="SETTINGS_EXTERNAL_CONTROL_HINT">
           <input type="checkbox" id="external-control"> <span data-i18n="SETTINGS_EXTERNAL_CONTROL"></span></label>
-        <label class="limit" data-i18n-title="SETTINGS_CONTEXT_LIMIT_HINT">
-          <span data-i18n="SETTINGS_CONTEXT_LIMIT"></span>
-          <input type="number" id="context-limit" min="8000" max="10000000" step="1000">
-          <span data-i18n="SETTINGS_CONTEXT_LIMIT_UNIT"></span></label>
       </div>
     </div>
     <div id="about" data-i18n-title="ABOUT_HINT"></div>

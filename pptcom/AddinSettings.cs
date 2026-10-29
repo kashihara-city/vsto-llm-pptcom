@@ -6,7 +6,8 @@ namespace Pptcom
     // Connection settings. Nothing environment-specific is built in; the add-in, the ComScriptRunner
     // rig and scripts/test/tool_loop.py all read the same places:
     //
-    //   HKCU\Software\KashiharaCity\pptcom  endpoint, chat_model, image_model (REG_SZ);
+    //   HKCU\Software\KashiharaCity\pptcom  endpoint, chat_model, image_model (REG_SZ; image_model empty: no images);
+    //                                        image_prompt (REG_SZ, one of ImagePrompts, add-in only);
     //                                        external_control, save_progress, open_pane (REG_DWORD 0/1, add-in only);
     //                                        context_limit (REG_DWORD, tokens, add-in only);
     //                                        AppVersion (REG_SZ, the installed version, written by the MSI) and
@@ -23,6 +24,11 @@ namespace Pptcom
         public string ApiKey = "";
         public string ChatModel = "";
         public string ImageModel = "";
+        // ImagePrompt: which rules and sizes imagegen gets (Agent\image-prompts\<name>.json, see AgentTools), as each
+        // image model wants prompts of its own. One of ImagePrompts, which the page's drop-down lists too (index.html);
+        // any other value is read as the first.
+        public string ImagePrompt = ImagePrompts[0];
+        public static readonly string[] ImagePrompts = ["zimage"];
 
         public const string RegistryPath = @"Software\KashiharaCity\pptcom";
         public const string CredentialTarget = "KashiharaCity/pptcom:api_key";
@@ -69,6 +75,8 @@ namespace Pptcom
                     s.Endpoint = ((key.GetValue("endpoint") as string) ?? "").Trim().TrimEnd('/');
                     s.ChatModel = ((key.GetValue("chat_model") as string) ?? "").Trim();
                     s.ImageModel = ((key.GetValue("image_model") as string) ?? "").Trim();
+                    string imagePrompt = ((key.GetValue("image_prompt") as string) ?? "").Trim();
+                    s.ImagePrompt = Array.IndexOf(ImagePrompts, imagePrompt) >= 0 ? imagePrompt : ImagePrompts[0];
                     s.ExternalControl = key.GetValue("external_control") is int ec && ec != 0;
                     s.SaveProgress = key.GetValue("save_progress") is int sp && sp != 0;
                     s.OpenPane = key.GetValue("open_pane") is not int op || op != 0;
@@ -96,6 +104,7 @@ namespace Pptcom
                 key.SetValue("endpoint", Endpoint, RegistryValueKind.String);
                 key.SetValue("chat_model", ChatModel, RegistryValueKind.String);
                 key.SetValue("image_model", ImageModel, RegistryValueKind.String);
+                key.SetValue("image_prompt", ImagePrompt, RegistryValueKind.String);
                 key.SetValue("external_control", ExternalControl ? 1 : 0, RegistryValueKind.DWord);
                 key.SetValue("save_progress", SaveProgress ? 1 : 0, RegistryValueKind.DWord);
                 key.SetValue("open_pane", OpenPane ? 1 : 0, RegistryValueKind.DWord);

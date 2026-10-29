@@ -7,6 +7,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
 using Pptcom.Agent;
 using Pptcom.ComProxy;
 using static System.FormattableString;
@@ -17,11 +18,13 @@ using static System.FormattableString;
 namespace ChatStreamTests
 {
     // How the add-in reads a chat reply's stream (OpenAiCompatibleClient.ChatAsync, StreamedReply): what counts
-    // as a whole reply, how the parts of a tool call come together, which failures may be sent again (再試行),
-    // and that 中止 and the idle limit end a stream or an error body that stopped sending; for an image
+    // as a whole reply, how the parts of a tool call come together, which failures may be sent again (再試行) and
+    // which of them never reached the endpoint, and that 中止 and the idle limit end a stream or an error body that
+    // stopped sending; for an image
     // (GenerateImageAsync), that the end of the request ends the wait. Also how the notes before a conversation is
-    // shortened are asked for, what the model list says of each model's input, and what shortening leaves out
-    // (Compaction). A server on the loopback address answers each request as the test needs; no LLM is called.
+    // shortened are asked for, what the model list says of each model's input, what shortening leaves out
+    // (Compaction), and which tools and system prompt lines a request offers (AgentTools). A server on the loopback
+    // address answers each request as the test needs; no LLM is called.
     internal static class Program
     {
         // How a server that does not know mm_processor_kwargs answers.
@@ -33,6 +36,7 @@ namespace ChatStreamTests
         {
             await CompleteRepliesAsync().ConfigureAwait(true);
             await FailedRepliesAsync().ConfigureAwait(true);
+            await UnreachableAsync().ConfigureAwait(true);
             await StalledRepliesAsync().ConfigureAwait(true);
             await UnfinishedErrorsAsync().ConfigureAwait(true);
             await RejectedFieldAsync().ConfigureAwait(true);
@@ -40,6 +44,7 @@ namespace ChatStreamTests
             await ToolChoiceAsync().ConfigureAwait(true);
             await ModelListAsync().ConfigureAwait(true);
             CompactionTests();
+            OfferedTests();
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -79,6 +84,41 @@ namespace ChatStreamTests
                         static ex => ex is LlmServerException { StatusCode: 503 }).ConfigureAwait(true);
             await FailsAsync("HTTP 400 is not sent again", Http(400, "bad request"),
                         static ex => ex is InvalidOperationException).ConfigureAwait(true);
+        }
+
+        // A request that did not reach the endpoint is told apart from a failure of the server (the pane then says to look
+        // at the network): a name not resolved, or no connection - a port nothing listens on, here.
+        private static async Task UnreachableAsync()
+        {
+            Console.WriteLine("== an endpoint that cannot be reached");
+            static LlmServerFailure Of(WebExceptionStatus status)
+            {
+                return OpenAiCompatibleClient.FailureOf(new System.Net.Http.HttpRequestException("sending failed", new WebException("inner", status)));
+            }
+
+            Check("a name not resolved, a connection not made, anything else",
+                  Of(WebExceptionStatus.NameResolutionFailure) == LlmServerFailure.NameNotResolved &&
+                  Of(WebExceptionStatus.ProxyNameResolutionFailure) == LlmServerFailure.NameNotResolved &&
+                  Of(WebExceptionStatus.ConnectFailure) == LlmServerFailure.NotConnected &&
+                  Of(WebExceptionStatus.ReceiveFailure) == LlmServerFailure.Error &&
+                  OpenAiCompatibleClient.FailureOf(new System.Net.Http.HttpRequestException("sending failed")) == LlmServerFailure.Error,
+                  Invariant($"{Of(WebExceptionStatus.NameResolutionFailure)} {Of(WebExceptionStatus.ConnectFailure)} {Of(WebExceptionStatus.ReceiveFailure)}"));
+
+            TcpListener closed = new(IPAddress.Loopback, 0);
+            closed.Start();
+            int port = ((IPEndPoint)closed.LocalEndpoint).Port;
+            closed.Stop();
+            Exception? ex = null;
+            try
+            {
+                OpenAiCompatibleClient client = new(Invariant($"http://127.0.0.1:{port}"), "", "test-model");
+                await client.ChatAsync([new ChatMessage("user", "hi")], cancellationToken: CancellationToken.None).ConfigureAwait(true);
+            }
+            catch (Exception e) when (e is LlmServerException or InvalidOperationException)
+            {
+                ex = e;
+            }
+            Check("a port nothing listens on: no connection", ex is LlmServerException { Failure: LlmServerFailure.NotConnected }, Describe(ex));
         }
 
         private static async Task StalledRepliesAsync()
@@ -301,6 +341,56 @@ namespace ChatStreamTests
             List<ChatMessage> finished = Compaction.ShortenForLater(run, 1, "make slides", ending: null);
             Check("a request that finished keeps no notes and no ending", finished.Count == 5 && !finished.Exists(static m => m.Content == "Next: slide 2"),
                   string.Join(" | ", finished.ConvertAll(static m => m.Role + ": " + m.Content)));
+        }
+
+        // What a request offers the model (AgentTools), made from the add-in's own files: docread only with documents,
+        // imagegen only with an image model, and then with the Z-Image prompt's rules and sizes; the system prompt's image
+        // lines without their mark, or left out without an image model - and then nothing names imagegen.
+        private static void OfferedTests()
+        {
+            Console.WriteLine("== what a request offers the model");
+            string agent = AgentFolder();
+            JArray template = JArray.Parse(File.ReadAllText(Path.Combine(agent, "tools.json")));
+            JObject zimage = JObject.Parse(File.ReadAllText(Path.Combine(agent, "image-prompts", "zimage.json")));
+            string prompt = File.ReadAllText(Path.Combine(agent, "system-prompt.txt")).Replace("\r\n", "\n");
+
+            JArray plain = AgentTools.Tools(template, withDocuments: false, imagePrompt: null);
+            Check("no documents, no image model: pptread and pptcom", AgentTools.Names(plain) == "pptread, pptcom", AgentTools.Names(plain));
+            JArray all = AgentTools.Tools(template, withDocuments: true, imagePrompt: zimage);
+            Check("documents and an image model: all four", AgentTools.Names(all) == "imagegen, pptread, pptcom, docread", AgentTools.Names(all));
+            JToken image = all[0]["function"] ?? new JObject();
+            string description = (string?)image["description"] ?? "";
+            Check("imagegen gets the image prompt's rules and sizes",
+                  description.EndsWith((string?)zimage["rules"] ?? "?", StringComparison.Ordinal) && description.IndexOf('%') < 0 &&
+                  JToken.DeepEquals(image["parameters"]?["properties"]?["size"], zimage["size"]), description);
+            Check("the files themselves stay as they were", ((string?)template[0]["function"]?["description"] ?? "").Contains("%IMAGE_PROMPT_RULES%"),
+                  (string?)template[0]["function"]?["description"] ?? "");
+            Check("the same settings give the same text (the server's prefix cache)",
+                  all.ToString() == AgentTools.Tools(template, withDocuments: true, imagePrompt: zimage).ToString(), "");
+
+            string[] lines = prompt.Split('\n');
+            int marked = Array.FindAll(lines, static l => l.StartsWith(AgentTools.ImageLineMark, StringComparison.Ordinal)).Length;
+            string with = AgentTools.SystemPrompt(prompt, withImages: true), without = AgentTools.SystemPrompt(prompt, withImages: false);
+            Check("with an image model: the image lines, without their mark",
+                  marked == 2 && with.Split('\n').Length == lines.Length && !with.Contains(AgentTools.ImageLineMark) && with.Contains("`imagegen`"),
+                  Invariant($"{marked} marked"));
+            Check("without: the image lines left out, and neither the prompt nor the tools name imagegen",
+                  without.Split('\n').Length == lines.Length - marked && !without.Contains("imagegen") && !plain.ToString().Contains("imagegen"),
+                  Invariant($"{without.Split('\n').Length} of {lines.Length} lines"));
+        }
+
+        // pptcom\Agent of the repository the test was built in.
+        private static string AgentFolder()
+        {
+            for (DirectoryInfo? d = new(AppDomain.CurrentDomain.BaseDirectory); d is not null; d = d.Parent)
+            {
+                string agent = Path.Combine(d.FullName, "pptcom", "Agent");
+                if (File.Exists(Path.Combine(agent, "tools.json")))
+                {
+                    return agent;
+                }
+            }
+            throw new DirectoryNotFoundException(@"no pptcom\Agent above " + AppDomain.CurrentDomain.BaseDirectory);
         }
 
         // One assistant turn calling `tool`, its result, and for a pptcom turn the rendering of `slide` with its shape list.
