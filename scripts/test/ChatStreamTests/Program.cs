@@ -24,8 +24,9 @@ namespace ChatStreamTests
     // stopped sending; for an image
     // (GenerateImageAsync), that the end of the request ends the wait. Also how the notes before a conversation is
     // shortened are asked for, what the model list says of each model's input, what shortening leaves out
-    // (Compaction), and which tools and system prompt lines a request offers (AgentTools). A server on the loopback
-    // address answers each request as the test needs; no LLM is called.
+    // (Compaction), which tools and system prompt lines a request offers (AgentTools), and the colors imagegen
+    // reports of an image (ImageColors). A server on the loopback address answers each request as the test needs; no
+    // LLM is called.
     internal static class Program
     {
         // How a server that does not know mm_processor_kwargs answers.
@@ -46,6 +47,7 @@ namespace ChatStreamTests
             await ModelListAsync().ConfigureAwait(true);
             CompactionTests();
             OfferedTests();
+            ImageColorsTests();
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -410,6 +412,67 @@ namespace ChatStreamTests
             Check("without: the image lines left out, and neither the prompt nor the tools name imagegen",
                   without.Split('\n').Length == lines.Length - marked && !without.Contains("imagegen") && !plain.ToString().Contains("imagegen"),
                   Invariant($"{without.Split('\n').Length} of {lines.Length} lines"));
+        }
+
+        // The colors imagegen reports (ImageColors): the main ones with their share, a background's few steps of noise
+        // counted as one color (its average, also across the boxes it is counted in), colors further apart kept apart,
+        // the edge's color, transparent pixels left out; and the same from a PNG file.
+        private static void ImageColorsTests()
+        {
+            Console.WriteLine("== the colors of a generated image");
+            const int size = 100;
+            int[] pixels = new int[size * size];
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    bool subject = x >= 30 && x < 70 && y >= 30 && y < 70;
+                    int r = (x + y) % 2 == 0 ? 237 : 241;  // 237 and 241 fall in two boxes of 8; their average is 239
+                    pixels[(y * size) + x] = subject ? Argb(38, 62, 96) : Argb(r, 241, 232);
+                }
+            }
+
+            string flat = ImageColors.Describe(pixels, size, size);
+            Check("a flat background with noise is one color, and fills the edge",
+                  flat == "Colors: RGB(239, 241, 232) 84%, RGB(38, 62, 96) 16%\nEdge: RGB(239, 241, 232) 100% of the border", flat);
+
+            int[] two = new int[size * size];
+            for (int i = 0; i < two.Length; i++)
+            {
+                two[i] = i < 6000 ? Argb(200, 50, 50) : i < 9000 ? Argb(200, 50, 80) : 0;  // the last tenth transparent
+            }
+
+            string apart = ImageColors.Describe(two, size, size);
+            Check("colors further apart stay apart; transparent pixels are not counted",
+                  apart.StartsWith("Colors: RGB(200, 50, 50) 67%, RGB(200, 50, 80) 33%\n", StringComparison.Ordinal), apart);
+
+            string file = Path.Combine(Path.GetTempPath(), "pptcom-colors-" + Guid.NewGuid().ToString("N") + ".png");
+            try
+            {
+                using (System.Drawing.Bitmap bitmap = new(size, size))
+                {
+                    for (int y = 0; y < size; y++)
+                    {
+                        for (int x = 0; x < size; x++)
+                        {
+                            bitmap.SetPixel(x, y, System.Drawing.Color.FromArgb(pixels[(y * size) + x]));
+                        }
+                    }
+
+                    bitmap.Save(file, System.Drawing.Imaging.ImageFormat.Png);
+                }
+
+                Check("a PNG file gives the same", ImageColors.Describe(file) == flat, ImageColors.Describe(file));
+            }
+            finally
+            {
+                File.Delete(file);
+            }
+        }
+
+        private static int Argb(int r, int g, int b)
+        {
+            return unchecked((int)0xFF000000) | (r << 16) | (g << 8) | b;
         }
 
         // pptcom\Agent of the repository the test was built in.

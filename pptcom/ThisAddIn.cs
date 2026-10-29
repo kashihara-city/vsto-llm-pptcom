@@ -2474,11 +2474,20 @@ namespace Pptcom
             ToolOutcome generated = new("Generated image bound to " + name + " (" + size + " px, aspect " + AspectText(size) + "). Use it in pptcom: shapes.AddPicture(" + name + ", msoFalse, msoTrue, left, top, width, height) with width/height in the same aspect ratio.");
             // The image goes to the model with the result, so it can check it before placing it. Without it
             // (run18) the model discovered the background-tint mismatch only after placement and spent more
-            // turns regenerating and cropping; the Z-Image prompt's rules (7)/(8) tell it to frame images instead of
-            // chasing an exact background match and not to generate small icons.
+            // turns regenerating and cropping. Its main colors and its edge's go with it as numbers (ImageColors):
+            // guessed from the picture, a background color took the model several rounds of recoloring.
             if (engine.TryGetHandle(name, out object? handle) && handle is string imgPath)
             {
                 generated.Renders.Add(new KeyValuePair<string, string>("image " + name, imgPath));
+                try
+                {
+                    generated.Text += "\n" + ImageColors.Describe(imgPath);
+                }
+                catch (Exception ex) when (Guard.IsRecoverable(ex))
+                {
+                    LogToFile("(the colors of " + name + " could not be read: " + ex.Message + ")");
+                }
+
                 generated.Text += "\nThe image is attached in the next message.";
             }
             return generated;

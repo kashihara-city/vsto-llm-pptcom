@@ -183,6 +183,7 @@
     <Compile Include="Agent\ChatMessage.cs" />
     <Compile Include="Agent\ChatReply.cs" />
     <Compile Include="Agent\Compaction.cs" />
+    <Compile Include="Agent\ImageColors.cs" />
     <Compile Include="Agent\LlmServerException.cs" />
     <Compile Include="Agent\LlmServerFailure.cs" />
     <Compile Include="Agent\ModelInfo.cs" />
