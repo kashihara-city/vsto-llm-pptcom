@@ -1502,7 +1502,7 @@ namespace Pptcom
         private static void RememberForLater(RunRecord run)
         {
             Conversation? c = run.Conversation;
-            if (c is null || run.Messages is null)
+            if (c is null || run.Messages is null || run.OwnMessage is null)
             {
                 return;
             }
@@ -1512,7 +1512,7 @@ namespace Pptcom
                 // The ending, what the user was shown, goes last as the model's own words, in their language: a reply in
                 // English there would draw the next replies into English.
                 string? ending = EndingText(run);
-                c.Earlier.AddRange(Compaction.ShortenForLater(run.Messages, run.FirstOwnMessage, (run.HandEdits is not null ? run.HandEdits + "\n" : "") + run.Request +
+                c.Earlier.AddRange(Compaction.ShortenForLater(run.Messages, run.OwnMessage, (run.HandEdits is not null ? run.HandEdits + "\n" : "") + run.Request +
                                                                                                    (run.Selection is not null ? "\n" + run.Selection : ""), ending));
                 // From after the earlier requests it was sent with: a request that carried on another one keeps that one too.
                 c.Stopped = null;
@@ -1569,7 +1569,7 @@ namespace Pptcom
             public int MissingSetBefore;    // the engine lives across requests; count this request's only
             public int EarlierMessages;      // how many shortened messages of earlier requests it was sent after (then the stopped one's, when it continues)
             public List<ChatMessage>? Messages; // this request's conversation, as sent
-            public int FirstOwnMessage;      // index in Messages of this request's user message
+            public ChatMessage? OwnMessage;  // this request's user message in Messages (not its index: notes before it may leave)
             public string? HandEdits;        // what the user had changed by hand before it (ContextBeforeRequest)
             public string? Selection;        // one line on what the user had selected when sending it (DeckReader.DescribeSelection)
             public readonly List<string> ToolLines = []; // "[2] pptcom -> OK: ..." as the pane shows them
@@ -1895,8 +1895,8 @@ namespace Pptcom
                 messages.AddRange(stopped.Messages);
             }
 
-            run.FirstOwnMessage = messages.Count;
-            messages.Add(new ChatMessage("user", CurrentTimeLine() + "\n\n" + context + userMessage) { Images = pictures.Count > 0 ? pictures : null });
+            run.OwnMessage = new ChatMessage("user", CurrentTimeLine() + "\n\n" + context + userMessage) { Images = pictures.Count > 0 ? pictures : null };
+            messages.Add(run.OwnMessage);
             run.Messages = messages;
             LogToFile("=== request: " + userMessage +
                 "\n(add-in " + BuildInfo.Describe + ")" +

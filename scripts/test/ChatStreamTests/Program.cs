@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -331,16 +332,48 @@ namespace ChatStreamTests
             run.AddRange(Compaction.NotesMessages("Next: slide 2"));
             run.Add(new ChatMessage("assistant", content: null) { ToolCalls = [new ToolCall { Id = "call_x", Name = "pptcom", Arguments = "{\"script\":\"c = 3\"}" }] });
 
-            List<ChatMessage> stopped = Compaction.ShortenForLater(run, 1, "make slides", "ここで止めました。");
+            List<ChatMessage> stopped = Compaction.ShortenForLater(run, run[1], "make slides", "ここで止めました。");
             string shown = string.Join(" | ", stopped.ConvertAll(static m => m.Role + ": " + (m.Content ?? string.Join(",", (m.ToolCalls ?? []).ConvertAll(static c => c.Arguments)))));
             Check("a stopped request: the request, the turns shortened, its notes, an unanswered call, and how it ended last",
                   stopped.Count == 7 && stopped[0].Content == "make slides" && stopped[1].ToolCalls![0].Arguments.Contains(Compaction.ElidedScriptMark + "2 lines") &&
                   stopped[1].ReasoningContent is null && stopped[2].Content == "OK: 2 lines executed. Defined: a, b." && stopped[3].Content == "Next: slide 2" &&
                   stopped[5].Content == "(not run: the user stopped the request)" && stopped[6].Role == "assistant" && stopped[6].Content == "ここで止めました。", shown);
 
-            List<ChatMessage> finished = Compaction.ShortenForLater(run, 1, "make slides", ending: null);
+            List<ChatMessage> finished = Compaction.ShortenForLater(run, run[1], "make slides", ending: null);
             Check("a request that finished keeps no notes and no ending", finished.Count == 5 && !finished.Exists(static m => m.Content == "Next: slide 2"),
                   string.Join(" | ", finished.ConvertAll(static m => m.Role + ": " + m.Content)));
+            ContinuedTests();
+        }
+
+        // 続ける on a request that was shortened, and shortened again while carried on: the newer notes replace the stopped
+        // request's, which came before the new request's own message, and its part still begins at that message - every
+        // call it made is kept, and every tool result follows its call.
+        private static void ContinuedTests()
+        {
+            List<ChatMessage> messages = [new ChatMessage("system", "s"), new ChatMessage("user", "make slides")];
+            AddTurn(messages, "p1", "pptcom", "{\"script\":\"a = 1\"}", "OK: 1 lines executed.", slide: null);
+            messages.AddRange(Compaction.NotesMessages("Next: slide 2"));
+            AddTurn(messages, "p2", "pptcom", "{\"script\":\"b = 2\"}", "OK: 1 lines executed.", slide: null);
+            ChatMessage own = new("user", "続けて");
+            messages.Add(own);
+            messages.Add(new ChatMessage("assistant", content: null)
+            {
+                ToolCalls = [new ToolCall { Id = "new1", Name = "pptcom", Arguments = "{\"script\":\"c = 3\"}" },
+                             new ToolCall { Id = "new1b", Name = "pptread", Arguments = "{\"slide\":\"1\"}" }],
+            });
+            messages.Add(ChatMessage.ToolResult("new1", "OK: 1 lines executed."));
+            messages.Add(ChatMessage.ToolResult("new1b", "Slide 1"));
+            AddTurn(messages, "p3", "pptcom", "{\"script\":\"d = 4\"}", "OK: 1 lines executed.", slide: null);
+
+            int removed = Compaction.RemoveNotes(messages);
+            messages.AddRange(Compaction.NotesMessages("Next: slide 3"));
+            List<ChatMessage> later = Compaction.ShortenForLater(messages, own, "続けて", ending: null);
+            List<string> calls = [.. later.SelectMany(static m => m.ToolCalls ?? []).Select(static c => c.Id)];
+            bool paired = later.Select(static (m, i) => (m, i)).Where(static x => x.m.Role == "tool")
+                               .All(x => later.Take(x.i).Any(a => a.ToolCalls is not null && a.ToolCalls.Exists(c => c.Id == x.m.ToolCallId)));
+            string shown = string.Join(" | ", later.ConvertAll(static m => m.Role + ": " + (m.Content ?? string.Join(",", (m.ToolCalls ?? []).ConvertAll(static c => c.Id)))));
+            Check("carried on and shortened again: from its own message, every call kept and every result after its call",
+                  removed == 2 && later[0].Content == "続けて" && string.Join(",", calls) == "new1,new1b,call_p3" && paired, shown);
         }
 
         // What a request offers the model (AgentTools), made from the add-in's own files: docread only with documents,

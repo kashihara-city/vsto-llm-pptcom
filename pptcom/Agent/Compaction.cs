@@ -56,8 +56,16 @@ namespace Pptcom.Agent
         // request) gets one saying so. `ending`: what the user was shown when the request stopped before it finished,
         // which goes last as the model's own words; the model's notes stay then too, as they tell what was left to do.
         // Null for a request that finished: its notes go.
-        public static List<ChatMessage> ShortenForLater(List<ChatMessage> messages, int from, string request, string? ending)
+        // `first`: the request's own message, where its part begins - looked for, not counted: a request that carries on
+        // a stopped one comes after that one's messages, whose notes leave when it is shortened (RemoveNotes).
+        public static List<ChatMessage> ShortenForLater(List<ChatMessage> messages, ChatMessage first, string request, string? ending)
         {
+            int from = messages.IndexOf(first);
+            if (from < 0)
+            {
+                throw new ArgumentException("the request's message is not in the conversation", nameof(first));
+            }
+
             List<ChatMessage> shortened = [];
             for (int i = from; i < messages.Count; i++)
             {
