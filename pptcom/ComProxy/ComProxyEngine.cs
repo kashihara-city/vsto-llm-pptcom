@@ -696,8 +696,11 @@ namespace Pptcom.ComProxy
                 : Invoke(op, action, member, targetObj);
             if (resultValue is not null && !ComSecurityPolicy.IsReturnValueAllowed(resultValue))
             {
-                throw new InvalidOperationException(
-                    "result type not allowed outside the Office object model: " + resultValue.GetType().FullName);
+                // an Office type the policy keeps out (Application, the custom XML parts...) by its name; anything else by its .NET type
+                string? officeType = System.Runtime.InteropServices.Marshal.IsComObject(resultValue) ? ComSecurityPolicy.TryGetTypeName(resultValue) : null;
+                throw new InvalidOperationException(officeType is not null
+                    ? "result type not allowed: " + officeType.TrimStart('_') + " (not available to scripts)"
+                    : "result type not allowed outside the Office object model: " + resultValue.GetType().FullName);
             }
 
             // Whatever a script wrote to get there, a presentation it reaches must be the request's own. The routes

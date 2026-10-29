@@ -442,6 +442,28 @@ namespace ComScriptTests
             Report("deck: other properties can still be set",
                    ComSecurityPolicy.IsSetAllowedOn("PageSetup", "FirstSlideNumber") && ComSecurityPolicy.IsSetAllowedOn("Shape", "Width"), "refused");
 
+            // A rule by type holds whether the object's ITypeInfo names the interface with its leading _ or not
+            // (PowerPoint reports _CustomXMLPart, _Presentation...), for the call itself and for the hints alike.
+            foreach ((string type, string member) in new[] { ("CustomXMLPart", "Load"), ("Presentation", "Merge"), ("Application", "Presentations"), ("Slide", "ApplyTheme"), ("PageSetup", "SlideWidth") })
+            {
+                foreach (string name in new[] { type, "_" + type })
+                {
+                    bool refused = member == "SlideWidth" ? !ComSecurityPolicy.IsSetAllowedOn(name, member)
+                                                          : ComSecurityPolicy.CheckMemberOnType(name, member) is not null && !ComSecurityPolicy.IsMemberAllowedOn(name, member);
+                    Report("policy: " + name + "." + member + " is refused", refused, "allowed");
+                }
+            }
+            // The custom XML parts never become a handle, under either name: some of their members read files or put a
+            // schema in the user's settings. Application and CommandBars stay out too; the deck's own objects stay in.
+            foreach (string type in new[] { "CustomXMLParts", "CustomXMLPart", "CustomXMLSchemaCollection", "CustomXMLSchema", "CustomXMLNode", "Application", "CommandBars" })
+            {
+                Report("policy: " + type + " is not kept", !ComSecurityPolicy.IsReturnTypeAllowed(type) && !ComSecurityPolicy.IsReturnTypeAllowed("_" + type), "kept");
+            }
+            Report("policy: the deck's objects are kept",
+                   Array.TrueForAll(["Shapes", "_Slide", "Shape", "TextRange", "_Presentation", "Slides"], ComSecurityPolicy.IsReturnTypeAllowed), "refused");
+            Report("policy: Slides.Add and Shapes.AddShape stay open",
+                   ComSecurityPolicy.IsMemberAllowedOn("Slides", "Add") && ComSecurityPolicy.IsMemberAllowedOn("Shapes", "AddShape"), "refused");
+
             // pptread takes a slide, a range or a list of them; each slide once, in order, at most MaxSlidesPerRead, and
             // the numbers the deck does not have are named.
             foreach ((int slides, string spec, string expected, string inText) in new[]

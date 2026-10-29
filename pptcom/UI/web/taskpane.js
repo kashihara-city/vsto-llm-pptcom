@@ -193,7 +193,9 @@ function showContinue(on) {
   continueRow.appendChild(continueButton);
   add(continueRow);
 }
-$("new-chat").addEventListener("click", () => { if (!busy && !converting()) post({ type: "newChat" }); });
+// Not while a request is on its way either (sent, its busy state not back yet): it would end the conversation that
+// request runs in.
+$("new-chat").addEventListener("click", () => { if (!busy && !sending && !converting()) post({ type: "newChat" }); });
 
 const endpoint = $("endpoint"), chatModel = $("chat-model"), imageModel = $("image-model");
 const submitEndpoint = () => post({ type: "endpoint", value: endpoint.value.trim() });

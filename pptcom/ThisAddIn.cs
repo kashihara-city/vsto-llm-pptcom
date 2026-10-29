@@ -908,8 +908,17 @@ namespace Pptcom
             }
         }
 
+        // 新しい会話 from the pane. Not while a request runs: the page keeps the button off then, but a click right after a
+        // send can arrive before it has heard so, and ending the conversation would pull it and its files from under the
+        // request. (Closing a window or PowerPoint still ends it: EndConversation itself does not wait.)
         private void OnNewConversationRequested(WindowPane pane)
         {
+            if (IsBusy)
+            {
+                LogToFile("(a new conversation was asked for while a request runs: not started)");
+                return;
+            }
+
             EndConversation(pane);
             pane.Control.Log("NEW_CONVERSATION");
             LogToFile("=== new conversation (by the user)");

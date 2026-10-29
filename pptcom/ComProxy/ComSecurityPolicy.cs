@@ -53,11 +53,25 @@ namespace Pptcom.ComProxy
         // is created by the host, not returned by a call, so it is unaffected; this closes the
         // `anything.Application` / `pres.Parent` route back to app-level members and the
         // CommandBars route to ExecuteMso.
+        // The custom XML parts too, the whole family: a slide never needs them, and some of their members read files or
+        // change the user's settings (CustomXMLPart.Load reads an XML file, CustomXMLSchemaCollection.Add puts a schema
+        // file in the Schema Library and the registry, CustomXMLSchema.Reload reads one again).
+        // Written without the leading _ of an interface's name: the lookups try both (NameForms).
         private static readonly HashSet<string> BlockedReturnTypes = new(StringComparer.OrdinalIgnoreCase)
         {
-            "_Application", "Application", "CommandBars", "CommandBar", "CommandBarControls", "CommandBarControl",
+            "Application", "CommandBars", "CommandBar", "CommandBarControls", "CommandBarControl",
             "FileDialog", "OLEFormat", "AddIns", "AddIn", "COMAddIns", "COMAddIn", "VBE",
+            "CustomXMLParts", "CustomXMLPart", "CustomXMLNodes", "CustomXMLNode", "CustomXMLSchemaCollection", "CustomXMLSchema",
+            "CustomXMLPrefixMappings", "CustomXMLPrefixMapping", "CustomXMLValidationErrors", "CustomXMLValidationError",
         };
+
+        // A type as its ITypeInfo names it and as a rule may be written: an Office interface is often reported with a
+        // leading _ (_Presentation, _CustomXMLPart), and a rule written without it must hold for it all the same.
+        private static string[] NameForms(string typeName)
+        {
+            string bare = typeName.TrimStart('_');
+            return [bare, "_" + bare];
+        }
 
         // Late-bound COM calls (Type.InvokeMember) always come back wrapped as the generic RCW
         // System.__ComObject - GetType().Namespace is useless for these. To find out what a
@@ -90,21 +104,19 @@ namespace Pptcom.ComProxy
 
         // Members that are only dangerous on a specific object type (so a name-only block would
         // be too broad: blocking "Add" everywhere would also kill Slides.Add / Shapes.Add*).
-        // Keyed by the COM interface name reported by the object's ITypeInfo.
+        // Keyed by the COM interface name reported by the object's ITypeInfo, with or without its leading _ (NameForms).
         private static readonly Dictionary<string, HashSet<string>> BlockedMembersByType =
             new(StringComparer.OrdinalIgnoreCase)
             {
-                { "_Application", OtherDeckMembers },
                 { "Application", OtherDeckMembers },
                 // Creating a new deck puts the work outside the one the user has open; opening
                 // one reads an arbitrary local/network file into the session.
                 { "Presentations", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Add", "Open", "Open2007", "OpenOld", "CheckOut", "CanCheckOut" } },
                 // Same member names are harmless elsewhere (Cell.Merge, BulletFormat.Visible...).
-                { "_Presentation", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Merge", "ApplyTheme", "UpdateLinks" } },
                 { "Presentation", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Merge", "ApplyTheme", "UpdateLinks" } },
-                { "_Slide", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "ApplyTheme" } },
+                { "Slide", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "ApplyTheme" } },
                 { "SlideRange", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "ApplyTheme" } },
-                { "_Master", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "ApplyTheme" } },
+                { "Master", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "ApplyTheme" } },
                 { "BulletFormat", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Picture" } },
                 { "BulletFormat2", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Picture" } },
                 { "Designs", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Load" } },
@@ -144,35 +156,14 @@ namespace Pptcom.ComProxy
 
         public static bool IsSetAllowedOn(string? typeName, string member)
         {
-            foreach (string? name in new[] { typeName, "_" + typeName, typeName?.TrimStart('_') })
-            {
-                if (name is not null && ReadOnlyMembersByType.TryGetValue(name, out HashSet<string> readOnly) && readOnly.Contains(member))
-                {
-                    return false;
-                }
-            }
-
-            return true;
+            return typeName is null || !Array.Exists(NameForms(typeName), name => ReadOnlyMembersByType.TryGetValue(name, out HashSet<string> readOnly) && readOnly.Contains(member));
         }
 
         // The same rules by type name, for listing a type's members in an error hint (blocked
         // members are never suggested).
         public static bool IsMemberAllowedOn(string? typeName, string member)
         {
-            if (!IsMemberAllowed(member))
-            {
-                return false;
-            }
-
-            foreach (string? name in new[] { typeName, "_" + typeName })
-            {
-                if (name is not null && BlockedMembersByType.TryGetValue(name, out HashSet<string> blocked) && blocked.Contains(member))
-                {
-                    return false;
-                }
-            }
-
-            return true;
+            return IsMemberAllowed(member) && (typeName is null || CheckMemberOnType(typeName, member) is null);
         }
 
         // Returns the blocking rule's description, or null if the call is allowed.
@@ -184,20 +175,31 @@ namespace Pptcom.ComProxy
             }
 
             string? typeName = TryGetTypeName(target);
-            if (typeName is null)
-            {
-                return null;
-            }
+            return typeName is null ? null : CheckMemberOnType(typeName, member);
+        }
 
-            if (BlockedMembersByType.TryGetValue(typeName, out HashSet<string> blocked) && blocked.Contains(member))
+        // The rule for `member` on an object of `typeName` (either form, NameForms), as CheckMemberOnTarget and the
+        // error hints (IsMemberAllowedOn) both apply it; null when there is none.
+        internal static string? CheckMemberOnType(string typeName, string member)
+        {
+            foreach (string name in NameForms(typeName))
             {
-                return ReferenceEquals(blocked, OtherDeckMembers)
-                    ? "Application." + member + " (it reaches the user's other open presentations; this request works on ActivePresentation only. " +
-                      "To use another presentation, ask the user to save it and attach it to the task pane, then read it with docread)"
-                    : typeName + "." + member;
+                if (BlockedMembersByType.TryGetValue(name, out HashSet<string> blocked) && blocked.Contains(member))
+                {
+                    return ReferenceEquals(blocked, OtherDeckMembers)
+                        ? "Application." + member + " (it reaches the user's other open presentations; this request works on ActivePresentation only. " +
+                          "To use another presentation, ask the user to save it and attach it to the task pane, then read it with docread)"
+                        : typeName.TrimStart('_') + "." + member;
+                }
             }
 
             return null;
+        }
+
+        // Whether an object of `typeName` (either form) may become a handle, as far as its type goes (BlockedReturnTypes).
+        internal static bool IsReturnTypeAllowed(string typeName)
+        {
+            return !Array.Exists(NameForms(typeName), BlockedReturnTypes.Contains);
         }
 
         public static string? TryGetTypeName(object? comObject)
@@ -258,7 +260,7 @@ namespace Pptcom.ComProxy
             }
 
             string? typeName = TryGetTypeName(value);
-            return typeName is null || !BlockedReturnTypes.Contains(typeName);
+            return typeName is null || IsReturnTypeAllowed(typeName);
         }
 
         private static Guid? TryGetTypeLibGuid(object comObject)

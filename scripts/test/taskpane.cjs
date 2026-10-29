@@ -242,6 +242,21 @@ function apiKey() {
   check("and both are locked while a request runs", input.disabled === true && button.disabled === true, `${input.disabled} ${button.disabled}`);
 }
 
+// 新しい会話: not while a request is on its way (sent, its busy state not back yet) nor while it runs - it would end the
+// conversation that request runs in; once it has ended, it goes.
+function newChat() {
+  const p = page();
+  p.submit("request");
+  p.click("new-chat");
+  check("新しい会話 right after a send is not sent", p.sent("newChat").length === 0, p.posted().join(","));
+  p.host({ type: "busy", value: true });
+  p.click("new-chat");
+  check("nor while the request runs", p.sent("newChat").length === 0, p.posted().join(","));
+  p.host({ type: "busy", value: false });
+  p.click("new-chat");
+  check("once it has ended, it goes", p.sent("newChat").length === 1, p.posted().join(","));
+}
+
 // 続ける: last in the conversation, after all that the stopped request showed (what comes later goes above it);
 // sent like a request - once, until the add-in answers with its busy state - and gone once pressed or when the add-in
 // says that request can no longer be carried on. While a request runs elsewhere it stays, disabled.
@@ -312,6 +327,7 @@ contextLimit();
 modelChoices();
 imagePrompt();
 apiKey();
+newChat();
 continueButton();
 ends("a request whose deck was closed ends as stopped", p => p.log("AI_DECK_CLOSED"), "stopped");
 ends("a request stopped by 中止 ends as stopped", p => p.log("AI_CANCELLED"), "stopped");

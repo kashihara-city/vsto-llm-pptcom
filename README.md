@@ -183,10 +183,10 @@ C#のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.N
 
 | 実行するもの | 調べること |
 |---|---|
-| `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcomスクリプトの解析と実行。式の値をVBScriptの値（`expected.tsv`。式を足したら`make_expected.vbs`で作り直す）と、VBScriptと違うところはVBAの値と照らす。受け付ける文と断る文、モデルへの報告の文、依頼のプレゼンテーションの固定、ほかのプレゼンテーションに届くメンバーを断ること |
+| `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcomスクリプトの解析と実行。式の値をVBScriptの値（`expected.tsv`。式を足したら`make_expected.vbs`で作り直す）と、VBScriptと違うところはVBAの値と照らす。受け付ける文と断る文、モデルへの報告の文、依頼のプレゼンテーションの固定、ほかのプレゼンテーションに届くメンバーを断ること。型ごとの規則が型名の先頭の`_`の有無によらず効くこと、XML部品（CustomXMLParts など）を変数に持たせないこと |
 | `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMの応答の読み取り（模擬サーバー）。終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答、サーバー側の失敗と接続先に届かない失敗の見分け、中止と待ち時間の上限、`mm_processor_kwargs`の送り直し、画像の待ちの終わり方。要約の頼み方（ツールを付けたまま`tool_choice: none`）、モデル一覧の最大入力の読み取り、会話を短くするときに省くもの、メモの置き方、後の依頼に渡す短い経過（「続ける」のあと再び短くしたときも）。依頼ごとに渡すツールとシステムプロンプト（資料が無ければdocread、画像生成モデルが無ければimagegenと画像の行を外す） |
 | `node scripts/test/docs-queue.cjs` | 作業ウィンドウの添付の受け付け（`docs.js`）。読み出す前に「読み取り中」になり、どこで失敗しても添付か失敗で終わり、後のファイルが続くこと。画像は変換せずにそのまま添付し、貼り付けは文字が無いときだけ添付すること |
-| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼が1つだけ送られること、依頼の終わり方の表示、ターンの上限で止まったあとの「続ける」、コンテキスト上限の入力、モデルの選択肢（未選択、使わない）と画像生成プロンプト、APIキーの入力（一度だけ送り、欄に残さない） |
+| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼が1つだけ送られること、依頼の終わり方の表示、ターンの上限で止まったあとの「続ける」、コンテキスト上限の入力、モデルの選択肢（未選択、使わない）と画像生成プロンプト、APIキーの入力（一度だけ送り、欄に残さない）、送信の直後や実行中に「新しい会話」を送らないこと |
 | `python -X utf8 scripts/test/rig-stream.py` | リグ（`tool_loop.py`）の応答の読み取りと失敗の分け方、証明書の検証、失敗した回も記録が残ること（模擬サーバーと模擬のランナー） |
 | `python -X utf8 scripts/test/js-syntax.py` | 作業ウィンドウのJavaScriptが構文として読めること（Nodeの`--check`） |
 | `python -X utf8 scripts/test/i18n.py` | 文言のコードが`ja.json`にあり、値の数と言語がそろい、コードに日本語の文が無いこと |
