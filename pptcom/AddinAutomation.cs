@@ -21,7 +21,7 @@ namespace Pptcom
         {
             if (!_addin.ExternalControlEnabled)
             {
-                throw new InvalidOperationException("外部からの操作は無効です。作業ウィンドウの接続設定で「外部からの操作を許可」をオンにしてください。");
+                throw new InvalidOperationException("他のプログラムからの操作は無効です。作業ウィンドウの接続設定で「他のプログラムからの操作を許可する」をオンにしてください。");
             }
         }
 

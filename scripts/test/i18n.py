@@ -30,7 +30,7 @@ JS_CALLS = re.compile(r'\bi18n\.(?:t|fill)\(')
 # the add-in (AddinAutomation, ThisAddIn.AttachFromOutside), and characters the code reads (the wave dash a slide
 # range may be written with).
 ALLOWED = {
-    'pptcom/AddinAutomation.cs': ['外部からの操作は無効です', '実行中の依頼があります', '実行中は新しい会話を始められません', '実行中は資料を添付できません',
+    'pptcom/AddinAutomation.cs': ['他のプログラムからの操作は無効です', '実行中の依頼があります', '実行中は新しい会話を始められません', '実行中は資料を添付できません',
                                   '資料を読み取っています', 'プレゼンテーションのウィンドウがありません', '続けられる依頼がありません'],
     'pptcom/ThisAddIn.cs': ['ファイルが見つかりません: ', '50MB を超えるファイルは添付できません: '],
     'pptcom/ComProxy/DeckReader.cs': ['〜'],

@@ -1,7 +1,7 @@
 ﻿<#
   Drives the real add-in in PowerPoint from outside, through its automation object (Pptcom.AddinAutomation),
   for tests that need it as the user runs it: the conversation across requests, hand edits in between, the task
-  pane. Needs 外部からの操作を許可 turned on in the task pane's settings (off by default); every call is refused
+  pane. Needs 他のプログラムからの操作を許可する turned on in the task pane's settings (off by default); every call is refused
   otherwise. Prints first which build answered ({"addin": "0.0.4 5efe257+ Debug"}).
 
   Each step is one of:
@@ -50,7 +50,7 @@ if (-not $addin.Connect) { throw "pptcom (vsto-llm-pptcom) is not loaded in this
 $ai = $addin.Object
 if ($null -eq $ai) { throw "pptcom gave no automation object." }
 # A refused call comes back as an empty value through late-bound COM, not as an error.
-if ($null -eq $ai.IsBusy) { throw "外部からの操作がオフです。作業ウィンドウの接続設定で「外部からの操作を許可する」をオンにしてください。" }
+if ($null -eq $ai.IsBusy) { throw "他のプログラムからの操作がオフです。作業ウィンドウの接続設定で「他のプログラムからの操作を許可する」をオンにしてください。" }
 # Which build answered (version, commit, Debug): a Debug build and an installed one register under the same name.
 Write-Output (@{ addin = $ai.Version } | ConvertTo-Json -Compress)
 

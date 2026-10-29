@@ -470,7 +470,7 @@ namespace Pptcom
             }
         }
 
-        // ---- driven from another program (AddinAutomation; off unless 外部からの操作を許可 is on) ----
+        // ---- driven from another program (AddinAutomation; off unless 他のプログラムからの操作を許可する is on) ----
 
         private AddinAutomation? _automation;
 
