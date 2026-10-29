@@ -5,11 +5,13 @@ using Office = Microsoft.Office.Core;
 
 namespace Pptcom.UI
 {
-    // The add-in's button on the ribbon's ホーム tab: shows or hides the task pane of the window in front (each
-    // window has its own, see ThisAddIn.PaneFor). Its pressed state follows that pane; ThisAddIn refreshes it when
-    // another window comes to the front and when a pane is shown or closed. Office calls these members through COM
-    // (IDispatch), so the class is public and visible to COM, as AddinAutomation is. The labels are written into the
-    // ribbon's XML in the add-in's language when Office asks for it.
+    /// <summary>
+    /// The add-in's button on the ribbon's ホーム tab: shows or hides the task pane of the window in front (each
+    /// window has its own, see ThisAddIn.PaneFor). Its pressed state follows that pane; ThisAddIn refreshes it when
+    /// another window comes to the front and when a pane is shown or closed. Office calls these members through COM
+    /// (IDispatch), so the class is public and visible to COM, as AddinAutomation is. The labels are written into the
+    /// ribbon's XML in the add-in's language when Office asks for it.
+    /// </summary>
     [ComVisible(true)]
     public sealed class PaneRibbon : Office.IRibbonExtensibility
     {
@@ -25,7 +27,7 @@ namespace Pptcom.UI
             _show = show;
         }
 
-        // The group has no label: its one button already says AIアシスタント.
+        /// <summary>The ribbon's XML. The group has no label: its one button already says AIアシスタント.</summary>
         public string GetCustomUI(string RibbonID)
         {
             return "<customUI xmlns=\"http://schemas.microsoft.com/office/2009/07/customui\" onLoad=\"OnLoad\">" +
@@ -41,16 +43,19 @@ namespace Pptcom.UI
             return SecurityElement.Escape(text);
         }
 
+        /// <summary>The ribbon's onLoad: kept, to refresh the button's pressed state later.</summary>
         public void OnLoad(Office.IRibbonUI ribbon)
         {
             _ui = ribbon;
         }
 
+        /// <summary>The button's getPressed: whether the pane of the window in front is shown.</summary>
         public bool GetPressed(Office.IRibbonControl control)
         {
             return IsButton(control) && _isShown();
         }
 
+        /// <summary>The button's onAction: shows or hides the pane of the window in front.</summary>
         public void OnTogglePane(Office.IRibbonControl control, bool pressed)
         {
             if (IsButton(control))

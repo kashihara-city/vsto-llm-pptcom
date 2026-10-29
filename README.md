@@ -153,7 +153,7 @@ PowerPoint
 ビルドには、次のものが必要です。
 
 - Visual Studio Build Tools 2026の18.9以降（「Office/SharePoint ビルド ツール」に、オプションの「Visual Studio Tools for Office (VSTO) ビルド ツール」と「.NET Framework 4.8 開発ツール」を足したもの）。
-- Rust 1.99.0とwasm32-unknown-unknownターゲット（`rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown`）
+- Rust 1.99.1とwasm32-unknown-unknownターゲット（`rustup toolchain install 1.99.1 --profile minimal --target wasm32-unknown-unknown`）
 - .NET SDK 6以降（MSIを組むWiX v5を`dotnet build`で動かすため）
 - GACにあるOfficeのPIA（Officeを入れたPCにはあります。OfficeのないPCでは、VSTOのビルド タスクがアドインのリボンの型を読めずに止まるので、上の「Office/SharePoint ビルド ツール」が置くPIAを`gacutil /i`で入れます。CIはそうしています）
 

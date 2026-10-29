@@ -5,7 +5,7 @@ vsto-llm-pptcom ships the following third-party components. Versions are those i
 
 | Component | Version | License | Where it is |
 |---|---|---|---|
-| Newtonsoft.Json | 13.0.3 | MIT | merged into pptcom.dll |
+| Newtonsoft.Json | 13.0.4 | MIT | merged into pptcom.dll |
 | Microsoft.Web.WebView2 (SDK: Microsoft.Web.WebView2.Core, .WinForms, WebView2Loader.dll) | 1.0.4258.31 | Microsoft (BSD-style), with the third-party notices below | Core and WinForms merged into pptcom.dll; `runtimes\win-x86\native\WebView2Loader.dll` and `runtimes\win-x64\native\WebView2Loader.dll` |
 | Microsoft.Office.Tools.Common.v4.0.Utilities.dll (Visual Studio Tools for Office) | 10.0 | Distributable Code of Visual Studio 2022 | next to pptcom.dll |
 | anydoc (firecrawl/anydoc, built to WebAssembly from the source of v0.2.4) | 0.2.4 | MIT, with the Rust crates listed below | embedded in pptcom.dll (task pane: `vendor/anydoc/`) |
@@ -18,8 +18,8 @@ Not shipped: the Microsoft Edge WebView2 Runtime (part of Windows), and the Offi
 (Microsoft.Office.Interop.PowerPoint, office, Microsoft.Vbe.Interop 15.0), which Office installs in the GAC.
 
 Used only to build, not shipped: ILRepack 2.0.48 (Apache-2.0), WiX Toolset 5 (MS-RL), the Visual Studio build tools,
-the code analyzers Microsoft.CodeAnalysis.NetAnalyzers 10.0.401, Microsoft.CodeAnalysis.CSharp.CodeStyle 5.9.0 and
-Meziantou.Analyzer 3.0.298 (all MIT), and what builds anydoc: Rust 1.99.0 (MIT OR Apache-2.0), the wasm-bindgen CLI
+the code analyzers Microsoft.CodeAnalysis.NetAnalyzers 10.0.402, Microsoft.CodeAnalysis.CSharp.CodeStyle 5.9.0 and
+Meziantou.Analyzer 3.0.316 (all MIT), and what builds anydoc: Rust 1.99.1 (MIT OR Apache-2.0), the wasm-bindgen CLI
 0.2.126 (MIT OR Apache-2.0) and wasm-opt from binaryen version_117 (Apache-2.0). npm is not used.
 
 Left out of what PDF.js publishes: its viewer, its standard fonts (FoxitDingbats and others, and the Liberation

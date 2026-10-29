@@ -3,47 +3,59 @@ using System.Runtime.InteropServices;
 
 namespace Pptcom
 {
-    // The add-in's COM automation object, for driving the real add-in from a script (tests that need
-    // the add-in as the user runs it: the conversation, the task pane, the same PowerPoint process).
-    // A script reaches it through PowerPoint:
-    //
-    //   $ppt = New-Object -ComObject PowerPoint.Application
-    //   $ai  = $ppt.COMAddIns.Item("pptcom").Object
-    //   $ai.Send("バナナについて3枚にまとめて"); while ($ai.IsBusy) { Start-Sleep 1 }; $ai.LastRun
-    //
-    // Every call is refused unless the user turned on 他のプログラムからの操作を許可する in the task pane
-    // (AddinSettings.ExternalControl, off by default): with it on, any program running as this user
-    // could send requests with the stored API key and change the open decks. A request sent this way
-    // shows in the task pane like a typed one, marked as coming from another program. Each window has its own
-    // pane and conversation: Send, NewConversation, Attach and Documents work on the window in front.
+    /// <summary>
+    /// The add-in's COM automation object, for driving the real add-in from a script (tests that need
+    /// the add-in as the user runs it: the conversation, the task pane, the same PowerPoint process).
+    /// A script reaches it through PowerPoint:
+    /// <code lang="powershell">
+    ///   $ppt = New-Object -ComObject PowerPoint.Application
+    ///   $ai  = $ppt.COMAddIns.Item("pptcom").Object
+    ///   $ai.Send("バナナについて3枚にまとめて"); while ($ai.IsBusy) { Start-Sleep 1 }; $ai.LastRun
+    /// </code>
+    /// Every call is refused unless the user turned on 他のプログラムからの操作を許可する in the task pane
+    /// (AddinSettings.ExternalControl, off by default): with it on, any program running as this user
+    /// could send requests with the stored API key and change the open decks. A request sent this way
+    /// shows in the task pane like a typed one, marked as coming from another program. Each window has its own
+    /// pane and conversation: Send, NewConversation, Attach and Documents work on the window in front.
+    /// </summary>
     [ComVisible(true)]
     [Guid("5D551056-7DCE-47CA-9023-BA48697065BC")]
     [InterfaceType(ComInterfaceType.InterfaceIsDual)]
     public interface IPptAiAutomation
     {
-        // Same as typing the request and pressing send (the pane is shown if it was hidden, as typing needs it).
-        // Returns at once; the request runs in PowerPoint.
+        /// <summary>
+        /// Same as typing the request and pressing send (the pane is shown if it was hidden, as typing needs it).
+        /// Returns at once; the request runs in PowerPoint.
+        /// </summary>
         void Send(string request);
-        // Same as the stop button.
+        /// <summary>Same as the stop button.</summary>
         void Cancel();
-        // Same as 新しい会話.
+        /// <summary>Same as 新しい会話.</summary>
         void NewConversation();
-        // True while a request runs.
+        /// <summary>True while a request runs.</summary>
         bool IsBusy { get; }
-        // The last finished request as JSON (summary.json's fields, the tool lines the pane showed and the
-        // model's reply; run_folder only with 途中経過を保存 on). Empty before the first request.
+        /// <summary>
+        /// The last finished request as JSON (summary.json's fields, the tool lines the pane showed and the
+        /// model's reply; run_folder only with 途中経過を保存 on). Empty before the first request.
+        /// </summary>
         string LastRun { get; }
-        // Same as dropping the file on the task pane (the pane is shown if it was hidden: its page converts the file).
-        // Returns at once: the pane converts it, and it shows up in Documents (or under "failed" there) when done.
+        /// <summary>
+        /// Same as dropping the file on the task pane (the pane is shown if it was hidden: its page converts the file).
+        /// Returns at once: the pane converts it, and it shows up in Documents (or under "failed" there) when done.
+        /// </summary>
         void Attach(string path);
-        // JSON: {documents: [{id, name, format, lines, images}], converting: [names], failed: ["name: reason"]}.
+        /// <summary>JSON: {documents: [{id, name, format, lines, images}], converting: [names], failed: ["name: reason"]}.</summary>
         string Documents { get; }
-        // Which build is loaded: "0.0.4 5efe257", "0.0.4 5efe257+ Debug" (BuildInfo). Added last: the members above
-        // keep their places for scripts that call them.
+        /// <summary>
+        /// Which build is loaded: "0.0.4 5efe257", "0.0.4 5efe257+ Debug" (BuildInfo). Added last: the members above
+        /// keep their places for scripts that call them.
+        /// </summary>
         string Version { get; }
-        // Same as 続ける, shown when the last request stopped at the turn limit (LastRun's outcome "max_turns"): it
-        // carries that request on. Returns at once, like Send. Added last, as Version was. Not named Continue, a keyword
-        // in Visual Basic.
+        /// <summary>
+        /// Same as 続ける, shown when the last request stopped at the turn limit (LastRun's outcome "max_turns"): it
+        /// carries that request on. Returns at once, like Send. Added last, as Version was. Not named Continue, a keyword
+        /// in Visual Basic.
+        /// </summary>
         void ContinueStopped();
     }
 }

@@ -108,7 +108,7 @@ namespace Pptcom
 
         private PaneRibbon? _ribbon;
 
-        // The ribbon's button (PaneRibbon). Asked for once, before Startup.
+        /// <summary>The ribbon's button (PaneRibbon). Asked for once, before Startup.</summary>
         protected override Microsoft.Office.Core.IRibbonExtensibility CreateRibbonExtensibilityObject()
         {
             Texts.UseLanguage(OfficeUiLanguage());
@@ -499,7 +499,7 @@ namespace Pptcom
 
         private AddinAutomation? _automation;
 
-        // What COMAddIns("pptcom").Object returns. Asked for once, possibly before Startup.
+        /// <summary>What COMAddIns("pptcom").Object returns. Asked for once, possibly before Startup.</summary>
         protected override object RequestComAddInAutomationService()
         {
             _automation ??= new AddinAutomation(this);

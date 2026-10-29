@@ -27,6 +27,11 @@
          the .NET SDK); a style level that differs from AnalysisLevel makes it add the list. -->
     <AnalysisLevelStyle>10.0-all</AnalysisLevelStyle>
     <MeziantouAnalysisMode>all-warnings</MeziantouAnalysisMode>
+    <!-- IDE0005 (unnecessary usings) runs in a build only when the compiler writes the XML documentation, so it does;
+         every type and member seen outside the assembly (the COM surface) then needs its /// comment (CS1591). An
+         old-style project has no GenerateDocumentationFile: DocumentationFile names the file, which the build copies
+         next to the DLL (the MSI takes only the files it lists). -->
+    <DocumentationFile>$(BaseIntermediateOutputPath)$(Configuration)\$(MSBuildProjectName).xml</DocumentationFile>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <!-- CS8032 "an instance of analyzer cannot be created": Meziantou's analyzer for C# 15 closed types
          (RemoveUnnecessaryClosedModifierAnalyzer, built against an experimental Roslyn 5.9 API) doesn't load in
@@ -38,9 +43,9 @@
        CodeStyle 5.9 needs the compiler of Visual Studio 2026 18.9 or later. Unlike the .NET SDK's built-in
        copy, the CodeStyle package reports its rules in every build (EnforceCodeStyleInBuild is not needed). -->
   <ItemGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'">
-    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.401" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.402" PrivateAssets="all" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.CodeStyle" Version="5.9.0" PrivateAssets="all" />
-    <PackageReference Include="Meziantou.Analyzer" Version="3.0.298" PrivateAssets="all" />
+    <PackageReference Include="Meziantou.Analyzer" Version="3.0.316" PrivateAssets="all" />
     <!-- What AnalysisMode=All means for NetAnalyzers; the .NET SDK supplies this only to SDK-style projects.
          Written from the package by scripts/deps/netanalyzers-config.py. -->
     <GlobalAnalyzerConfigFiles Include="$(MSBuildThisFileDirectory)deps\analyzers\netanalyzers-all.globalconfig" />

@@ -92,6 +92,10 @@ dotnet_diagnostic.MA0045.severity = none
 # keeps the method in the stack trace and its try/using blocks around the wait.
 dotnet_diagnostic.MA0215.severity = none
 
+# MA0211: write every XML <summary> on several lines. MA0177 asks the opposite (one line when it fits), and that one
+# is kept: a one-sentence summary reads like the short // comments around it.
+dotnet_diagnostic.MA0211.severity = none
+
 # MA0176: build a Guid from its numbers rather than parse its text. The two GUIDs (ComSecurityPolicy) are type library
 # ids, written as they are documented; they are parsed once.
 dotnet_diagnostic.MA0176.severity = none

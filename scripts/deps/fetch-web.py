@@ -31,7 +31,7 @@ TOOLS = {
     'binaryen': ('WebAssembly/binaryen', 'version_117', 'binaryen-version_117-x86_64-windows.tar.gz', 'version_117'),
 }
 # The compiler ksip pins too (its rust-toolchain.toml), with the wasm32-unknown-unknown target.
-RUST = '1.99.0'
+RUST = '1.99.1'
 
 
 def get(url, accept=None):

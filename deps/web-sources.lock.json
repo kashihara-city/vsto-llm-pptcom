@@ -33,9 +33,9 @@
     "source_type": "tool"
   },
   "rust": {
-    "toolchain": "1.99.0",
+    "toolchain": "1.99.1",
     "target": "wasm32-unknown-unknown",
-    "source_date": "2026-09-28T00:00:00Z",
+    "source_date": "2026-10-13T00:00:00Z",
     "source_type": "tool"
   }
 }

@@ -3,8 +3,10 @@ using System.Runtime.InteropServices;
 
 namespace Pptcom
 {
-    // StandardOleMarshalObject: calls from another process are run on PowerPoint's UI thread, where
-    // the add-in and the task pane live.
+    /// <summary>
+    /// The add-in's automation object (IPptAiAutomation). StandardOleMarshalObject: calls from another process are
+    /// run on PowerPoint's UI thread, where the add-in and the task pane live.
+    /// </summary>
     [ComVisible(true)]
     [Guid("02B79EA6-84F9-4596-969C-EC55B0591F47")]
     [ClassInterface(ClassInterfaceType.None)]
@@ -25,6 +27,7 @@ namespace Pptcom
             }
         }
 
+        /// <inheritdoc/>
         public void Send(string request)
         {
             RequireEnabled();
@@ -51,6 +54,7 @@ namespace Pptcom
             _addin.SendFromOutside(request.Trim());
         }
 
+        /// <inheritdoc/>
         public void ContinueStopped()
         {
             RequireEnabled();
@@ -77,12 +81,14 @@ namespace Pptcom
             _addin.ContinueFromOutside();
         }
 
+        /// <inheritdoc/>
         public void Cancel()
         {
             RequireEnabled();
             _addin.CancelFromOutside();
         }
 
+        /// <inheritdoc/>
         public void NewConversation()
         {
             RequireEnabled();
@@ -99,6 +105,7 @@ namespace Pptcom
             _addin.NewConversationFromOutside();
         }
 
+        /// <inheritdoc/>
         public bool IsBusy
         {
             get
@@ -108,6 +115,7 @@ namespace Pptcom
             }
         }
 
+        /// <inheritdoc/>
         public void Attach(string path)
         {
             RequireEnabled();
@@ -129,6 +137,7 @@ namespace Pptcom
             _addin.AttachFromOutside(path.Trim());
         }
 
+        /// <inheritdoc/>
         public string Documents
         {
             get
@@ -138,6 +147,7 @@ namespace Pptcom
             }
         }
 
+        /// <inheritdoc/>
         public string Version
         {
             get
@@ -147,6 +157,7 @@ namespace Pptcom
             }
         }
 
+        /// <inheritdoc/>
         public string LastRun
         {
             get
