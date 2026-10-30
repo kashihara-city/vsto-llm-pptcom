@@ -67,8 +67,31 @@ namespace Pptcom.Agent
             AppContext.SetSwitch("Switch.System.Net.DontEnableSystemDefaultTlsVersions", isEnabled: false);
             AppContext.SetSwitch("Switch.System.Net.DontEnableSchUseStrongCrypto", isEnabled: false);
             ServicePointManager.SecurityProtocol = SecurityProtocolType.SystemDefault;
-            // A thinking response can stream for minutes; the 100 s default would cut it off.
-            return new HttpClient { Timeout = TimeSpan.FromMinutes(20) };
+            // Redirects are not followed: .NET Framework follows one from https to http too, and a 307 has the request
+            // sent again there - the conversation in the clear (only the Authorization header is dropped). A redirect
+            // fails the call instead, saying where it pointed (Redirected). A thinking response can stream for
+            // minutes; the 100 s default timeout would cut it off.
+            HttpClientHandler? handler = null;
+            try
+            {
+                handler = new HttpClientHandler { AllowAutoRedirect = false };
+                HttpClient client = new(handler, disposeHandler: true) { Timeout = TimeSpan.FromMinutes(20) };
+                handler = null; // the client has it now
+                return client;
+            }
+            finally
+            {
+                handler?.Dispose();
+            }
+        }
+
+        // For a failure's message: where a redirect pointed (it is not followed, see CreateHttpClient); empty for any
+        // other status.
+        private static string Redirected(HttpResponseMessage resp)
+        {
+            return (int)resp.StatusCode is >= 300 and < 400 && resp.Headers.Location is Uri to
+                ? " (a redirect to " + to.OriginalString + ", not followed: set the endpoint to the address it should be)"
+                : "";
         }
 
         // `path` starts with "/": like a relative URI on HttpClient.BaseAddress, it replaces the endpoint's path.
@@ -298,6 +321,7 @@ namespace Pptcom.Agent
             }
 
             HttpStatusCode status = first.StatusCode;
+            string redirect = Redirected(first);
             string body;
             using (first)
             {
@@ -316,7 +340,7 @@ namespace Pptcom.Agent
                 throw new LlmServerException((int)status, Invariant($"LLM call failed: {(int)status} {body}"));
             }
 
-            throw new InvalidOperationException(Invariant($"LLM call failed: {(int)status} {body}"));
+            throw new InvalidOperationException(Invariant($"LLM call failed: {(int)status}{redirect} {body}"));
         }
 
         // An error's body, shown with its status. 中止 and StreamIdleLimit apply as they do to the stream (ReadChatAsync):
@@ -349,7 +373,7 @@ namespace Pptcom.Agent
                 if (!resp.IsSuccessStatusCode)
                 {
                     string body = await ReadErrorBodyAsync(resp, cancellationToken).ConfigureAwait(true);
-                    string message = Invariant($"LLM call failed: {(int)resp.StatusCode} {resp.ReasonPhrase}\n{body}");
+                    string message = Invariant($"LLM call failed: {(int)resp.StatusCode} {resp.ReasonPhrase}{Redirected(resp)}\n{body}");
                     if (IsServerError(resp.StatusCode))
                     {
                         throw new LlmServerException((int)resp.StatusCode, message);
@@ -480,7 +504,7 @@ namespace Pptcom.Agent
                 string body = await resp.Content.ReadAsStringAsync().ConfigureAwait(true);
                 if (!resp.IsSuccessStatusCode)
                 {
-                    throw new InvalidOperationException(Invariant($"model list failed: {(int)resp.StatusCode} {resp.ReasonPhrase}\n{body}"));
+                    throw new InvalidOperationException(Invariant($"model list failed: {(int)resp.StatusCode} {resp.ReasonPhrase}{Redirected(resp)}\n{body}"));
                 }
 
                 if (JObject.Parse(body)["data"] is JArray data)
@@ -542,7 +566,7 @@ namespace Pptcom.Agent
                 }
 
                 ok = resp.IsSuccessStatusCode;
-                status = Invariant($"{(int)resp.StatusCode} {resp.ReasonPhrase}");
+                status = Invariant($"{(int)resp.StatusCode} {resp.ReasonPhrase}{Redirected(resp)}");
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex) && limit.IsCancellationRequested)
             {

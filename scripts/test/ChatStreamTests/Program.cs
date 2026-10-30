@@ -20,9 +20,9 @@ namespace ChatStreamTests
 {
     // How the add-in reads a chat reply's stream (OpenAiCompatibleClient.ChatAsync, StreamedReply): what counts
     // as a whole reply, how the parts of a tool call come together, which failures may be sent again (再試行) and
-    // which of them never reached the endpoint, that the API key never goes to an http endpoint, and that 中止 and
-    // the idle limit end a stream or an error body that stopped sending; for an image (GenerateImageAsync), that the
-    // end of the request ends the wait. Also how the notes before a conversation is
+    // which of them never reached the endpoint, that the API key never goes to an http endpoint, that redirects are
+    // not followed, and that 中止 and the idle limit end a stream or an error body that stopped sending; for an image
+    // (GenerateImageAsync), that the end of the request ends the wait. Also how the notes before a conversation is
     // shortened are asked for, what the model list says of each model's input, what shortening leaves out
     // (Compaction), which tools and system prompt lines a request offers (AgentTools), and the colors imagegen
     // reports of an image (ImageColors). A server on the loopback address answers each request as the test needs; no
@@ -40,6 +40,7 @@ namespace ChatStreamTests
             await FailedRepliesAsync().ConfigureAwait(true);
             await UnreachableAsync().ConfigureAwait(true);
             await KeyOverHttpAsync().ConfigureAwait(true);
+            await RedirectsAsync().ConfigureAwait(true);
             await StalledRepliesAsync().ConfigureAwait(true);
             await UnfinishedErrorsAsync().ConfigureAwait(true);
             await RejectedFieldAsync().ConfigureAwait(true);
@@ -88,6 +89,48 @@ namespace ChatStreamTests
                         static ex => ex is LlmServerException { StatusCode: 503 }).ConfigureAwait(true);
             await FailsAsync("HTTP 400 is not sent again", Http(400, "bad request"),
                         static ex => ex is InvalidOperationException).ConfigureAwait(true);
+        }
+
+        // Redirects are not followed (.NET Framework would follow one from https to http and send the conversation there):
+        // a 307 or a 302 fails the call and says where it pointed, and nothing reaches that address - for a chat, and
+        // for the model list (its /model/info, then /v1/models).
+        private static async Task RedirectsAsync()
+        {
+            Console.WriteLine("== redirects");
+            // Enough answers for every redirect below, so that a client that did follow them fails these checks at once
+            // instead of waiting on a server with nothing more to say.
+            string answer = Http(200, Sse(Content("Hello"), Finish("stop"), "[DONE]"));
+            using FakeServer target = new([answer, answer, answer, answer, answer], stall: false);
+            foreach (int code in new[] { 307, 302 })
+            {
+                string redirect = Invariant($"HTTP/1.1 {code} Moved\r\nLocation: {target.Url}/v1/chat/completions\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                Exception? ex = await RedirectedAsync([redirect], static async client =>
+                    await client.ChatAsync([new ChatMessage("user", "hi")], cancellationToken: CancellationToken.None).ConfigureAwait(true)).ConfigureAwait(true);
+                Check(Invariant($"a chat's {code} is not followed, and the failure says where it pointed"),
+                      ex is not null && ex.Message.Contains(target.Url) && target.Requests.Count == 0, Describe(ex) + Invariant($" target requests={target.Requests.Count}"));
+            }
+
+            string moved = Invariant($"HTTP/1.1 307 Moved\r\nLocation: {target.Url}/v1/models\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            Exception? listed = await RedirectedAsync([moved, moved], static async client =>
+                await client.ListModelsAsync(CancellationToken.None).ConfigureAwait(true)).ConfigureAwait(true);
+            Check("the model list's 307 is not followed either", listed is not null && listed.Message.Contains(target.Url) && target.Requests.Count == 0,
+                  Describe(listed) + Invariant($" target requests={target.Requests.Count}"));
+        }
+
+        // How `call` fails against a server that answers with `responses` (redirects); null when it does not. Any failure
+        // counts: one that followed a redirect fails in other ways, which the checks above then tell.
+        private static async Task<Exception?> RedirectedAsync(string[] responses, Func<OpenAiCompatibleClient, Task> call)
+        {
+            using FakeServer server = new(responses, stall: false);
+            try
+            {
+                await call(new OpenAiCompatibleClient(server.Url, "", "test-model")).ConfigureAwait(true);
+                return null;
+            }
+            catch (Exception e) when (Guard.IsRecoverable(e))
+            {
+                return e;
+            }
         }
 
         // The API key never goes in the clear: with a key, a request to an http endpoint (here the loopback address) is

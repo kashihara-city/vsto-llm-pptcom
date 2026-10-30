@@ -96,6 +96,12 @@ dotnet_diagnostic.MA0215.severity = none
 # is kept: a one-sentence summary reads like the short // comments around it.
 dotnet_diagnostic.MA0211.severity = none
 
+# CA5399: create an HttpClient that checks certificate revocation (CheckCertificateRevocationList). The endpoints are
+# often an organization's own, with a certificate from an internal CA that publishes no revocation list: with the
+# check on, such an endpoint cannot be reached (RevocationStatusUnknown). The add-in never checked it - an HttpClient
+# made without a handler does not either; its handler is made only to stop following redirects (CreateHttpClient).
+dotnet_diagnostic.CA5399.severity = none
+
 # MA0176: build a Guid from its numbers rather than parse its text. The two GUIDs (ComSecurityPolicy) are type library
 # ids, written as they are documented; they are parsed once.
 dotnet_diagnostic.MA0176.severity = none
