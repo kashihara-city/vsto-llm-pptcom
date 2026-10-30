@@ -20,9 +20,9 @@ namespace ChatStreamTests
 {
     // How the add-in reads a chat reply's stream (OpenAiCompatibleClient.ChatAsync, StreamedReply): what counts
     // as a whole reply, how the parts of a tool call come together, which failures may be sent again (再試行) and
-    // which of them never reached the endpoint, and that 中止 and the idle limit end a stream or an error body that
-    // stopped sending; for an image
-    // (GenerateImageAsync), that the end of the request ends the wait. Also how the notes before a conversation is
+    // which of them never reached the endpoint, that the API key never goes to an http endpoint, and that 中止 and
+    // the idle limit end a stream or an error body that stopped sending; for an image (GenerateImageAsync), that the
+    // end of the request ends the wait. Also how the notes before a conversation is
     // shortened are asked for, what the model list says of each model's input, what shortening leaves out
     // (Compaction), which tools and system prompt lines a request offers (AgentTools), and the colors imagegen
     // reports of an image (ImageColors). A server on the loopback address answers each request as the test needs; no
@@ -39,6 +39,7 @@ namespace ChatStreamTests
             await CompleteRepliesAsync().ConfigureAwait(true);
             await FailedRepliesAsync().ConfigureAwait(true);
             await UnreachableAsync().ConfigureAwait(true);
+            await KeyOverHttpAsync().ConfigureAwait(true);
             await StalledRepliesAsync().ConfigureAwait(true);
             await UnfinishedErrorsAsync().ConfigureAwait(true);
             await RejectedFieldAsync().ConfigureAwait(true);
@@ -87,6 +88,28 @@ namespace ChatStreamTests
                         static ex => ex is LlmServerException { StatusCode: 503 }).ConfigureAwait(true);
             await FailsAsync("HTTP 400 is not sent again", Http(400, "bad request"),
                         static ex => ex is InvalidOperationException).ConfigureAwait(true);
+        }
+
+        // The API key never goes in the clear: with a key, a request to an http endpoint (here the loopback address) is
+        // refused before it leaves; without one, it goes.
+        private static async Task KeyOverHttpAsync()
+        {
+            Console.WriteLine("== the API key and http");
+            using FakeServer server = new(Http(200, Sse(Content("Hello"), Finish("stop"), "[DONE]")), stall: false);
+            Exception? ex = null;
+            try
+            {
+                OpenAiCompatibleClient keyed = new(server.Url, "test-key", "test-model");
+                await keyed.ChatAsync([new ChatMessage("user", "hi")], cancellationToken: CancellationToken.None).ConfigureAwait(true);
+            }
+            catch (InvalidOperationException e)
+            {
+                ex = e;
+            }
+            Check("with a key, nothing goes to an http endpoint", ex is not null && server.Requests.Count == 0,
+                  Describe(ex) + Invariant($" requests={server.Requests.Count}"));
+            ChatReply r = await ChatOnceAsync(Http(200, Sse(Content("Hello"), Finish("stop"), "[DONE]"))).ConfigureAwait(true);
+            Check("without one, it goes", r.Content == "Hello", Show(r));
         }
 
         // A request that did not reach the endpoint is told apart from a failure of the server (the pane then says to look

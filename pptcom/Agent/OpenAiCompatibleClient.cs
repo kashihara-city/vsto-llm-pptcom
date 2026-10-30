@@ -85,6 +85,13 @@ namespace Pptcom.Agent
             };
             if (_apiKey is not null)
             {
+                // The key is never sent in the clear, not even to this PC (AddinSettings.KeyOverHttp: the add-in refuses
+                // such an endpoint before it gets here).
+                if (!string.Equals(_base.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException("The API key is sent over https only, not to " + _base.GetLeftPart(UriPartial.Authority));
+                }
+
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
             }
 

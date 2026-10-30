@@ -64,6 +64,15 @@ namespace Pptcom
         public bool HasEndpoint => Endpoint.Length > 0;
         public bool HasApiKey => ApiKey.Length > 0;
 
+        // The API key goes only over https (OpenAiCompatibleClient refuses the rest, localhost too): while one is set,
+        // an http endpoint is not used, and none is set for an http endpoint.
+        public static bool IsHttp(string endpoint)
+        {
+            return endpoint.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public bool KeyOverHttp => HasApiKey && IsHttp(Endpoint);
+
         public static AddinSettings Load()
         {
             AddinSettings s = new();

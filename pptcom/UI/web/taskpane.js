@@ -2,7 +2,8 @@
 // The add-in (AiTaskPaneControl.cs) and this page talk only through WebView2 web messages:
 //   page -> add-in: {type: "ready" | "send" | "cancel" | "retry" | "continue" | "newChat" | "endpoint" | "chatModel" | "imageModel" | "apiKey", ...}
 //   page -> add-in also: {type: "openPane" | "saveProgress" | "externalControl", value: bool}, {type: "contextLimit", value: "<digits>"},
-//   {type: "imagePrompt", value: "<name>"}, {type: "apiKey", value: "<the key typed>"}; "imageModel" may be "" (（使わない）)
+//   {type: "imagePrompt", value: "<name>"}, {type: "apiKey", value: "<the key typed>"}, {type: "apiKeyDelete"};
+//   "imageModel" may be "" (（使わない）)
 //   add-in -> page: {type: "log" | "status" | "busy" | "retry" | "continue" | "endpoint" | "models" | "apiKeyState" | "options" | "selection" | "about", ...}
 //   ("log" and "status" carry a message: {code, args}, shown with the text of locales/<language>.json, see i18n.js)
 // Attached documents (drop, attach button, chips, PDF pages) have their own messages: see docs.js.
@@ -79,7 +80,7 @@ const logKinds = {
   AI_CONTEXT_FULL: "error", AI_COMPACTION_FAILED: "error",
   AI_DECK_CLOSED: "stopped",
   // a request refused before it started: its block ends with the reason
-  NO_ENDPOINT_OR_MODEL: "stopped", DOC_STILL_CONVERTING: "stopped",
+  NO_ENDPOINT_OR_MODEL: "stopped", DOC_STILL_CONVERTING: "stopped", HTTP_WITH_API_KEY: "stopped",
   HAND_EDITS: "handEdits", NEW_CONVERSATION: "reset",
   READY: "plain", NO_ENDPOINT_HELP: "plain",
 };
@@ -214,6 +215,16 @@ const submitApiKey = () => {
 };
 $("apikey").addEventListener("click", submitApiKey);
 apiKey.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); submitApiKey(); } });
+// 削除: only while a key is set and nothing runs, and only once the user said yes - the key cannot be brought back.
+// It asks under the key's row; 削除する sends it, やめる (or a request starting) takes the question away.
+let apiKeySet = false;
+const askDelete = on => $("apikey-confirm").classList.toggle("show", on);
+$("apikey-delete").addEventListener("click", () => { if (apiKeySet && !busy) askDelete(true); });
+$("apikey-delete-no").addEventListener("click", () => askDelete(false));
+$("apikey-delete-yes").addEventListener("click", () => {
+  askDelete(false);
+  if (apiKeySet && !busy) post({ type: "apiKeyDelete" });
+});
 $("open-pane").addEventListener("change", e => post({ type: "openPane", value: e.target.checked }));
 $("save-progress").addEventListener("change", e => post({ type: "saveProgress", value: e.target.checked }));
 $("external-control").addEventListener("change", e => post({ type: "externalControl", value: e.target.checked }));
@@ -259,6 +270,8 @@ function setBusy(on, elsewhere) {
   action.title = i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND_TITLE");
   action.setAttribute("aria-label", i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND"));
   for (const el of [endpoint, $("fetch"), chatModel, imageModel, apiKey, $("apikey"), $("new-chat"), $("open-pane"), $("save-progress"), $("external-control"), $("context-limit"), $("image-prompt")]) el.disabled = on;
+  $("apikey-delete").disabled = on || !apiKeySet;
+  if (on) askDelete(false);
   if (waiting) $("status").textContent = i18n.t("STATUS_BUSY_ELSEWHERE");
   if (!on) { $("status").textContent = ""; $("retry-bar").classList.remove("show"); if (work) finishWork("done"); }
   if (continueButton) continueButton.disabled = on;
@@ -271,14 +284,20 @@ const handlers = {
   retry: m => $("retry-bar").classList.toggle("show", !!m.value),
   // whether the conversation's last request stopped at the turn limit and can be carried on
   continue: m => showContinue(!!m.value),
-  // The settings stay folded once an endpoint is set; with none, they open so it can be entered.
-  endpoint: m => { endpoint.value = m.value || ""; $("settings").open = !endpoint.value; updateSummary(); },
+  // With no endpoint the settings open, so one can be entered. They never fold by themselves: the add-in sends the
+  // endpoint again after 取得 and after the key is set or deleted, while the user is still in them.
+  endpoint: m => { endpoint.value = m.value || ""; if (!endpoint.value) $("settings").open = true; updateSummary(); },
   models: m => {
     fill(chatModel, m.chat || [], m.chatSelected, { label: i18n.t("CHAT_MODEL_NONE"), choosable: false });
     fill(imageModel, m.image || [], m.imageSelected, { label: i18n.t("IMAGE_MODEL_NONE"), choosable: true });
     updateSummary();
   },
-  apiKeyState: m => { apiKey.placeholder = i18n.t(m.value ? "API_KEY_SET" : "API_KEY_NOT_SET"); },
+  apiKeyState: m => {
+    apiKeySet = !!m.value;
+    apiKey.placeholder = i18n.t(apiKeySet ? "API_KEY_SET" : "API_KEY_NOT_SET");
+    $("apikey-delete").disabled = busy || !apiKeySet;
+    if (!apiKeySet) askDelete(false);
+  },
   options: m => {
     $("open-pane").checked = !!m.openPane;
     $("save-progress").checked = !!m.saveProgress;

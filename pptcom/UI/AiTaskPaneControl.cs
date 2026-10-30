@@ -65,6 +65,8 @@ namespace Pptcom.UI
         public event EventHandler<TextEventArgs>? ImageModelSelected;
         // The API key typed into the settings' password field (never shown back; stored in Windows Credential Manager).
         public event EventHandler<TextEventArgs>? ApiKeyEntered;
+        // 削除 next to it, after the page asked the user.
+        public event EventHandler? ApiKeyDeleteRequested;
         // 新しい会話: forget the earlier requests on this deck (their summary, variables and images).
         public event EventHandler? NewConversationRequested;
         // Switches in the settings (AddinSettings.ExternalControl / SaveProgress).
@@ -347,6 +349,9 @@ namespace Pptcom.UI
                         ApiKeyEntered?.Invoke(this, new TextEventArgs(value.Trim()));
                     }
 
+                    break;
+                case "apiKeyDelete":
+                    ApiKeyDeleteRequested?.Invoke(this, EventArgs.Empty);
                     break;
                 default:
                     return false;

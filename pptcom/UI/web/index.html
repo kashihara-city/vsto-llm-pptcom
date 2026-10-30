@@ -34,7 +34,16 @@
       <select id="image-prompt" class="span2" data-i18n-title="SETTINGS_IMAGE_PROMPT_HINT"><option value="zimage" data-i18n="IMAGE_PROMPT_ZIMAGE"></option></select>
       <label for="apikey-input" data-i18n="SETTINGS_API_KEY"></label>
       <input type="password" id="apikey-input" autocomplete="off" spellcheck="false" data-i18n-placeholder="API_KEY_NOT_SET" data-i18n-title="SETTINGS_API_KEY_HINT">
-      <button class="btn" id="apikey" data-i18n="SETTINGS_API_KEY_BUTTON"></button>
+      <span class="buttons">
+        <button class="btn" id="apikey" data-i18n="SETTINGS_API_KEY_BUTTON"></button>
+        <button class="btn" id="apikey-delete" data-i18n="SETTINGS_API_KEY_DELETE" disabled></button></span>
+      <!-- 削除 asks here, under the key's row, within the pane (a browser dialog is titled with the page's origin and
+           is wider than the pane) -->
+      <div id="apikey-confirm" class="span2 confirm">
+        <span data-i18n="API_KEY_DELETE_CONFIRM"></span>
+        <span class="buttons">
+          <button class="btn" id="apikey-delete-yes" data-i18n="API_KEY_DELETE_YES"></button>
+          <button class="btn" id="apikey-delete-no" data-i18n="API_KEY_DELETE_NO"></button></span></div>
       <label data-i18n="SETTINGS_OTHER"></label>
       <div class="span2 checks">
         <label class="check" data-i18n-title="SETTINGS_OPEN_PANE_HINT">

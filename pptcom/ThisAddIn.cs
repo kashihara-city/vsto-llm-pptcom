@@ -170,21 +170,51 @@ namespace Pptcom
         // The settings are the same in every pane: a change made in one is shown in all of them, and its message in
         // the one it was made in (in all of them for the model list fetched at startup).
 
-        // The key from the masked dialog goes straight to Windows Credential Manager; it is never logged or shown.
+        // The key from the settings' password field goes straight to Windows Credential Manager; it is never logged or
+        // shown. Not for an http endpoint: it would go there in the clear (AddinSettings.KeyOverHttp).
         private void OnApiKeyEntered(WindowPane pane, string apiKey)
         {
+            if (AddinSettings.IsHttp(_settings.Endpoint))
+            {
+                pane.Control.Log("API_KEY_NEEDS_HTTPS", _settings.Endpoint);
+                return;
+            }
+
             if (!_settings.SaveApiKey(apiKey))
             {
                 pane.Control.Log("API_KEY_SAVE_FAILED");
                 return;
             }
+            KeyChanged(pane, PaneText.Of("API_KEY_SAVED"));
+        }
+
+        // 削除 in the settings (the page asked the user first): the key leaves Windows Credential Manager.
+        private void OnApiKeyDeleted(WindowPane pane)
+        {
+            if (!_settings.HasApiKey)
+            {
+                return;
+            }
+
+            if (!_settings.SaveApiKey(""))
+            {
+                pane.Control.Log("API_KEY_DELETE_FAILED");
+                return;
+            }
+            KeyChanged(pane, PaneText.Of("API_KEY_DELETED"));
+        }
+
+        // After the key was saved or deleted: the client and every pane follow, and the models are listed again with
+        // it (an http endpoint, refused while a key was set, may be used again once it is deleted).
+        private void KeyChanged(WindowPane pane, PaneText told)
+        {
             _llm = new OpenAiCompatibleClient(_settings.Endpoint, _settings.ApiKey, _settings.ChatModel);
             foreach (WindowPane p in _panes.Values)
             {
-                p.Control.SetApiKeyState(isSet: true);
+                p.Control.SetApiKeyState(_settings.HasApiKey);
             }
 
-            pane.Control.Log("API_KEY_SAVED");
+            pane.Control.LogText(told);
             if (_settings.HasEndpoint)
             {
                 _ = RefreshModelsAsync(_settings.Endpoint, pane);
@@ -262,6 +292,15 @@ namespace Pptcom
             if (!endpoint.StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !endpoint.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
                 endpoint = "https://" + endpoint;
+            }
+
+            // Not while the API key is set: it would go to an http endpoint in the clear. The endpoint in use stays, and
+            // the page shows it again.
+            if (_settings.HasApiKey && AddinSettings.IsHttp(endpoint))
+            {
+                ShowEndpoint();
+                Tell(asker, PaneText.Of("HTTP_WITH_API_KEY", endpoint));
+                return;
             }
 
             int request = ++_modelsRequest;
@@ -700,6 +739,7 @@ namespace Pptcom
             control.ImageModelSelected += (s, e) => OnImageModelSelected(pane, e.Text);
             control.ImagePromptChanged += (s, e) => OnImagePromptChanged(pane, e.Text);
             control.ApiKeyEntered += (s, e) => OnApiKeyEntered(pane, e.Text);
+            control.ApiKeyDeleteRequested += (s, e) => OnApiKeyDeleted(pane);
             control.DocumentStarted += (s, e) => OnDocumentStarted(pane, e.Ticket, e.Name);
             control.DocumentConverted += (s, e) => OnDocumentConverted(pane, e.Message);
             control.DocumentFailed += (s, e) => OnDocumentFailed(pane, e.Ticket, e.Name, e.Reason, e.Detail);
@@ -1404,6 +1444,13 @@ namespace Pptcom
             if (!_settings.HasEndpoint || _settings.ChatModel.Length == 0)
             {
                 pane.Control.Log("NO_ENDPOINT_OR_MODEL", AddinSettings.Location);
+                RefuseSend(pane, continues);
+                return;
+            }
+            // An http endpoint and an API key (the endpoint set by group policy, say): the key is not sent in the clear.
+            if (_settings.KeyOverHttp)
+            {
+                pane.Control.Log("HTTP_WITH_API_KEY", _settings.Endpoint);
                 RefuseSend(pane, continues);
                 return;
             }

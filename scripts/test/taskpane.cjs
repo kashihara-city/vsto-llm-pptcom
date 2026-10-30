@@ -3,7 +3,8 @@
 // not leave the page waiting; a request that stops (the deck was closed, 中止, an error) closes its block as stopped,
 // one that finishes as done; 続ける shows last after a request that stopped at the turn limit, and sends like
 // a request; the line above the input shows what is selected in PowerPoint, and the settings the version, the
-// context limit, the models (none chosen yet, 使わない), the image prompt and the API key. taskpane.js runs as it is, in a stand-in for the browser and WebView2 made of plain objects; messages
+// context limit, the models (none chosen yet, 使わない), the image prompt and the API key (typed in, deleted).
+// taskpane.js runs as it is, in a stand-in for the browser and WebView2 made of plain objects; messages
 // from the add-in arrive as WebView2 delivers them. No packages.
 //
 //   node scripts/test/taskpane.cjs     exit code 0 = all passed
@@ -242,6 +243,42 @@ function apiKey() {
   check("and both are locked while a request runs", input.disabled === true && button.disabled === true, `${input.disabled} ${button.disabled}`);
 }
 
+// 削除 of the API key: only while a key is set and nothing runs; it asks under the key's row, やめる sends nothing, and
+// 削除する sends it once; a request starting takes the question away.
+function apiKeyDelete() {
+  const p = page();
+  const button = p.element("apikey-delete"), asking = () => p.element("apikey-confirm").classList.contains("show");
+  const sent = () => p.sent("apiKeyDelete").length;
+  p.host({ type: "apiKeyState", value: false });
+  p.click("apikey-delete");
+  check("with no key, 削除 cannot be pressed and asks nothing", button.disabled === true && !asking() && sent() === 0,
+        `disabled=${button.disabled} asking=${asking()} sent=${sent()}`);
+  p.host({ type: "apiKeyState", value: true });
+  p.click("apikey-delete");
+  check("with a key it asks first, and sends nothing yet", button.disabled === false && asking() && sent() === 0, `asking=${asking()} sent=${sent()}`);
+  p.click("apikey-delete-no");
+  check("やめる: the question goes, nothing is sent", !asking() && sent() === 0, `asking=${asking()} sent=${sent()}`);
+  p.click("apikey-delete");
+  p.click("apikey-delete-yes");
+  check("削除する: it is sent once, and the question goes", !asking() && sent() === 1, `asking=${asking()} sent=${sent()}`);
+  p.click("apikey-delete");
+  p.host({ type: "busy", value: true });
+  check("a request starting takes the question away and locks 削除", !asking() && button.disabled === true, `asking=${asking()} disabled=${button.disabled}`);
+  p.host({ type: "busy", value: false });
+  check("and 削除 is back once it has ended, while the key is set", button.disabled === false, `disabled=${button.disabled}`);
+}
+
+// The settings open when there is no endpoint, and never fold by themselves: the add-in sends the endpoint again after
+// 取得 and after the key changes, while the user is still in them.
+function settingsStayOpen() {
+  const p = page();
+  const settings = p.element("settings");
+  p.host({ type: "endpoint", value: "" });
+  check("with no endpoint the settings open", settings.open === true, `open=${settings.open}`);
+  p.host({ type: "endpoint", value: "https://llm.example.com" });
+  check("an endpoint sent again does not fold them", settings.open === true, `open=${settings.open}`);
+}
+
 // 新しい会話: not while a request is on its way (sent, its busy state not back yet) nor while it runs - it would end the
 // conversation that request runs in; once it has ended, it goes.
 function newChat() {
@@ -327,6 +364,8 @@ contextLimit();
 modelChoices();
 imagePrompt();
 apiKey();
+apiKeyDelete();
+settingsStayOpen();
 newChat();
 continueButton();
 ends("a request whose deck was closed ends as stopped", p => p.log("AI_DECK_CLOSED"), "stopped");
