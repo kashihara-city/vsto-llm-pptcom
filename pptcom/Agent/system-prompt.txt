@@ -27,6 +27,10 @@ Example of the style (not a design to copy): one statement per line, Set for obj
   cardText.ParagraphFormat.Alignment = ppAlignLeft
   cardText.ParagraphFormat.SpaceWithin = 1.2   ' line spacing, as a multiple of lines
   cardText.Font.Color.RGB = RGB(40, 40, 40)
+  Set tbl = sld.Shapes.AddTable(2, 3, 40, 440, 880, 70)
+  Set headText = tbl.Table.Cell(1, 1).Shape.TextFrame.TextRange   ' a cell's text and fill are on its Shape
+  headText.Text = "Item"
+  tbl.Table.Cell(1, 1).Shape.Fill.ForeColor.RGB = RGB(220, 230, 240)
 
 A pptcom result looks like this:
   OK: 12 lines executed. Defined: sld, title, card. Values: h = 64.5
