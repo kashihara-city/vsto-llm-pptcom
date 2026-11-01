@@ -25,6 +25,33 @@ PowerPointで開いているプレゼンテーションを、LLMが作ったり�
 
 ![橿原市第5期地域福祉推進計画（PDF）を添付して「この資料を5枚にまとめて」と依頼し、続けて1枚目の文字の高さを揃えるよう頼んだところ。右が作業ウィンドウで、オンプレミスで動かしているモデルを使っている](docs/image.png)
 
+<details>
+<summary>作例: 同じ依頼でモデルを替えたもの</summary>
+
+総務省の通知「地方自治法等に基づく事務手続における旧氏の取扱いについて」の[本文](https://www.soumu.go.jp/main_content/001083961.pdf)・[別紙1](https://www.soumu.go.jp/main_content/001083971.pdf)・[別紙2](https://www.soumu.go.jp/main_content/001083966.pdf)のPDFを添付し、内容をまとめる依頼をしたものです（アドイン0.0.8、画像生成はZ-Image）。スライドの内容的な正誤は確かめていません。
+
+<table>
+<tr>
+<td align="center"><img src="docs/examples/claude-opus-5.5.png" width="260" alt="Claude Opus 5.5が作ったデッキの1枚目"><br>Claude Opus 5.5（<a href="docs/examples/claude-opus-5.5.pdf">PDF</a>、<a href="docs/examples/claude-opus-5.5.pptx">pptx</a>）</td>
+<td align="center"><img src="docs/examples/claude-sonnet-5.5.png" width="260" alt="Claude Sonnet 5.5が作ったデッキの1枚目"><br>Claude Sonnet 5.5（<a href="docs/examples/claude-sonnet-5.5.pdf">PDF</a>、<a href="docs/examples/claude-sonnet-5.5.pptx">pptx</a>）</td>
+<td align="center"><img src="docs/examples/claude-haiku-5.5.png" width="260" alt="Claude Haiku 5.5が作ったデッキの1枚目"><br>Claude Haiku 5.5（<a href="docs/examples/claude-haiku-5.5.pdf">PDF</a>、<a href="docs/examples/claude-haiku-5.5.pptx">pptx</a>）</td>
+</tr>
+<tr>
+<td align="center"><img src="docs/examples/gpt-6.1-sol.png" width="260" alt="GPT-6.1 Solが作ったデッキの1枚目"><br>GPT-6.1 Sol（<a href="docs/examples/gpt-6.1-sol.pdf">PDF</a>、<a href="docs/examples/gpt-6.1-sol.pptx">pptx</a>）</td>
+<td align="center"><img src="docs/examples/gemini-4-argon.png" width="260" alt="Gemini 4 Argonが作ったデッキの1枚目"><br>Gemini 4 Argon（<a href="docs/examples/gemini-4-argon.pdf">PDF</a>、<a href="docs/examples/gemini-4-argon.pptx">pptx</a>）</td>
+<td align="center"><img src="docs/examples/muse-wonder.png" width="260" alt="Muse Wonderが作ったデッキの1枚目"><br>Muse Wonder（<a href="docs/examples/muse-wonder.pdf">PDF</a>、<a href="docs/examples/muse-wonder.pptx">pptx</a>）</td>
+</tr>
+<tr>
+<td align="center"><img src="docs/examples/deepseek-v4.1-flash-1017.png" width="260" alt="DeepSeek-V4.1-Flash-1017が作ったデッキの1枚目"><br>DeepSeek-V4.1-Flash-1017（<a href="docs/examples/deepseek-v4.1-flash-1017.pdf">PDF</a>、<a href="docs/examples/deepseek-v4.1-flash-1017.pptx">pptx</a>）</td>
+<td align="center"><img src="docs/examples/qwen3.8-flash-next.png" width="260" alt="Qwen3.8-Flash-Nextが作ったデッキの1枚目"><br>Qwen3.8-Flash-Next（<a href="docs/examples/qwen3.8-flash-next.pdf">PDF</a>、<a href="docs/examples/qwen3.8-flash-next.pptx">pptx</a>）</td>
+<td align="center"><img src="docs/examples/gemma-4-31b.png" width="260" alt="Gemma 4 31Bが作ったデッキの1枚目"><br>Gemma 4 31B（<a href="docs/examples/gemma-4-31b.pdf">PDF</a>、<a href="docs/examples/gemma-4-31b.pptx">pptx</a>）</td>
+</tr>
+</table>
+
+下の段の3つはオンプレミスのvLLMで動かしたもので、いずれも思考ありです。DeepSeek-V4.1-Flash-1017はオリジナルウェイト（[deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017)）、Qwen3.8-Flash-NextはNVFP4に量子化したもの（[Inferact/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/Inferact/Qwen3.8-Flash-Next-NVFP4)）、Gemma 4 31BはQAT版（[google/gemma-4-31B-it-qat-w4a16-ct](https://huggingface.co/google/gemma-4-31B-it-qat-w4a16-ct)）です。
+
+</details>
+
 ## 必要な設定
 
 設定は、インストール（管理者権限不要）後に、作業ウィンドウの上の歯車アイコンから行います。  
@@ -228,7 +255,7 @@ scripts/build/         MSI、SBOM、テスト証明書を作る
 scripts/deps/          deps/ を更新する
 scripts/test/          テストと実験用の道具
 .github/               CI（手で流す検査と、タグからのリリース）
-docs/                  READMEの画像
+docs/                  READMEの画像と作例（examples/）
 licenses/              同梱している第三者のライセンス
 ```
 
