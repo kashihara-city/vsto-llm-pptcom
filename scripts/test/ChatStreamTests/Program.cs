@@ -67,6 +67,13 @@ namespace ChatStreamTests
             r = await ChatOnceAsync(Http(200, Sse(Content("Hello"), "[DONE]"))).ConfigureAwait(true);
             Check("[DONE] without finish_reason", r.Content == "Hello" && r.FinishReason is null, Show(r));
 
+            // Reasoning as "reasoning" (current vLLM) or "reasoning_content" (LiteLLM); a server that sends both is read once.
+            r = await ChatOnceAsync(Http(200, Sse(
+                "{\"choices\":[{\"delta\":{\"reasoning\":\"think \"}}]}",
+                "{\"choices\":[{\"delta\":{\"reasoning_content\":\"more\",\"reasoning\":\"more\"}}]}",
+                Content("Hello"), Finish("stop"), "[DONE]"))).ConfigureAwait(true);
+            Check("reasoning under either name, read once", r.Reasoning == "think more" && r.Content == "Hello", r.Reasoning + " / " + Show(r));
+
             // The id and the name come first, the arguments in pieces; a name may come in pieces too.
             r = await ChatOnceAsync(Http(200, Sse(
                 "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"ppt\",\"arguments\":\"\"}}]}}]}",

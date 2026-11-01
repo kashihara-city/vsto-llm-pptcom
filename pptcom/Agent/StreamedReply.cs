@@ -126,7 +126,13 @@ namespace Pptcom.Agent
         private void AddDelta(JObject delta)
         {
             string piece = (string?)delta["content"] ?? "";
+            // The reasoning comes as "reasoning_content" (LiteLLM, older vLLM) or as "reasoning" (current vLLM, which
+            // reads it back under that name too, see MessagesJson); a server that sends both sends the same text.
             string r = (string?)delta["reasoning_content"] ?? "";
+            if (r.Length == 0 && delta["reasoning"] is JValue { Type: JTokenType.String } reasoning)
+            {
+                r = (string?)reasoning ?? "";
+            }
             bool hasOutput = piece.Length > 0 || delta["tool_calls"] is JArray;
             if ((r.Length > 0 || hasOutput) && _reply.FirstToken is null)
             {
