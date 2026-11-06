@@ -537,6 +537,8 @@ namespace ComScriptRunner
                 reply["values"] = engine.DescribeValues(parsed.DefinedIds.Where(id => !missing.Contains(id)));
                 reply["touched"] = new JArray(engine.TakeTouchedSlideIndexes());
                 reply["missingSet"] = new JArray(result.Lines.Where(static l => l.MissingSet).Select(static l => l.Text));
+                // The note the add-in appends when a fraction was rounded where a whole number goes (both outcomes).
+                reply["rounded"] = result.RoundedText();
                 if (!result.Success)
                 {
                     // Same text the add-in gives the model (scripts/test/tool_loop.py passes it through).
@@ -593,6 +595,12 @@ namespace ComScriptRunner
                 if (!result.Success)
                 {
                     Console.WriteLine("--- report for the model ---\n" + result.Describe());
+                }
+
+                string rounded = result.RoundedText();
+                if (rounded.Length > 0)
+                {
+                    Console.WriteLine(rounded);
                 }
 
                 exitCode = result.Success ? 0 : 1;

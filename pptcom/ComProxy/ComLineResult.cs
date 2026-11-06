@@ -14,6 +14,8 @@ namespace Pptcom.ComProxy
         public string? AlreadyDone;      // Failed: side effects that ran before the error (e.g. AddShape)
         public bool NotParsed;           // Failed: pptcom could not read the statement, so nothing of it ran
         public bool MissingSet;        // put an object into a variable without Set (VBA would not; observation only)
+        // Fractions COM rounded where a whole number goes (ComProxyEngine.RoundedArguments): which parameter -> what it became
+        public readonly List<KeyValuePair<string, string>> Rounded = [];
         public readonly List<string> Assigns = []; // variables this statement binds
     }
 }

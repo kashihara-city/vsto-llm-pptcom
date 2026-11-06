@@ -463,6 +463,7 @@ namespace Pptcom.ComProxy
         {
             lr.Status = ComLineStatus.Applied;
             _missingSetHit = false;
+            _lineRounded.Clear();
             List<string> done = [];
             string? cause = null;
             foreach (JObject o in lineOps)
@@ -496,6 +497,7 @@ namespace Pptcom.ComProxy
                 MissingSetStatements.Add(lr.Text);
             }
 
+            lr.Rounded.AddRange(_lineRounded);
             return cause;
         }
 
@@ -855,6 +857,7 @@ namespace Pptcom.ComProxy
                     object?[] putArgs = new object?[indexArgs.Length + 1];
                     Array.Copy(indexArgs, putArgs, indexArgs.Length);
                     putArgs[indexArgs.Length] = setValue;
+                    NoteRounding(targetObj, action, property, indexArgs, setValue);
                     targetObj.GetType().InvokeMember(
                         property, BindingFlags.SetProperty | BindingFlags.Public | BindingFlags.Instance,
                         binder: null, targetObj, putArgs, ComCulture);
@@ -873,6 +876,7 @@ namespace Pptcom.ComProxy
                                 method + "(img1, msoFalse, msoTrue, left, top, width, height) - not a string or a file path");
                         }
                     }
+                    NoteRounding(targetObj, action, method, callArgs, setValue: null);
                     return InvokeCallOrIndex(targetObj, method, callArgs);
 
                 case ComOpAction.Item:
@@ -906,6 +910,160 @@ namespace Pptcom.ComProxy
             }
 
             return resultSlide;
+        }
+
+        // The statement's fractions that COM rounds where a whole number goes (RoundedArguments), for its line result.
+        private readonly List<KeyValuePair<string, string>> _lineRounded = [];
+
+        private void NoteRounding(object targetObj, string action, string member, IReadOnlyList<object?> args, object? setValue)
+        {
+            try
+            {
+                _lineRounded.AddRange(RoundedArguments(ComSecurityPolicy.TryGetTypeName(targetObj), action, member, args, setValue));
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                // a note must never stop the call
+            }
+        }
+
+        // The fractions among a call's arguments (or a property's index and assigned value) where the parameter takes
+        // a whole number - an enum or a Long. COM rounds them as VBA does, to the nearest and a half to the even one,
+        // and says nothing: in ms.AddEffect(pic, msoAnimEffectFade, 0.6) the 0.6 is Level, not a duration, and
+        // becomes 1. Each as "Sequence.AddEffect argument 3 is Level As MsoAnimateByLevel" -> "0.6 became 1
+        // (msoAnimateTextByAllLevels)".
+        internal static List<KeyValuePair<string, string>> RoundedArguments(string? comTypeName, string action, string member, IReadOnlyList<object?> args, object? setValue)
+        {
+            List<KeyValuePair<string, string>> found = [];
+            Type? iface = FindInteropType(comTypeName);
+            if (iface is null)
+            {
+                return found;
+            }
+
+            string where = DisplayName(iface) + "." + member;
+            PropertyInfo? property = AllMembers(iface).OfType<PropertyInfo>().FirstOrDefault(p => p.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
+            if (action == ComOpAction.Set)
+            {
+                if (property is not null)
+                {
+                    AddRounded(found, where, property.GetIndexParameters(), args);
+                    string? became = Rounding(property.PropertyType, setValue);
+                    if (became is not null)
+                    {
+                        found.Add(new KeyValuePair<string, string>(where + " is " + TypeLabel(property.PropertyType), became));
+                    }
+                }
+
+                return found;
+            }
+            MethodInfo? method = AllMembers(iface).OfType<MethodInfo>().FirstOrDefault(m => !m.IsSpecialName && m.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
+            ParameterInfo[]? ps = method?.GetParameters() ?? property?.GetIndexParameters();
+            if (ps is not null)
+            {
+                AddRounded(found, where, ps, args);
+            }
+
+            return found;
+        }
+
+        private static void AddRounded(List<KeyValuePair<string, string>> found, string where, ParameterInfo[] ps, IReadOnlyList<object?> args)
+        {
+            for (int i = 0; i < ps.Length && i < args.Count; i++)
+            {
+                string? became = Rounding(ps[i].ParameterType, args[i]);
+                if (became is not null)
+                {
+                    found.Add(new KeyValuePair<string, string>(Invariant($"{where} argument {i + 1} is {ps[i].Name} As {TypeLabel(ps[i].ParameterType)}"), became));
+                }
+            }
+        }
+
+        // "0.6 became 1 (msoAnimateTextByAllLevels)" when `value` is a fraction and `type` takes a whole number; null otherwise.
+        internal static string? Rounding(Type type, object? value)
+        {
+            Type t = type.IsByRef ? type.GetElementType() ?? type : type;
+            bool whole = t.IsEnum || t == typeof(int) || t == typeof(short) || t == typeof(long) || t == typeof(byte);
+            if (!whole || value is not (double or float or decimal))
+            {
+                return null;
+            }
+
+            double d = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+            if (double.IsNaN(d) || double.IsInfinity(d) || d == Math.Floor(d) || Math.Abs(d) > int.MaxValue)
+            {
+                return null;
+            }
+
+            double rounded = Math.Round(d, MidpointRounding.ToEven);
+            string text = Convert.ToString(value, CultureInfo.InvariantCulture) + " became " + rounded.ToString(CultureInfo.InvariantCulture);
+            if (t.IsEnum)
+            {
+                object e = Enum.ToObject(t, (long)rounded);
+                text += Enum.IsDefined(t, e) ? " (" + e + ")" : " (not a " + t.Name + " value)";
+            }
+            return text;
+        }
+
+        // For a call PowerPoint refused for another reason than the count or the types of its arguments ("無効な要求です"):
+        // the member's parameters and what each argument went in as, so that a value in the wrong place shows - the 0.6
+        // meant as a duration is AddEffect's Level, rounded to 1. Null when the member is not a known method.
+        internal string? ArgumentsTaken(JObject op)
+        {
+            try
+            {
+                string? member = (string?)op["member"], target = (string?)op["target"];
+                if (member is null || target is null || !_handles.TryGetValue(target, out object? targetObj) || targetObj is null)
+                {
+                    return null;
+                }
+
+                Type? iface = FindInteropType(ComSecurityPolicy.TryGetTypeName(targetObj));
+                MethodInfo? method = iface is null ? null : AllMembers(iface).OfType<MethodInfo>()
+                    .FirstOrDefault(m => !m.IsSpecialName && m.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
+                if (iface is null || method is null)
+                {
+                    return null;
+                }
+
+                ParameterInfo[] ps = method.GetParameters();
+                JArray args = op["args"] as JArray ?? [];
+                List<string> got = [];
+                for (int i = 0; i < args.Count && i < ps.Length; i++)
+                {
+                    object? value = ResolveArg(args[i]);
+                    got.Add(ps[i].Name + " = " + (Rounding(ps[i].ParameterType, value) ?? ArgumentText(args[i], value)));
+                }
+                return DisplayName(iface) + "." + method.Name + "(" + string.Join(", ", ps.Select(FormatParameter)) + ") got " +
+                       (got.Count > 0 ? string.Join(", ", got) : "no arguments") + ".";
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                return null; // a hint must never mask the real error
+            }
+        }
+
+        // An argument as the script wrote it: a variable's name (an object of a hidden step: its type), an enum name,
+        // a number; other text quoted.
+        private string ArgumentText(JToken token, object? value)
+        {
+            if (token.Type == JTokenType.String)
+            {
+                string s = (string?)token ?? "";
+                if (s.Length > 1 && s[0] == '$')
+                {
+                    string id = s.Substring(1);
+                    return IsSyntheticId(id) ? "a " + (TypeNameOfHandle(id)?.TrimStart('_') ?? "value") : id;
+                }
+
+                return EnumResolver.TryResolve(s, out _) ? s : ComScriptParser.ToVbaLiteral(s);
+            }
+            return value is null ? "Nothing"
+                 : value is string text ? ComScriptParser.ToVbaLiteral(text)
+                 : value is bool b ? (b ? "True" : "False")
+                 : value.GetType().IsPrimitive ? Convert.ToString(value, CultureInfo.InvariantCulture)
+                 : System.Runtime.InteropServices.Marshal.IsComObject(value) ? "a " + (ComSecurityPolicy.TryGetTypeName(value)?.TrimStart('_') ?? "value")
+                 : "a value";
         }
 
         // `x = <object>` without Set: VBA would refuse it (or take the default property), the engine

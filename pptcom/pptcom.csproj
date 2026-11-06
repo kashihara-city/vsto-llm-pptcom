@@ -223,6 +223,7 @@
     <Compile Include="ComProxy\ComProxyEngine.cs">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="ComProxy\DeckAnimations.cs" />
     <Compile Include="ComProxy\DeckReader.cs" />
     <Compile Include="ComProxy\DeckDefaults.cs" />
     <Compile Include="ComProxy\ComOpResult.cs" />

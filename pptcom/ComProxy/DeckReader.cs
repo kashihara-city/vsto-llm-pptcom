@@ -241,6 +241,7 @@ namespace Pptcom.ComProxy
         //   Slide 3 (960x540 pt, 14 shapes):
         //   [13] = d2 RoundedRectangle L340 T412 W280 H100 fill RGB(255,255,255) line RGB(223,226,229) 1pt "品種は500以上" & vbCr & "..." | font 16pt RGB(40,40,40)
         //   Partly overlapping (fix it unless it is meant): [4] title and [6] badge, 120 x 6 pt
+        // and then the slide's animations and transition, when it has any (DeckAnimations).
         // Names PowerPoint made up ("Rounded Rectangle 15") are left out, as the type says the same;
         // names a script gave are kept ('card1'). The text is complete, as a VBA literal.
         public static string Brief(object? presentation, int slideIndex, IDictionary<string, List<string>>? variables = null)
@@ -276,6 +277,7 @@ namespace Pptcom.ComProxy
                 }
             }
             sb.Append(Overlaps(boxes));
+            sb.Append(DeckAnimations.Describe((object)slide, slideIndex, variables));
             return sb.ToString();
         }
 

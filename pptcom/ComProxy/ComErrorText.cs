@@ -167,6 +167,11 @@ namespace Pptcom.ComProxy
                 string argText = args is not null ? string.Join(", ", args.Select(static a => a.ToString(Newtonsoft.Json.Formatting.None))) : "";
                 // `Shapes(99)` / `Paragraphs(4)`: a call with one plain argument is usually an index.
                 bool looksLikeIndex = hint is null && args is not null && args.Count == 1 && (args[0].Type == JTokenType.Integer || (args[0].Type == JTokenType.String && !((string?)args[0] ?? "").StartsWith("$", StringComparison.Ordinal)));
+                // Refused for another reason (無効な要求です): what each argument went in as, by the parameter's name.
+                if (hint is null && !looksLikeIndex && action == ComOpAction.Call)
+                {
+                    hint = engine.ArgumentsTaken(op);
+                }
                 // Shapes.Item(25) -> count on Shapes itself; Slide.Shapes(25) -> count on Shapes.
                 string collection = member is null || member == "Item" ? typeLabel : member;
                 return typeLabel + "." + member + (action == ComOpAction.Call ? "(" + argText + ")" : "") + " failed." +

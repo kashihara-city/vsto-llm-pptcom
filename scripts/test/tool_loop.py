@@ -301,13 +301,15 @@ def run_tool(runner: Runner, name: str, args: dict):
         MISSING_SET.extend(r.get("missingSet") or [])
         renders = auto_render(runner, r.get("touched") or [])
         note = render_note(r.get("touched") or [], renders)
+        # fractions rounded where a whole number goes, as the add-in appends them (ComScriptResult.RoundedText)
+        rounded = ("\n" + r["rounded"]) if r.get("rounded") else ""
         if r.get("success"):
             n = r.get("lines", 0)
             ids = r.get("definedIds") or []
             vals = r.get("values") or ""
             changed = r.get("changed") or []
             return ("OK: %d lines executed. Defined: %s.%s%s" % (n, ", ".join(ids) if ids else "(none)",
-                    (" Changed: " + ", ".join(changed) + ".") if changed else "", (" Values: " + vals) if vals else "") + note, renders)
+                    (" Changed: " + ", ".join(changed) + ".") if changed else "", (" Values: " + vals) if vals else "") + rounded + note, renders)
         if r.get("stage") == "parse":
             wd = r.get("wouldDefine") or []
             # only a script rejected as a whole (empty, too many lines); a statement that does not
@@ -321,7 +323,7 @@ def run_tool(runner: Runner, name: str, args: dict):
         vals = r.get("values") or ""
         changed = r.get("changed") or []
         return ((r.get("report") or r.get("error") or "(no report)") + (("\nChanged: " + ", ".join(changed) + ".") if changed else "") +
-                (("\nValues set: " + vals) if vals else "") + note, renders)
+                (("\nValues set: " + vals) if vals else "") + rounded + note, renders)
     return ("unknown tool: " + name, None)
 
 

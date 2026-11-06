@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 
@@ -126,6 +127,33 @@ namespace Pptcom.ComProxy
 
             return sb.ToString();
         }
+
+        // Applied lines that passed a fraction where a whole number goes (ComProxyEngine.RoundedArguments), by
+        // parameter. Nothing failed, so this is all that tells the model a value did not go in as written. Empty when none.
+        public string RoundedText()
+        {
+            List<(int Line, string Where, string Became)> rounded = [.. Lines.Where(static l => l.Status == ComLineStatus.Applied)
+                .SelectMany(static l => l.Rounded.Select(r => (l.Line, r.Key, r.Value)))];
+            if (rounded.Count == 0)
+            {
+                return "";
+            }
+
+            StringBuilder sb = new("Applied, but not as written: these parameters take a whole number (an enum value or a Long), so the fraction was rounded as VBA rounds it:");
+            foreach (IGrouping<string, (int Line, string Where, string Became)> group in rounded.GroupBy(static r => r.Where, StringComparer.Ordinal))
+            {
+                List<(int Line, string Where, string Became)> items = [.. group];
+                sb.Append("\n  ").Append(group.Key).Append(": ")
+                  .Append(string.Join("; ", items.Take(MaxRoundedPerParameter).Select(static r => "line " + r.Line.ToString(CultureInfo.InvariantCulture) + " " + r.Became)));
+                if (items.Count > MaxRoundedPerParameter)
+                {
+                    sb.Append("; and ").Append(items.Count - MaxRoundedPerParameter).Append(" more");
+                }
+            }
+            return sb.ToString();
+        }
+
+        private const int MaxRoundedPerParameter = 6;
 
         // The "   (rr = 3, cc = 2)" ComScriptParser appends to statements written out from a For loop.
         private static readonly System.Text.RegularExpressions.Regex LoopPassPattern =

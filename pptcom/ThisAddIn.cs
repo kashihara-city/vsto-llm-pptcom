@@ -2559,17 +2559,20 @@ namespace Pptcom
             // earlier requests). Both are what a later request's shortened history keeps of the call.
             List<string> changed = result.Changed(parsed);
             string changedText = changed.Count > 0 ? " Changed: " + string.Join(", ", changed) + "." : "";
+            // A fraction rounded where a whole number goes ran without an error; only this says it.
+            string rounded = result.RoundedText();
+            string roundedText = rounded.Length > 0 ? "\n" + rounded : "";
             if (result.Success)
             {
                 string ids = parsed.DefinedIds.Count > 0 ? string.Join(", ", parsed.DefinedIds) : "(none)";
                 string values = engine.DescribeValues(parsed.DefinedIds);
                 return WithAutoRenders(engine, new ToolOutcome(Invariant($"OK: {parsed.Lines.Count} lines executed. Defined: {ids}.") + changedText +
-                                       (values.Length > 0 ? " Values: " + values : "")));
+                                       (values.Length > 0 ? " Values: " + values : "") + roundedText));
             }
             List<string> notAssigned = result.NotAssigned;
             string partial = engine.DescribeValues(parsed.DefinedIds.Where(id => !notAssigned.Contains(id)));
             return WithAutoRenders(engine, new ToolOutcome(result.Describe() + (changedText.Length > 0 ? "\n" + changedText.Trim() : "") +
-                                                            (partial.Length > 0 ? "\nValues set: " + partial : "")));
+                                                            (partial.Length > 0 ? "\nValues set: " + partial : "") + roundedText));
         }
 
         // docread page: pages of an attached PDF drawn by the task pane (PDF.js) and shown to the model like

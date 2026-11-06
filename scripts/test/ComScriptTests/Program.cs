@@ -50,6 +50,8 @@ namespace ComScriptTests
             StatementTests();
             DeckTests();
             TypeRuleTests();
+            RoundingTests();
+            AnimationTests();
             SelectionTests();
             RenderSizeTests();
             OverlapTests();
@@ -504,6 +506,190 @@ namespace ComScriptTests
             Report("policy: nothing is called or set on an object whose type could not be read",
                    ComSecurityPolicy.CheckMemberOnType(typeName: null, "Count") is not null && ComSecurityPolicy.CheckSetOnType(typeName: null, "Left") is not null &&
                    ComSecurityPolicy.CheckMemberOnType("Shapes", "Count") is null && ComSecurityPolicy.CheckSetOnType("Shape", "Left") is null, "allowed");
+        }
+
+        // A fraction where a parameter takes a whole number (an enum, a Long) goes in rounded as VBA rounds it, without an
+        // error; the engine names the parameter and what the value became (ComProxyEngine.RoundedArguments), from the
+        // interop types. The 0.6 in ms.AddEffect(pic, msoAnimEffectFade, 0.6) is Level, not a duration.
+        private static void RoundingTests()
+        {
+            static string Notes(string type, string action, string member, object?[] args, object? value = null)
+            {
+                return string.Join(" | ", ComProxyEngine.RoundedArguments(type, action, member, args, value).Select(static n => n.Key + ": " + n.Value));
+            }
+
+            static void expect(string name, string got, string expected)
+            {
+                Report("rounding: " + name, got == expected, "expected \"" + expected + "\", got \"" + got + "\"");
+            }
+
+            expect("AddEffect's third argument is Level", Notes("Sequence", ComOpAction.Call, "AddEffect", [null, 10, 0.6, 2]),
+                   "Sequence.AddEffect argument 3 is Level As MsoAnimateByLevel: 0.6 became 1 (msoAnimateTextByAllLevels)");
+            expect("below a half goes down", Notes("Sequence", ComOpAction.Call, "AddEffect", [null, 10, 0.3]),
+                   "Sequence.AddEffect argument 3 is Level As MsoAnimateByLevel: 0.3 became 0 (msoAnimateLevelNone)");
+            expect("a half goes to the even number, as in VBA", Notes("Slides", ComOpAction.Call, "Add", [2.5, 12]),
+                   "Slides.Add argument 1 is Index As Long: 2.5 became 2");
+            expect("a value the enum does not have", Notes("Sequence", ComOpAction.Call, "AddEffect", [null, 10, 99.4]),
+                   "Sequence.AddEffect argument 3 is Level As MsoAnimateByLevel: 99.4 became 99 (not a MsoAnimateByLevel value)");
+            expect("an assigned value", Notes("Timing", ComOpAction.Set, "TriggerType", [], 2.4),
+                   "Timing.TriggerType is MsoAnimTriggerType: 2.4 became 2 (msoAnimTriggerWithPrevious)");
+            expect("nothing for whole numbers, or where a Single goes", Notes("Shapes", ComOpAction.Call, "AddTextbox", [1, 10.5, 20.25, 100.0, 50]) +
+                   Notes("Timing", ComOpAction.Set, "Duration", [], 0.6) + Notes("Sequence", ComOpAction.Call, "AddEffect", [null, 10, 1.0, 2]), "");
+
+            // Reported for the lines that applied, by parameter; a line that failed has its own error instead.
+            ComScriptResult result = new();
+            foreach ((int line, ComLineStatus status, string became) in new[] { (1, ComLineStatus.Applied, "0.3 became 0 (msoAnimateLevelNone)"),
+                                                                                 (2, ComLineStatus.Failed, "0.6 became 1 (msoAnimateTextByAllLevels)"),
+                                                                                 (3, ComLineStatus.Applied, "0.55 became 1 (msoAnimateTextByAllLevels)"), })
+            {
+                ComLineResult l = new() { Line = line, Text = "x", Status = status };
+                l.Rounded.Add(new KeyValuePair<string, string>("Sequence.AddEffect argument 3 is Level As MsoAnimateByLevel", became));
+                result.Lines.Add(l);
+            }
+            string text = result.RoundedText();
+            Report("rounding: the applied lines, by parameter",
+                   text.EndsWith("\n  Sequence.AddEffect argument 3 is Level As MsoAnimateByLevel: line 1 0.3 became 0 (msoAnimateLevelNone); line 3 0.55 became 1 (msoAnimateTextByAllLevels)", StringComparison.Ordinal),
+                   text);
+            Report("rounding: nothing to say when nothing was rounded", new ComScriptResult().RoundedText().Length == 0, "not empty");
+        }
+
+        // A slide's animations at the end of its shape list (DeckAnimations): when each effect plays, PowerPoint's way - a
+        // with-previous delay counts from where its part started, an after-previous effect waits for the part so far, a
+        // click starts a new part - and the side a shape comes from. Late-bound on stand-ins for the slide, its TimeLine
+        // and its transition.
+        private static void AnimationTests()
+        {
+            static string times(params (int Trigger, double Delay, double Length)[] effects)
+            {
+                List<DeckAnimations.Row> rows = [.. effects.Select(static e => new DeckAnimations.Row { Trigger = e.Trigger, Delay = e.Delay, Length = e.Length })];
+                return string.Join(" ", DeckAnimations.Times(rows).Select(static t => Invariant($"{t.Part}:{t.Start:0.00}-{t.End:0.00}")));
+            }
+
+            const int click = 1, with = DeckAnimations.WithPrevious, after = DeckAnimations.AfterPrevious;
+            string got = times((with, 0, 0.5), (with, 0.4, 0.5), (after, 0, 0.5), (click, 0, 0.6));
+            Report("animations: with previous counts from its part's start, after previous waits, a click starts a part",
+                   got == "0:0.00-0.50 0:0.40-0.90 0:0.90-1.40 1:0.00-0.60", got);
+            got = times((click, 0, 0.5), (with, 0.25, 0.5), (with, 0.5, 0.5));
+            Report("animations: delays with previous do not add up", got == "1:0.00-0.50 1:0.25-0.75 1:0.50-1.00", got);
+            Report("animations: a direction is the side it comes from (or goes to)",
+                   DeckAnimations.Side((int)Microsoft.Office.Interop.PowerPoint.MsoAnimDirection.msoAnimDirectionUp, exit: false) == " from the top" &&
+                   DeckAnimations.Side((int)Microsoft.Office.Interop.PowerPoint.MsoAnimDirection.msoAnimDirectionDown, exit: true) == " to the bottom",
+                   DeckAnimations.Side((int)Microsoft.Office.Interop.PowerPoint.MsoAnimDirection.msoAnimDirectionUp, exit: false));
+
+            AnimSlide slide = new();
+            slide.Shapes.List.AddRange([new AnimShape { Id = 2, Name = "Rectangle 1" }, new AnimShape { Id = 5, Name = "c1" }, new AnimShape { Id = 9, Name = "foot" }]);
+            Report("animations: nothing for a slide without any", DeckAnimations.Describe(slide, 1, variables: null).Length == 0, "not empty");
+            slide.TimeLine.MainSequence.List.AddRange([
+                new AnimEffect { Shape = slide.Shapes.List[0], EffectType = (int)Microsoft.Office.Interop.PowerPoint.MsoAnimEffect.msoAnimEffectWipe,
+                                 EffectParameters = new AnimParameters { Direction = (int)Microsoft.Office.Interop.PowerPoint.MsoAnimDirection.msoAnimDirectionLeft, },
+                                 Timing = new AnimTiming { TriggerType = with, TriggerDelayTime = 0f, Duration = 0.4f, }, },
+                new AnimEffect { Shape = slide.Shapes.List[1], EffectType = (int)Microsoft.Office.Interop.PowerPoint.MsoAnimEffect.msoAnimEffectFly,
+                                 EffectParameters = new AnimParameters { Direction = (int)Microsoft.Office.Interop.PowerPoint.MsoAnimDirection.msoAnimDirectionDown, },
+                                 Timing = new AnimTiming { TriggerType = with, TriggerDelayTime = 0.85f, Duration = 0.45f, }, },
+                new AnimEffect { Shape = slide.Shapes.List[2], EffectType = (int)Microsoft.Office.Interop.PowerPoint.MsoAnimEffect.msoAnimEffectFade, Exit = -1,
+                                 Timing = new AnimTiming { TriggerType = click, TriggerDelayTime = 0f, Duration = 0.5f, }, },
+            ]);
+            slide.SlideShowTransition.EntryEffect = (int)Microsoft.Office.Interop.PowerPoint.PpEntryEffect.ppEffectFade;
+            slide.SlideShowTransition.Duration = 0.7f;
+            Dictionary<string, List<string>> variables = new(StringComparer.Ordinal)
+            {
+                [ComProxyEngine.ShapeKey(256, 5)] = ["c1"],
+                [ComProxyEngine.ShapeKey(256, 9)] = ["foot"],
+            };
+            string text = System.Text.RegularExpressions.Regex.Replace(DeckAnimations.Describe(slide, 1, variables), " {2,}", " ", System.Text.RegularExpressions.RegexOptions.None, Guard.RegexTimeout);
+            string expected = "Slide 1 animations (MainSequence.Item(#); times in seconds from the click that starts them):\n" +
+                              " when the slide opens (no click):\n" +
+                              " #1 [1] Wipe from the left 0.00-0.40 with previous, delay 0, 0.4 s\n" +
+                              " #2 [2] c1 Fly from the bottom 0.85-1.30 with previous, delay 0.85, 0.45 s\n" +
+                              " click 1:\n" +
+                              " #3 [3] foot Fade (exit) 0.00-0.50 on click, delay 0, 0.5 s\n" +
+                              "Slide transition: Fade, 0.7 s\n";
+            Report("animations: the list, by part, with the shape list's numbers and variables", text == expected, "\n" + text);
+        }
+
+        // slide.Shapes(i), .SlideID, .TimeLine and .SlideShowTransition, as late binding reaches PowerPoint's Slide.
+        internal sealed class AnimSlide : DynamicObject
+        {
+            public int SlideID = 256;
+            public AnimShapes Shapes = new();
+            public AnimTimeLine TimeLine = new();
+            public AnimTransition SlideShowTransition = new();
+
+            public override bool TryInvokeMember(InvokeMemberBinder binder, object?[]? args, out object? result)
+            {
+                result = binder.Name == "Shapes" && args is { Length: 1 } ? Shapes.Item((int)args[0]!) : null;
+                return result is not null;
+            }
+        }
+
+        internal sealed class AnimShapes
+        {
+            public readonly List<AnimShape> List = [];
+            public int Count => List.Count;
+
+            public AnimShape Item(int index)
+            {
+                return List[index - 1];
+            }
+        }
+
+        internal sealed class AnimShape
+        {
+            public int Id;
+            public string Name = "";
+        }
+
+        internal sealed class AnimTimeLine
+        {
+            public AnimSequence MainSequence = new();
+            public AnimSequences InteractiveSequences = new();
+        }
+
+        // No shape starts a sequence of its own on the slides of these tests.
+        internal sealed class AnimSequences
+        {
+            public int Count { get; }
+        }
+
+        internal sealed class AnimSequence
+        {
+            public readonly List<AnimEffect> List = [];
+            public int Count => List.Count;
+
+            public AnimEffect Item(int index)
+            {
+                return List[index - 1];
+            }
+        }
+
+        // An effect without a direction has EffectParameters without one (reading it fails, as on a fade).
+        internal sealed class AnimEffect
+        {
+            public AnimShape Shape = new();
+            public int EffectType, Exit;
+            public int Paragraph { get; }
+            public AnimTiming Timing = new();
+            public object EffectParameters = new();
+        }
+
+        internal sealed class AnimParameters
+        {
+            public int Direction;
+        }
+
+        internal sealed class AnimTiming
+        {
+            public int TriggerType;
+            public float TriggerDelayTime, Duration, RepeatCount = 1;
+            public int AutoReverse { get; }
+        }
+
+        internal sealed class AnimTransition
+        {
+            public int EntryEffect;
+            public float Duration;
+            public int AdvanceOnTime { get; }
+            public float AdvanceTime { get; }
         }
 
         // What the user had selected reaches the model with its place in the shape's text (DeckReader.ReadSelection and
