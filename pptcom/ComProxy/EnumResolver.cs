@@ -9,6 +9,9 @@ namespace Pptcom.ComProxy
     // "ppLayoutBlank"). Since our project embeds the interop types (EmbedInteropTypes=true), all
     // Office/PowerPoint enums end up compiled directly into this assembly, so we can build a
     // name -> underlying-value lookup once via reflection instead of hand-maintaining a table.
+    // The interop assemblies are Office 2013's: the names and values Office added since come from the type libraries of
+    // the Office installed (TypeLibEnums), where the interop assemblies have none. Where both have a value, the interop
+    // assemblies' name stays, so that a machine without Office (CI) names everything they have alike.
     internal static class EnumResolver
     {
         private static readonly Dictionary<string, object> Map = Build();
@@ -49,6 +52,17 @@ namespace Pptcom.ComProxy
                     }
                 }
             }
+
+            foreach (Dictionary<int, string> values in TypeLibEnums.All.Values)
+            {
+                foreach (KeyValuePair<int, string> v in values)
+                {
+                    if (!map.ContainsKey(v.Value))
+                    {
+                        map[v.Value] = v.Key;
+                    }
+                }
+            }
             return map;
         }
 
@@ -59,17 +73,20 @@ namespace Pptcom.ComProxy
 
         public static int Count => Map.Count;
 
-        // The other way: the name of a value, without `prefix` ("Fly" for 2 of MsoAnimEffect with "msoAnimEffect"), or
-        // null when the enum has no such value.
+        // The other way: the name of a value, without `prefix` ("Fly" for 2 of MsoAnimEffect with "msoAnimEffect"), from
+        // the interop assemblies or else the installed Office's type library (MorphByObject for 3954 of PpEntryEffect);
+        // null when neither has the value.
         public static string? NameOf(Type enumType, int value, string prefix = "")
         {
             object e = Enum.ToObject(enumType, value);
-            if (!Enum.IsDefined(enumType, e))
+            string? name = Enum.IsDefined(enumType, e) ? Enum.GetName(enumType, e)
+                         : TypeLibEnums.All.TryGetValue(enumType.Name, out Dictionary<int, string> later) && later.TryGetValue(value, out string added) ? added
+                         : null;
+            if (name is null)
             {
                 return null;
             }
 
-            string name = Enum.GetName(enumType, e) ?? "";
             return name.StartsWith(prefix, StringComparison.Ordinal) ? name.Substring(prefix.Length) : name;
         }
     }

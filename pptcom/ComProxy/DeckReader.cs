@@ -429,11 +429,6 @@ namespace Pptcom.ComProxy
                                              ShapeContents.Limits limits)
         {
             string type = TypeName(shape);
-            if (type.StartsWith("AutoShape(msoShape", StringComparison.Ordinal))
-            {
-                type = type.Substring("AutoShape(msoShape".Length).TrimEnd(')');
-            }
-
             sb.Append(VariablesOf(variables, slide, shape)).Append(type);
             string name = (string)shape.Name ?? "";
             if (!AutoNamePattern.IsMatch(name))
@@ -817,6 +812,12 @@ namespace Pptcom.ComProxy
         private static readonly System.Text.RegularExpressions.Regex AutoNamePattern =
             new(@"\s\d+$", System.Text.RegularExpressions.RegexOptions.None, Guard.RegexTimeout);
 
+        // What a shape is, by name, so that the model need not recall what a number stands for: an AutoShape by its form
+        // (Diamond, Hexagon, 5pointStar - the msoShape names without the prefix), a placeholder with what it is for
+        // (Placeholder(Title)), anything else by its MsoShapeType (Freeform, TextEffect, Media...). The names come from
+        // the interop assemblies and the installed Office (EnumResolver.NameOf); a number only when neither has one:
+        // AutoShape(n), Type(n) - msoGraphic (28, an icon in Microsoft's documentation) is in neither the interop
+        // assemblies nor the type library of the Office this was tried on.
         private static string TypeName(dynamic shape)
         {
             int type;
@@ -830,48 +831,16 @@ namespace Pptcom.ComProxy
             }
             switch (type)
             {
-                case 1:
-                    int auto = 0;
-                    try
-                    {
-                        auto = (int)shape.AutoShapeType;
-                    }
-                    catch (Exception ex) when (Guard.IsRecoverable(ex))
-                    {
-                    }
-                    return "AutoShape(" + AutoShapeName(auto) + ")";
-                case 3:
-                    return "Chart";
-                case 6:
-                    return "Group";
-                case 9:
-                    return "Line";
-                case 13:
-                    return "Picture";
-                case 14:
-                    return "Placeholder";
-                case 17:
-                    return "TextBox";
-                case 19:
-                    return "Table";
-                case 24:
-                    return "SmartArt";
+                case 1: // msoAutoShape
+                    int auto = Guard.Try(() => (int)shape.AutoShapeType, 0);
+                    return EnumResolver.NameOf(typeof(Microsoft.Office.Core.MsoAutoShapeType), auto, "msoShape") ?? Invariant($"AutoShape({auto})");
+                case 14: // msoPlaceholder
+                    int role = Guard.Try(() => (int)shape.PlaceholderFormat.Type, 0);
+                    string? roleName = EnumResolver.NameOf(typeof(Microsoft.Office.Interop.PowerPoint.PpPlaceholderType), role, "ppPlaceholder");
+                    return roleName is not null ? "Placeholder(" + roleName + ")" : "Placeholder";
                 default:
-                    return Invariant($"Type{type}");
+                    return EnumResolver.NameOf(typeof(Microsoft.Office.Core.MsoShapeType), type, "mso") ?? Invariant($"Type({type})");
             }
-        }
-
-        private static string AutoShapeName(int t)
-        {
-            return t switch
-            {
-                1 => "msoShapeRectangle",
-                5 => "msoShapeRoundedRectangle",
-                9 => "msoShapeOval",
-                33 => "msoShapeRightArrow",
-                52 => "msoShapeChevron",
-                _ => t.ToString(CultureInfo.InvariantCulture),
-            };
         }
 
         // ---- what changed in the deck between two requests (edits made by hand) -----------------------

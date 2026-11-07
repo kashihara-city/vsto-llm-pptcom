@@ -219,6 +219,20 @@ namespace Pptcom.ComProxy
             "Activate", "ActivateChartDataWindow",
         };
 
+        // A chart's numbered presets: the Quick Layouts (ApplyLayout) and the Chart Styles (ChartStyle) of the ribbon. What
+        // a number brings depends on the chart's type and is told nowhere a script can read, and it puts back parts of its
+        // own: a model applied a layout nobody asked for, and the chart got a placeholder title ("グラフ タイトル"), its
+        // legend moved and its labels changed. Each part has a property of its own that a script sets as meant.
+        private static readonly HashSet<string> ChartPresets = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "ApplyLayout", "ChartStyle",
+        };
+
+        private const string ChartPresetRefusal =
+            " (a numbered preset: what it brings depends on the chart's type and the number does not tell, and it puts back a placeholder title, " +
+            "a legend and labels of its own. Set the parts you want instead: HasTitle and ChartTitle.Text, HasLegend and Legend.Position, " +
+            "ApplyDataLabels, Axes(n).HasTitle, the series' Format.Fill)";
+
         // Members that are only dangerous on a specific object type (so a name-only block would
         // be too broad: blocking "Add" everywhere would also kill Slides.Add / Shapes.Add*).
         // Keyed by the COM interface name reported by the object's ITypeInfo, with or without its leading _ (NameForms).
@@ -227,6 +241,7 @@ namespace Pptcom.ComProxy
             {
                 { "Application", OtherDeckMembers },
                 { "ChartData", ChartDataOpeners },
+                { "Chart", ChartPresets },
                 // Creating a new deck puts the work outside the one the user has open; opening
                 // one reads an arbitrary local/network file into the session.
                 { "Presentations", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Add", "Open", "Open2007", "OpenOld", "CheckOut", "CanCheckOut" } },
@@ -328,6 +343,8 @@ namespace Pptcom.ComProxy
                           "To use another presentation, ask the user to save it and attach it to the task pane, then read it with docread)"
                         : ReferenceEquals(blocked, ChartDataOpeners)
                         ? "ChartData." + member + " (not needed: reading ChartData.Workbook opens the chart's data, and pptcom closes it when the call ends)"
+                        : ReferenceEquals(blocked, ChartPresets)
+                        ? "Chart." + member + ChartPresetRefusal
                         : typeName.TrimStart('_') + "." + member;
                 }
             }

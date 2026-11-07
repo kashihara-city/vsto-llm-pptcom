@@ -56,6 +56,7 @@ namespace ComScriptTests
             RoundingTests();
             AnimationTests();
             ContentTests();
+            ShapeNameTests();
             SelectionTests();
             RenderSizeTests();
             OverlapTests();
@@ -544,6 +545,10 @@ namespace ComScriptTests
             object?[] values = ["窓口", "2022", "1/2", "A-1", "", 120, -5, 4.5, true, null, new DateTime(2026, 11, 7, 0, 0, 0, DateTimeKind.Unspecified), new object?[] { "a", 3, null }];
             List<string> failed = [.. values.Where(static v => ComSecurityPolicy.CheckChartDataValue(v) is not null).Select(static v => Convert.ToString(v, CultureInfo.InvariantCulture) ?? "")];
             Report("chart data: numbers, text, dates, True/False, Empty and Array(...) of them are written", failed.Count == 0, string.Join(", ", failed));
+            Report("charts: the numbered presets (ApplyLayout, ChartStyle) are refused, with the parts to set instead",
+                   ComSecurityPolicy.CheckMemberOnType("Chart", "ApplyLayout") is string layout && layout.Contains("HasTitle") &&
+                   ComSecurityPolicy.CheckMemberOnType("_Chart", "ChartStyle") is not null && ComSecurityPolicy.CheckMemberOnType("Chart", "SetSourceData") is null,
+                   ComSecurityPolicy.CheckMemberOnType("Chart", "ApplyLayout"));
             Report("chart data: opened by reading ChartData.Workbook, not by Activate (which can leave PowerPoint on a modal alert)",
                    ComSecurityPolicy.CheckMemberOnType("ChartData", "Activate") is string activate && activate.Contains("not needed") &&
                    ComSecurityPolicy.CheckMemberOnType("ChartData", "ActivateChartDataWindow") is not null && ComSecurityPolicy.CheckMemberOnType("ChartData", "Workbook") is null,
@@ -812,6 +817,39 @@ namespace ComScriptTests
         // Under a table, a chart, a SmartArt graphic and a group, the shape list shows what is in it (ShapeContents), with
         // the way a script reaches it, cut at the Limits with a count of the rest. Late-bound on stand-ins for the shapes;
         // they have no Fill or Line, which the list leaves out when it cannot read them.
+        // A shape's kind by name in the shape list, from the enums: an AutoShape's form, a placeholder's role, any other
+        // MsoShapeType; a number only where no name is known. What the installed Office added to the enums since the
+        // interop assemblies (the Morph transitions) is named and resolves where its type library is registered; a
+        // machine without Office (CI) has the interop assemblies' names only, and keeps them where both have a value.
+        private static void ShapeNameTests()
+        {
+            ContentSlide slide = new();
+            slide.Shapes.List.AddRange([
+                new ContentShape { Id = 2, Type = 1, AutoShapeType = 4, Name = "Diamond 1" },
+                new ContentShape { Id = 3, Type = 5, Name = "Freeform 2" },
+                new ContentShape { Id = 4, Type = 14, Name = "Title 3", PlaceholderFormat = new ContentPlaceholder { Type = 1 } },
+                new ContentShape { Id = 5, Type = 1, AutoShapeType = 999, Name = "Shape 4" },
+                new ContentShape { Id = 6, Type = 99, Name = "Thing 5" },
+            ]);
+            string[] lines = DeckReader.Brief(new SelDeck(slide), 1).Split('\n');
+            string kinds = string.Join(" | ", lines.Skip(1).Take(5).Select(static l => l.Split(' ')[1]));
+            Report("shape names: an AutoShape's form, a placeholder's role, another MsoShapeType, and a number where no name is known",
+                   kinds == "Diamond | Freeform | Placeholder(Title) | AutoShape(999) | Type(99)", kinds);
+
+            Report("enums: the interop assemblies' name stays where the installed Office also has the value",
+                   EnumResolver.NameOf(typeof(Microsoft.Office.Core.MsoShapeType), 24, "mso") == "SmartArt", EnumResolver.NameOf(typeof(Microsoft.Office.Core.MsoShapeType), 24, "mso"));
+            if (TypeLibEnums.All.Count == 0)
+            {
+                Console.WriteLine("  (no Office type library registered here: the interop assemblies' names only)");
+                return;
+            }
+
+            string? morph = EnumResolver.NameOf(typeof(Microsoft.Office.Interop.PowerPoint.PpEntryEffect), 3954, "ppEffect");
+            Report("enums: a value Office added since the interop assemblies is named from its type library, and its name resolves",
+                   morph == "MorphByObject" && EnumResolver.TryResolve("ppEffectMorphByObject", out object value) && Convert.ToInt32(value, CultureInfo.InvariantCulture) == 3954,
+                   morph);
+        }
+
         private static void ContentTests()
         {
             static ContentShape textShape(int id, int type, string name, string text)
@@ -933,6 +971,12 @@ namespace ComScriptTests
             public ContentSmartArt? SmartArt;
             public ContentItems? GroupItems;
             public ContentFill? Fill;
+            public ContentPlaceholder? PlaceholderFormat;
+        }
+
+        internal sealed class ContentPlaceholder
+        {
+            public int Type;
         }
 
         // Table.Rows.Count, Columns.Count and Cell(row, column).Shape: its place and TextFrame.TextRange.Text. Every cell of

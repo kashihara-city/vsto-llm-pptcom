@@ -57,6 +57,7 @@
     <Compile Include="..\..\..\pptcom\ComProxy\DeckAnimations.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\DeckReader.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\ShapeContents.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\TypeLibEnums.cs" />
     <Compile Include="..\..\..\pptcom\AddinSettings.cs" />
     <Compile Include="..\..\..\pptcom\CredentialStore.cs" />
     <Compile Include="..\..\..\pptcom\Agent\OpenAiCompatibleClient.cs" />
