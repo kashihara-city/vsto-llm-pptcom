@@ -856,9 +856,9 @@ namespace Pptcom
         // ---- one conversation per window -------------------------------------------------------------
         // The requests sent in a window's pane form one conversation, on the window's presentation. They share the pptcom
         // engine (variables, generated images), and each request is sent after a shortened copy of the
-        // earlier ones (ShortenForLater): the user's requests, the tool calls with the scripts and image
-        // prompts left out, the first line of each result (OK / Defined / Changed, or how many lines
-        // failed) and the model's replies - no renderings, no reasoning. The deck itself is not resent:
+        // earlier ones (ShortenForLater): the user's requests, the tool calls with the image prompts left out and
+        // each request's pptcom calls as one that says only that they ran, the first line of the other results (an
+        // image's variable, a document's name) and the model's replies - no renderings, no reasoning. The deck itself is not resent:
         // the model looks at it with pptread, and is told which slides the user changed by hand since
         // the last request (DeckReader.Fingerprint / Compare). A request that stopped at the turn limit is also kept
         // whole until the next one (Stopped), for 続ける. The conversation ends with 新しい会話,
@@ -1371,8 +1371,9 @@ namespace Pptcom
             }
             sb.Append("The deck now has ").Append(slides).Append(" slide(s). ").Append(run.Continues
                 ? "That request is above as it was sent, with its renderings" + (run.EarlierMessages > 0 ? "; the ones before it are shortened" : "") + ".\n\n"
-                : "The renderings and scripts of the earlier requests are left out of this conversation; " +
-                  "their variables still exist. Look at the slides you need with pptread.\n\n").Append(selection).Append("Request:\n");
+                : "The earlier requests above keep what was asked, the images made and your replies, not what the pptcom calls did or the renderings, " +
+                  "so they do not tell what the slides are now; their variables still exist. Look at a slide with pptread before you change it.\n\n")
+              .Append(selection).Append("Request:\n");
             return sb.ToString();
         }
 

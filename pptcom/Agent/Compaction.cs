@@ -51,11 +51,14 @@ namespace Pptcom.Agent
         }
 
         // A request's part of the conversation, shortened for the requests after it: the request as the user wrote it,
-        // each assistant turn without reasoning (pptcom scripts and imagegen prompts replaced by a note), each tool result
-        // cut to its first line (plus Changed), no renderings. A tool call left without a result (the user stopped the
-        // request) gets one saying so. `ending`: what the user was shown when the request stopped before it finished,
-        // which goes last as the model's own words; the model's notes stay then too, as they tell what was left to do.
-        // Null for a request that finished: its notes go.
+        // each assistant turn without reasoning, no renderings. Its pptcom calls become one call, where the first was,
+        // whose result says only that they ran (PptcomRan): the results' Defined, Changed and failed lines told later
+        // requests what the slides had been, and the model took that for what they are (it rewrote a card it believed
+        // was the chart's label), so it looks at the slides again with pptread. The other calls stay, imagegen's prompt
+        // replaced by a note, each result cut to its first line: an image's variable, a document's name, the deck's size.
+        // A call left without a result (the user stopped the request) gets one saying so. `ending`: what the user was
+        // shown when the request stopped before it finished, which goes last as the model's own words; the model's notes
+        // stay then too, as they tell what was left to do. Null for a request that finished: its notes go.
         // `first`: the request's own message, where its part begins - looked for, not counted: a request that carries on
         // a stopped one comes after that one's messages, whose notes leave when it is shortened (RemoveNotes).
         public static List<ChatMessage> ShortenForLater(List<ChatMessage> messages, ChatMessage first, string request, string? ending)
@@ -66,15 +69,17 @@ namespace Pptcom.Agent
                 throw new ArgumentException("the request's message is not in the conversation", nameof(first));
             }
 
-            List<ChatMessage> shortened = [];
-            for (int i = from; i < messages.Count; i++)
+            List<ChatMessage> part = [.. messages.Skip(from + 1)];
+            HashSet<string> answered = new(part.Where(static m => m.Role == "tool").Select(static m => m.ToolCallId ?? ""), StringComparer.Ordinal);
+            List<ToolCall> pptcoms = [.. part.Where(static m => m.Role == "assistant" && m.ToolCalls is not null)
+                                             .SelectMany(static m => m.ToolCalls).Where(static c => c.Name == PptcomTool)];
+            HashSet<string> pptcomIds = new(pptcoms.Select(static c => c.Id), StringComparer.Ordinal);
+            string? kept = pptcoms.Count > 0 ? pptcoms[0].Id : null; // the one call that stands for them all
+            string ran = PptcomRan(pptcoms.Count(c => answered.Contains(c.Id)), stopped: pptcoms.Exists(c => !answered.Contains(c.Id)));
+
+            List<ChatMessage> shortened = [new ChatMessage("user", request)];
+            foreach (ChatMessage m in part)
             {
-                ChatMessage m = messages[i];
-                if (i == from)
-                {
-                    shortened.Add(new ChatMessage("user", request));
-                    continue;
-                }
                 if (m.Role == "user" || (m.Notes && ending is null))
                 {
                     continue; // the renderings' carrier, the context of a continued request; notes of a request that finished
@@ -82,33 +87,45 @@ namespace Pptcom.Agent
 
                 if (m.Role == "tool")
                 {
-                    string[] lines = (m.Content ?? "").Split('\n');
-                    string kept = lines[0] + string.Concat(lines.Skip(1).Where(static l => l.StartsWith("Changed:", StringComparison.Ordinal)).Select(static l => "\n" + l));
-                    shortened.Add(ChatMessage.ToolResult(m.ToolCallId ?? "", kept));
+                    if (pptcomIds.Contains(m.ToolCallId ?? ""))
+                    {
+                        if (m.ToolCallId == kept)
+                        {
+                            shortened.Add(ChatMessage.ToolResult(m.ToolCallId ?? "", ran));
+                        }
+
+                        continue;
+                    }
+
+                    shortened.Add(ChatMessage.ToolResult(m.ToolCallId ?? "", (m.Content ?? "").Split('\n')[0]));
                     continue;
                 }
                 ChatMessage a = new(m.Role, m.Content);
                 if (m.ToolCalls is not null)
                 {
-                    a.ToolCalls = [.. m.ToolCalls.Select(static call => new ToolCall { Id = call.Id, Name = call.Name, Arguments = ShortenArguments(call) })];
-                    shortened.Add(a);
-                    foreach (ToolCall call in m.ToolCalls)
+                    List<ToolCall> calls = [.. m.ToolCalls.Where(c => !pptcomIds.Contains(c.Id) || c.Id == kept)];
+                    if (calls.Count == 0)
                     {
-                        bool answered = false;
-                        for (int j = i + 1; j < messages.Count && messages[j].Role == "tool"; j++)
+                        if (!string.IsNullOrEmpty(m.Content))
                         {
-                            if (messages[j].ToolCallId == call.Id)
-                            {
-                                answered = true;
-                                break;
-                            }
+                            shortened.Add(a);
                         }
 
-                        if (!answered)
-                        {
-                            shortened.Add(ChatMessage.ToolResult(call.Id, "(not run: the user stopped the request)"));
-                        }
+                        continue;
                     }
+
+                    a.ToolCalls = [.. calls.Select(call => new ToolCall
+                    {
+                        Id = call.Id,
+                        Name = call.Name,
+                        Arguments = call.Id == kept ? PptcomCallsArguments(pptcoms.Count) : ShortenArguments(call),
+                    })];
+                    shortened.Add(a);
+                    foreach (ToolCall call in calls.Where(c => !answered.Contains(c.Id)))
+                    {
+                        shortened.Add(ChatMessage.ToolResult(call.Id, call.Id == kept ? ran : NotRun));
+                    }
+
                     continue;
                 }
                 shortened.Add(a);
@@ -122,6 +139,28 @@ namespace Pptcom.Agent
             }
 
             return ordered;
+        }
+
+        private const string PptcomTool = "pptcom";
+        private const string NotRun = "(not run: the user stopped the request)";
+
+        // The one pptcom call of a shortened request: how many there were, with no script.
+        private static string PptcomCallsArguments(int calls)
+        {
+            return new JObject { ["script"] = Invariant($"{ElidedScriptMark}{calls} pptcom call(s) of this request, already run - left out of this conversation)") }
+                .ToString(Newtonsoft.Json.Formatting.None);
+        }
+
+        // Its result: that they ran, and where the slides are to be seen now - nothing of what they did.
+        private static string PptcomRan(int ran, bool stopped)
+        {
+            if (ran == 0)
+            {
+                return NotRun;
+            }
+
+            return Invariant($"Done ({ran} pptcom call(s)). What they did is left out of this conversation and does not tell what the slides are now: ") +
+                   "look at a slide with pptread before you change it." + (stopped ? " The user stopped the request before the last one ran." : "");
         }
 
         private static List<ChatMessage> OrderToolResults(List<ChatMessage> list)

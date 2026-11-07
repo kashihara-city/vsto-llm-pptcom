@@ -397,9 +397,11 @@ namespace ChatStreamTests
         }
 
         // What the requests after one get of it (Compaction.ShortenForLater): the request as written, each turn without
-        // reasoning or script, each result's first line, no renderings or other user messages; a call left unanswered
-        // says so. A request that stopped before it finished ends with what the user was shown, as the model's words,
-        // and keeps the model's notes; one that finished loses them.
+        // reasoning, no renderings or other user messages. Its pptcom calls become one, where the first was, saying only
+        // that they ran - nothing of what they defined, changed or failed, which later requests took for the slides as
+        // they are; the other calls keep the first line of their result (an image's variable, the deck's size, a
+        // document's name). A call left unanswered says so. A request that stopped before it finished ends with what the
+        // user was shown, as the model's words, and keeps the model's notes; one that finished loses them.
         private static void ShortenForLaterTests()
         {
             List<ChatMessage> run = [new ChatMessage("system", "s"), new ChatMessage("user", "Current date and time: ...\n\nRequest:\nmake slides")];
@@ -409,14 +411,36 @@ namespace ChatStreamTests
 
             List<ChatMessage> stopped = Compaction.ShortenForLater(run, run[1], "make slides", "ここで止めました。");
             string shown = string.Join(" | ", stopped.ConvertAll(static m => m.Role + ": " + (m.Content ?? string.Join(",", (m.ToolCalls ?? []).ConvertAll(static c => c.Arguments)))));
-            Check("a stopped request: the request, the turns shortened, its notes, an unanswered call, and how it ended last",
-                  stopped.Count == 7 && stopped[0].Content == "make slides" && stopped[1].ToolCalls![0].Arguments.Contains(Compaction.ElidedScriptMark + "2 lines") &&
-                  stopped[1].ReasoningContent is null && stopped[2].Content == "OK: 2 lines executed. Defined: a, b." && stopped[3].Content == "Next: slide 2" &&
-                  stopped[5].Content == "(not run: the user stopped the request)" && stopped[6].Role == "assistant" && stopped[6].Content == "ここで止めました。", shown);
+            Check("a stopped request: the request, its pptcom calls as one that ran and one that did not, its notes, and how it ended last",
+                  stopped.Count == 5 && stopped[0].Content == "make slides" && stopped[1].ToolCalls![0].Arguments.Contains(Compaction.ElidedScriptMark + "2 pptcom call(s)") &&
+                  stopped[1].ReasoningContent is null && stopped[2].Content!.StartsWith("Done (1 pptcom call(s))", StringComparison.Ordinal) &&
+                  stopped[2].Content!.Contains("stopped the request before the last one ran") && !stopped[2].Content!.Contains("Defined") &&
+                  stopped[3].Content == "Next: slide 2" && stopped[4].Role == "assistant" && stopped[4].Content == "ここで止めました。", shown);
 
             List<ChatMessage> finished = Compaction.ShortenForLater(run, run[1], "make slides", ending: null);
-            Check("a request that finished keeps no notes and no ending", finished.Count == 5 && !finished.Exists(static m => m.Content == "Next: slide 2"),
+            Check("a request that finished keeps no notes and no ending", finished.Count == 3 && !finished.Exists(static m => m.Content == "Next: slide 2"),
                   string.Join(" | ", finished.ConvertAll(static m => m.Role + ": " + m.Content)));
+
+            // imagegen, pptread, pptcom (with a failure), docread, pptcom again, and the reply
+            List<ChatMessage> mixed = [new ChatMessage("system", "s"), new ChatMessage("user", "make a deck")];
+            AddTurn(mixed, "i1", "imagegen", "{\"name\":\"heroImg\",\"prompt\":\"a cat\",\"size\":\"1024x768\"}", "Generated image bound to heroImg (1024x768 px, aspect 4:3). Use it in pptcom: ...", slide: null);
+            AddTurn(mixed, "r1", "pptread", "{\"slide\":\"1\"}", "Presentation: 1 slide(s), 960x540 pt.\nRenderings of slide(s) 1 are attached in the next message, each with its shape list.", slide: 1);
+            AddTurn(mixed, "p1", "pptcom", "{\"script\":\"card1.Top = 195\"}", "68 of 70 lines applied; 2 failed, 0 skipped.\nFAILED line 5: ...\nChanged: card1, card2.", slide: 1);
+            AddTurn(mixed, "d1", "docread", "{\"doc\":\"d1\"}", "d1: a.docx (Word document, 10 lines). It is the user's material...\nThe whole text:\n1 見出し", slide: null);
+            AddTurn(mixed, "p2", "pptcom", "{\"script\":\"x = 1\"}", "OK: 1 lines executed. Defined: x. Changed: card1.", slide: 1);
+            mixed.Add(new ChatMessage("assistant", "作りました。"));
+            List<ChatMessage> later = Compaction.ShortenForLater(mixed, mixed[1], "make a deck", ending: null);
+            string sequence = string.Join(" | ", later.ConvertAll(static m => m.Role + ": " + (m.Content ?? string.Join(",", (m.ToolCalls ?? []).ConvertAll(static c => c.Name + " " + c.Arguments)))));
+            Check("pptcom calls as one that ran, nothing of what they did; imagegen, pptread and docread with their first lines; the reply",
+                  later.Count == 10 && later[1].ToolCalls![0].Name == "imagegen" && later[1].ToolCalls![0].Arguments.Contains("(left out)") &&
+                  later[2].Content!.StartsWith("Generated image bound to heroImg", StringComparison.Ordinal) &&
+                  later[3].ToolCalls![0].Name == "pptread" && later[4].Content == "Presentation: 1 slide(s), 960x540 pt." &&
+                  later[5].ToolCalls![0].Id == "call_p1" && later[5].ToolCalls![0].Arguments.Contains("2 pptcom call(s)") &&
+                  later[6].Content!.StartsWith("Done (2 pptcom call(s))", StringComparison.Ordinal) && later[6].Content!.Contains("pptread") &&
+                  later[7].ToolCalls![0].Name == "docread" && later[8].Content!.StartsWith("d1: a.docx", StringComparison.Ordinal) && !later[8].Content!.Contains('\n') &&
+                  later[9].Content == "作りました。" &&
+                  !later.Exists(static m => m.Content is string c && (c.Contains("Defined") || c.Contains("Changed") || c.Contains("FAILED") || c.Contains("card1"))),
+                  sequence);
             ContinuedTests();
         }
 
@@ -447,8 +471,8 @@ namespace ChatStreamTests
             bool paired = later.Select(static (m, i) => (m, i)).Where(static x => x.m.Role == "tool")
                                .All(x => later.Take(x.i).Any(a => a.ToolCalls is not null && a.ToolCalls.Exists(c => c.Id == x.m.ToolCallId)));
             string shown = string.Join(" | ", later.ConvertAll(static m => m.Role + ": " + (m.Content ?? string.Join(",", (m.ToolCalls ?? []).ConvertAll(static c => c.Id)))));
-            Check("carried on and shortened again: from its own message, every call kept and every result after its call",
-                  removed == 2 && later[0].Content == "続けて" && string.Join(",", calls) == "new1,new1b,call_p3" && paired, shown);
+            Check("carried on and shortened again: from its own message, its pptcom calls as one, and every result after its call",
+                  removed == 2 && later[0].Content == "続けて" && string.Join(",", calls) == "new1,new1b" && paired, shown);
         }
 
         // What a request offers the model (AgentTools), made from the add-in's own files: docread only with documents,
