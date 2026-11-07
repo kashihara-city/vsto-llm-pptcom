@@ -22,7 +22,7 @@ namespace ComScriptRunner
     //   ComScriptRunner.exe run <script.txt> <out.pptx> [maxLines]
     //   ComScriptRunner.exe export <in.pptx> <pngDir>
     //   ComScriptRunner.exe serve
-    //       Persistent session for a tool-calling driver (scripts/test/tool_loop.py): one JSON
+    //       Persistent session for a script that drives it (checks on a real PowerPoint): one JSON
     //       object per stdin line, one JSON result per stdout line. PowerPoint and the engine
     //       (variables, generated images) live across requests.
     //         {"script": "..."}     -> {"success", "lines", "error", "wouldDefine", "definedIds", ...}
@@ -501,7 +501,7 @@ namespace ComScriptRunner
         private static JObject ScriptReply(JObject req, ComProxyEngine engine, List<string> knownIds)
         {
             JObject reply;
-            // {"imagegen": {"name", "prompt", "size"}}: the rig's imagegen tool, built into the same
+            // {"imagegen": {"name", "prompt", "size"}}: an image as the add-in's imagegen tool makes it, built into the same
             // `name = Image(...)` line the add-in uses - the only way Image() is accepted.
             JObject? imageRequest = req["imagegen"] as JObject;
             bool image = imageRequest is not null;
@@ -541,7 +541,7 @@ namespace ComScriptRunner
                 reply["rounded"] = result.RoundedText();
                 if (!result.Success)
                 {
-                    // Same text the add-in gives the model (scripts/test/tool_loop.py passes it through).
+                    // Same text the add-in gives the model.
                     reply["report"] = result.Describe();
                     reply["failed"] = new JArray(result.Lines.Where(static l => l.Status == ComLineStatus.Failed)
                         .Select(static l => new JObject { ["line"] = l.Line, ["text"] = l.Text, ["error"] = l.Error }));

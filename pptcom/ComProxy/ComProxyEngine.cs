@@ -148,7 +148,7 @@ namespace Pptcom.ComProxy
         }
 
         // Standard sink: one JSON line per op, appended to UsageLogPath (shared by the add-in
-        // and the experiment rig; `src` tells them apart).
+        // and ComScriptRunner, whose lines say "rig"; `src` tells them apart).
         public static Action<JObject> FileUsageSink(string source)
         {
             return rec =>

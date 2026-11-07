@@ -37,7 +37,7 @@ namespace Pptcom.ComProxy
             return Math.Round(v, 3, MidpointRounding.AwayFromZero).ToString("0.###", CultureInfo.InvariantCulture);
         }
 
-        // Placeholders used in the system prompt (pptcom/Agent/system-prompt.txt, scripts/test/tool_loop.py SYSTEM).
+        // Placeholders used in the system prompt (pptcom/Agent/system-prompt.txt).
         public Dictionary<string, string> Placeholders()
         {
             double w = SlideWidth, h = SlideHeight;

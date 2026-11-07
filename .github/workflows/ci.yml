@@ -89,14 +89,6 @@ jobs:
           node scripts/test/taskpane.cjs
           if ($LASTEXITCODE -ne 0) { throw "task pane tests failed" }
 
-      - name: Run the rig tests
-        shell: pwsh
-        run: |
-          # How the rig (tool_loop.py) reads a reply and ends a run that failed, against a server on the loopback
-          # address; no LLM, no PowerPoint.
-          python -X utf8 scripts/test/rig-stream.py
-          if ($LASTEXITCODE -ne 0) { throw "rig tests failed" }
-
       - name: Prepare the build
         # MSBuild, Rust, the VSTO runtime, the PIAs and a throwaway signing certificate: .github/actions/build-setup.
         uses: ./.github/actions/build-setup

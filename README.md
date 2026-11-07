@@ -214,7 +214,6 @@ C#のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.N
 | `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMの応答の読み取り（模擬サーバー）。終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答、サーバー側の失敗と接続先に届かない失敗の見分け、APIキーをhttpの接続先に送らないこと、中止と待ち時間の上限、`mm_processor_kwargs`の送り直し、画像の待ちの終わり方。要約の頼み方（ツールを付けたまま`tool_choice: none`）、モデル一覧の最大入力の読み取り、会話を短くするときに省くもの、メモの置き方、後の依頼に渡す短い経過（「続ける」のあと再び短くしたときも）。依頼ごとに渡すツールとシステムプロンプト（資料が無ければdocread、画像生成モデルが無ければimagegenと画像の行を外す）。imagegenが返す画像の主な色と縁の色 |
 | `node scripts/test/docs-queue.cjs` | 作業ウィンドウの添付の受け付け（`docs.js`）。読み出す前に「読み取り中」になり、どこで失敗しても添付か失敗で終わり、後のファイルが続くこと。画像は変換せずにそのまま添付し、貼り付けは文字が無いときだけ添付すること |
 | `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼が1つだけ送られること、依頼の終わり方の表示、ターンの上限で止まったあとの「続ける」、コンテキスト上限の入力、モデルの選択肢（未選択、使わない）と画像生成プロンプト、APIキーの入力（一度だけ送り、欄に残さない）と削除（設定欄の中で確認してから）、設定欄が勝手に閉じないこと、送信の直後や実行中に「新しい会話」を送らないこと |
-| `python -X utf8 scripts/test/rig-stream.py` | リグ（`tool_loop.py`）の応答の読み取りと失敗の分け方、証明書の検証、失敗した回も記録が残ること（模擬サーバーと模擬のランナー） |
 | `python -X utf8 scripts/test/js-syntax.py` | 作業ウィンドウのJavaScriptが構文として読めること（Nodeの`--check`） |
 | `python -X utf8 scripts/test/i18n.py` | 文言のコードが`ja.json`にあり、値の数と言語がそろい、コードに日本語の文が無いこと |
 | `python -X utf8 scripts/test/no-secrets.py` | Gitが追跡するファイルに、私有IP、社内のホスト名、APIキー、開発機のパス、鍵や証明書が無いこと。`--history`で全コミット、`--self-test`で自分自身を確かめる。パターンで見分けられない語は`notes/secrets-denylist.txt`（Gitの管理外、1行に1語）に書くと照合する |
@@ -226,9 +225,8 @@ C#のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.N
 本物のPowerPointやLLMを使うので、CIでは流しません。
 
 - `scripts/test/ComScriptRunner`: PowerPointを外から動かし、アドインと同じ解析・実行・検査でpptcomスクリプトを流す
-- `scripts/test/tool_loop.py`（リグ）: アドインと同じ指示とツールでLLMを回し、ランナーでPowerPointを動かす。接続先とAPIキーはアドインの設定を使い、記録は`%LOCALAPPDATA%\KashiharaCity\pptcom\generated-pptx\<名前>\`に残す
 - `scripts/test/drive_addin.ps1`: 本物のアドインを外から操作する（依頼、新しい会話、中止、添付、続ける）。作業ウィンドウの設定で「他のプログラムからの操作を許可する」をオンにしてから使う
-- 記録の集計と実験: `usage_report.py`（COMの呼び出しの集計）、`used_members.py`（モデルが使ったCOMのメンバー）、`extract_corpus.py`（過去のスクリプトを集め、パーサの変更の前後で比べる）、`replay_parse_error.py`（構文エラーの知らせ方の実験）
+- 記録の集計と実験: `usage_report.py`（COMの呼び出しの集計）、`used_members.py`（モデルが使ったCOMのメンバー）、`extract_corpus.py`（過去のスクリプトを集め、パーサの変更の前後で比べる）
 
 ## リリースと検証
 

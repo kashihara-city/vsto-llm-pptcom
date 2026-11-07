@@ -4,7 +4,7 @@ Usage: python scripts/test/extract_corpus.py <corpus.txt>
 Then:  ComScriptRunner.exe parsecheck <corpus.txt> <out.tsv>   (once before and once after a parser
        change; compare the two TSVs - a line that was OK and is now NG is a regression).
 
-Sources: generated-pptx/*/session.log (add-in runs) and generated-pptx/*/transcript.json (rig runs), in
+Sources: generated-pptx/*/session.log (add-in runs) and generated-pptx/*/transcript.json (runs of the former rig, tool_loop.py), in
 %LOCALAPPDATA%\\KashiharaCity\\pptcom\\generated-pptx.
 Old notation is normalized to the current one (pres -> ActivePresentation, app -> Application,
 $name -> name) so those lines test the grammar, not the renames. The corpus holds model output

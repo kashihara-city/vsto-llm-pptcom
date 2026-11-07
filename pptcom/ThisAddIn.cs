@@ -30,8 +30,7 @@ namespace Pptcom
         // Manager (AddinSettings);
         // endpoint and models are picked in the task pane from what the endpoint reports. Default
         // chat model is the thinking variant, driven agent-style (tools + a terse coding-agent system
-        // prompt): measured with scripts/test/tool_loop.py (generated-pptx/run10_tools) a 3-slide deck with
-        // 3 images took ~85 s with ~4k chars of reasoning - the same shape as an opencode session.
+        // prompt), which keeps its reasoning as short as an opencode session's.
         private AddinSettings _settings;
 
         // Safety valves only; a normal deck takes 6-10 turns and ~200 script lines. The statement limit

@@ -1,5 +1,5 @@
 """Count the COM members the model has actually used in every logged ComScript
-(add-in session.log, rig transcripts, older one-shot scripts)."""
+(add-in session.log, transcripts of the former rig, older one-shot scripts)."""
 import collections
 import glob
 import io

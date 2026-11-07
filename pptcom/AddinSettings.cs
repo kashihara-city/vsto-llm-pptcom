@@ -3,8 +3,8 @@ using Microsoft.Win32;
 
 namespace Pptcom
 {
-    // Connection settings. Nothing environment-specific is built in; the add-in, the ComScriptRunner
-    // rig and scripts/test/tool_loop.py all read the same places:
+    // Connection settings. Nothing environment-specific is built in; the add-in and ComScriptRunner
+    // read the same places:
     //
     //   HKCU\Software\KashiharaCity\pptcom  endpoint, chat_model, image_model (REG_SZ; image_model empty: no images);
     //                                        image_prompt (REG_SZ, one of ImagePrompts, add-in only);
