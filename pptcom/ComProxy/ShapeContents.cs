@@ -11,7 +11,7 @@ namespace Pptcom.ComProxy
     // number of their own in the list; so each is listed with the way a script reaches it:
     //   [7] = tbl Table L42 T124 W876 H198, 3 rows x 4 columns (Table.Cell(row, column)):
     //       row 1: "項目" | "内容" | "根拠" | "備考"
-    //   [9] Chart L40 T300 W420 H220, xlColumnClustered, title "利用者数", 2 series (Chart.SeriesCollection(n)):
+    //   [9] Chart L40 T300 W420 H220, xlColumnClustered, title "利用者数", value axis 0 to 160 (every 20), 2 series (Chart.SeriesCollection(n)):
     //       categories: "2022" | "2023" | "2024"
     //       1 "窓口": 120 | 135 | 150
     //   [6] SmartArt L40 T120 W880 H300, layout "基本ステップ", 3 nodes (SmartArt.AllNodes(n), indented by Level):
@@ -120,6 +120,8 @@ namespace Pptcom.ComProxy
                 head += ", title " + Text(title, limits.TextChars);
             }
 
+            head += ValueAxis((object)chart);
+
             // Values and XValues are taken as object, not cast from dynamic: COM hands over an array numbered from 1
             // (object[*]), which the C# runtime binder tries to make an object[] of, and fails.
             int count = (int)chart.SeriesCollection().Count;
@@ -140,6 +142,23 @@ namespace Pptcom.ComProxy
             }
             AppendMore(lines, indent, count - limits.ChartSeries, "series", "series");
             return head + Invariant($", {count} series (Chart.SeriesCollection(n)):");
+        }
+
+        // ", value axis 0 to 140 (every 20)": the value axis as drawn, its range set or automatic, so that a script that sets
+        // it reads what it got - a rendering's axis labels are small, and a model took one it had fixed for one still there.
+        // Nothing for a chart without one (a pie).
+        private static string ValueAxis(dynamic chart)
+        {
+            return Guard.Try(() =>
+            {
+                dynamic axis = chart.Axes(2); // xlValue
+                return ", value axis " + Number((object)axis.MinimumScale) + " to " + Number((object)axis.MaximumScale) + " (every " + Number((object)axis.MajorUnit) + ")";
+            }, "");
+        }
+
+        private static string Number(object value)
+        {
+            return Convert.ToDouble(value, CultureInfo.InvariantCulture).ToString("G15", CultureInfo.InvariantCulture);
         }
 
         // A series' values or categories (an array, or one value): numbers as they are, text quoted, an empty cell as Empty.

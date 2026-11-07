@@ -164,7 +164,7 @@ namespace Pptcom.ComProxy
                 case string text:
                     string start = text.TrimStart(' ', '\t', '\r', '\n', '\u3000');
                     return start.Length > 0 && "=+-@＝＋－＠".IndexOf(start[0]) >= 0
-                        ? "text that starts with = + - or @ (or ＝ ＋ － ＠) cannot be written to a chart's data: Excel would take it as a formula. " +
+                        ? "text that starts with = + - or @ (half- or full-width) cannot be written to a chart's data: Excel would take it as a formula. " +
                           "Write a number as a number (-5, not \"-5\"), and start text with something else"
                         : null;
                 case object[] items:

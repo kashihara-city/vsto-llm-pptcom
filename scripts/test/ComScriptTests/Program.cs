@@ -573,6 +573,10 @@ namespace ComScriptTests
             Report("plain value: read in a chain, the step to use", read.Contains("Use .Color itself, without .RGB"), read);
             string variable = run("x = 5\nx.RGB = 1").Lines[1].Error ?? "";
             Report("plain value: a variable is named with its value", variable.Contains("x holds a plain value (the number 5)"), variable);
+            string nothing = run("Application.Missing.Bold = 1").Lines[0].Error ?? "";
+            Report("plain value: a step that gives Nothing is not to be assigned to, and its hidden name is not shown",
+                   nothing.Contains(".Missing gives no object (Nothing)") && nothing.Contains("write .Missing on a line of its own") &&
+                   !nothing.Contains("Assign") && !nothing.Contains("_h"), nothing);
         }
 
         // Where a member lives when the object it was written on lacks it, for what the shape list shows inside shapes too:
@@ -628,6 +632,9 @@ namespace ComScriptTests
         internal sealed class ColorStub
         {
             public int Color { get; } = 8421504;
+
+            // Nothing, as a method that only does something gives (Chart.ApplyDataLabels).
+            public object? Missing { get; }
         }
 
         // A fraction where a parameter takes a whole number (an enum, a Long) goes in rounded as VBA rounds it, without an
@@ -891,7 +898,7 @@ namespace ComScriptTests
                               "    row 1: \"項目\" | \"内容\" | ... and 1 more column\n" +
                               "    row 2: \"署名\" | \"長い文章の\"... (9 characters) | ... and 1 more column\n" +
                               "    ... and 1 more row\n" +
-                              "[2] Chart L10 T20 W300 H100, xlColumnClustered, title \"利用者数\", 2 series (Chart.SeriesCollection(n)):\n" +
+                              "[2] Chart L10 T20 W300 H100, xlColumnClustered, title \"利用者数\", value axis 0 to 150 (every 50), 2 series (Chart.SeriesCollection(n)):\n" +
                               "    categories: \"2022\" | \"2023\" | \"2024\" | ... and 1 more\n" +
                               "    1 \"窓口\": 120 | 135.5 | Empty | ... and 1 more\n" +
                               "    ... and 1 more series\n" +
@@ -916,6 +923,11 @@ namespace ComScriptTests
                    mergedBrief.EndsWith("    row 1: \"a\" | \"b\" | \"上\" & vbCr & \"下\"\n" +
                                         "    row 2: \"c\" | \"d\" | (merged with Cell(1, 3))\n" +
                                         "    row 3: \"e\" | \"左\" & vbCr & \"右\" | (merged with Cell(3, 2))\n", StringComparison.Ordinal), "\n" + mergedBrief);
+            ContentChart pieChart = new([new ContentSeries { Name = "売上", Values = OneBased(1.0, 2.0) }]) { IsPie = true };
+            ContentSlide pieSlide = new();
+            pieSlide.Shapes.List.Add(new ContentShape { Id = 7, Type = 3, Name = "Chart 6", HasChart = -1, Chart = pieChart });
+            string pie = DeckReader.Brief(new SelDeck(pieSlide), 1);
+            Report("contents: a chart without a value axis (a pie) says nothing of one", pie.Contains("1 series") && !pie.Contains("value axis"), pie);
             Report("contents: a cut text does not split a character made of two UTF-16 units",
                    ShapeContents.Text("𠮷野家の牛丼", 1) == "\"\"... (7 characters)", ShapeContents.Text("𠮷野家の牛丼", 1));
         }
@@ -1044,6 +1056,22 @@ namespace ComScriptTests
             {
                 return series[index - 1];
             }
+
+            // A pie has no axes: Axes fails, as PowerPoint's does.
+            public bool IsPie;
+
+            public ContentAxis Axes(int type)
+            {
+                return !IsPie && type == 2 ? new ContentAxis() : throw new InvalidOperationException("no such axis");
+            }
+        }
+
+        // A value axis drawn from 0 to 150, a line every 50.
+        internal sealed class ContentAxis
+        {
+            public double MinimumScale { get; }
+            public double MaximumScale { get; } = 150;
+            public double MajorUnit { get; } = 50;
         }
 
         internal sealed class ContentSeries

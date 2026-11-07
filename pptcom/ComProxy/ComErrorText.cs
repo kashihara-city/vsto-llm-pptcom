@@ -590,11 +590,16 @@ namespace Pptcom.ComProxy
                 engine.TryGetHandle(target, out value);
             }
 
+            string? step = IsSynthetic(target) ? engine.MadeBy(target) : null;
+            if (value is null)
+            {
+                return NothingHint(target, step, member);
+            }
+
             string what = value switch
             {
                 string s => "the text " + ComScriptParser.ToVbaLiteral(s),
                 bool b => b ? "True" : "False",
-                null => "Nothing",
                 _ => "the number " + Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture),
             };
             string noMember = ", not a PowerPoint object, so it has no member '" + member + "'.";
@@ -603,7 +608,6 @@ namespace Pptcom.ComProxy
                 return target + " holds a plain value (" + what + ")" + noMember;
             }
 
-            string? step = engine.MadeBy(target);
             if (step is null)
             {
                 return "The value before ." + member + " in this expression is a plain value (" + what + ")" + noMember;
@@ -613,6 +617,22 @@ namespace Pptcom.ComProxy
                    (action == ComOpAction.Set
                        ? "Assign the value to ." + step + " itself, without ." + member + ": ... ." + step + " = value."
                        : "Use ." + step + " itself, without ." + member + ".");
+        }
+
+        // `x.Member` where x is Nothing. In a chain the step before gave no object - a method that does something and
+        // returns nothing (Chart.ApplyDataLabels), or a property holding none now - so nothing is reached through it, and
+        // nothing is assigned to it either: the call goes on a line of its own.
+        private static string NothingHint(string? target, string? step, string? member)
+        {
+            if (!IsSynthetic(target))
+            {
+                return target + " holds Nothing (no object), so it has no member '" + member + "'.";
+            }
+
+            return step is null
+                ? "The value before ." + member + " in this expression is Nothing (no object), so ." + member + " cannot be reached through it."
+                : "." + step + " gives no object (Nothing): it does something and returns nothing, or holds no object now. So ." + member +
+                  " cannot be reached through it: write ." + step + " on a line of its own, and reach ." + member + " through an object that has it.";
         }
 
         // Properties of iface one hop away from `member` (property name -> member on that object):

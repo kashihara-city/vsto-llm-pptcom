@@ -818,7 +818,9 @@ namespace Pptcom.ComProxy
 
             if (targetObj is null)
             {
-                throw new InvalidOperationException(target + " holds Nothing");
+                // a chain's hidden step (_h28) is named by what made it: the model never wrote that name
+                string holder = !IsSyntheticId(target) ? target : MadeBy(target) is string step ? "." + step : "the value before ." + member;
+                throw new InvalidOperationException(holder + " holds Nothing");
             }
 
             // No chart's data of the deck may be open for AddChart2 (AddChart).
