@@ -51,6 +51,8 @@ namespace ComScriptTests
             DeckTests();
             TypeRuleTests();
             ChartDataPolicyTests();
+            PlainValueTests();
+            ErrorHintTests();
             RoundingTests();
             AnimationTests();
             ContentTests();
@@ -546,6 +548,81 @@ namespace ComScriptTests
                    ComSecurityPolicy.CheckMemberOnType("ChartData", "Activate") is string activate && activate.Contains("not needed") &&
                    ComSecurityPolicy.CheckMemberOnType("ChartData", "ActivateChartDataWindow") is not null && ComSecurityPolicy.CheckMemberOnType("ChartData", "Workbook") is null,
                    ComSecurityPolicy.CheckMemberOnType("ChartData", "Activate"));
+        }
+
+        // A member written on a plain value. In a chain (a chart's Font.Color is the color itself, so Font.Color.RGB has
+        // nothing to set) the error names the step that gave the value and the fix, not the hidden name of the step.
+        private static void PlainValueTests()
+        {
+            static ComScriptResult run(string script)
+            {
+                ComScriptParser.ParseResult parsed = ComScriptParser.Parse(script, priorKnownIds: null, 2000);
+                return new ComProxyEngine(new ColorStub()).ExecuteScriptAsync(parsed).GetAwaiter().GetResult();
+            }
+
+            string chain = run("Application.Color.RGB = RGB(1, 2, 3)").Lines[0].Error ?? "";
+            Report("plain value: in a chain, the step that gave it, its value and the fix, not the hidden name",
+                   chain.Contains(".Color gives a plain value here (the number 8421504)") && chain.Contains("Assign the value to .Color itself, without .RGB") &&
+                   !chain.Contains("_h"), chain);
+            string read = run("n = Application.Color.RGB").Lines[0].Error ?? "";
+            Report("plain value: read in a chain, the step to use", read.Contains("Use .Color itself, without .RGB"), read);
+            string variable = run("x = 5\nx.RGB = 1").Lines[1].Error ?? "";
+            Report("plain value: a variable is named with its value", variable.Contains("x holds a plain value (the number 5)"), variable);
+        }
+
+        // Where a member lives when the object it was written on lacks it, for what the shape list shows inside shapes too:
+        // a chart's parts, a SmartArt graphic's nodes, a group's shapes, a table's rows. Owners come from the object's own
+        // family (a chart's Font is not looked for on TextRange), each with the way a script reaches it.
+        private static void ErrorHintTests()
+        {
+            static string hint(string type, string member)
+            {
+                JObject op = new() { ["action"] = ComOpAction.Set, ["target"] = "_h3", ["member"] = member };
+                return ComErrorText.Describe(new ComProxyEngine(new object()), op, new UnknownNameException(), "名前が不明です。", type);
+            }
+
+            string gap = hint("Series", "GapWidth");
+            Report("hints: a chart's member is looked for among the chart's parts, with the way to reach it",
+                   gap.Contains("'GapWidth' is a member of: ChartGroup (Chart.ChartGroups(n))"), gap);
+            string font = hint("Chart", "Font");
+            Report("hints: a chart's Font is not sent to TextRange", font.Contains("Chart.ChartArea.Font") && !font.Contains("TextRange"), font);
+            string node = hint("SmartArtNode", "Text");
+            Report("hints: a SmartArt node's text is in its TextFrame2", node.Contains("TextFrame2.TextRange.Text"), node);
+            string group = hint("GroupShapes", "Fill");
+            Report("hints: a group's shapes are named one by one, with the index", group.Contains("GroupShapes.Item(n).Fill"), group);
+            string rows = hint("Rows", "Height");
+            Report("hints: a table's rows are named one by one, with the index and the way to a row",
+                   rows.Contains("Rows.Item(n).Height") && rows.Contains("Row (shape.Table.Rows(n))"), rows);
+            string delete = hint("Table", "Delete");
+            int toShape = delete.IndexOf("'Delete' belongs to the shape that holds the Table, not to the Table", StringComparison.Ordinal);
+            int toRows = delete.IndexOf("Rows(n).Delete", StringComparison.Ordinal);
+            Report("hints: a shape's member written on its table goes to the shape, before the rows", toShape >= 0 && (toRows < 0 || toShape < toRows), delete);
+
+            // A variable bound again written another way is named as it was written last (the handles ignore case).
+            ComProxyEngine engine = new(new object());
+            foreach (string script in new[] { "tT = 1", "tt = 2" })
+            {
+                engine.ExecuteScriptAsync(ComScriptParser.Parse(script, priorKnownIds: null, 2000)).GetAwaiter().GetResult();
+            }
+
+            Report("variables: named as written last", engine.KnownHandles.Contains("tt", StringComparer.Ordinal) && !engine.KnownHandles.Contains("tT", StringComparer.Ordinal),
+                   string.Join(", ", engine.KnownHandles));
+        }
+
+        // What a COM call throws for a name its object does not have, as the error text sees it: DISP_E_UNKNOWNNAME.
+        internal sealed class UnknownNameException : Exception
+        {
+            public UnknownNameException()
+                : base("名前が不明です。")
+            {
+                HResult = unchecked((int)0x80020006);
+            }
+        }
+
+        // An Application whose Color is a number, as a chart's Font.Color is.
+        internal sealed class ColorStub
+        {
+            public int Color { get; } = 8421504;
         }
 
         // A fraction where a parameter takes a whole number (an enum, a Long) goes in rounded as VBA rounds it, without an

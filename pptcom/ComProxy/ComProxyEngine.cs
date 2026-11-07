@@ -85,7 +85,7 @@ namespace Pptcom.ComProxy
         public void AddImageFile(string id, string path)
         {
             _generatedFiles.Add(path);
-            _handles[id] = path;
+            Bind(id, path);
             _literalIds.Remove(id);
         }
 
@@ -686,6 +686,65 @@ namespace Pptcom.ComProxy
             return System.Runtime.InteropServices.Marshal.IsComObject(v) ? ComSecurityPolicy.TryGetTypeName(v) : null;
         }
 
+        // The member whose result a variable holds (Color, for the hidden variable that ch.Chart.ChartArea.Font.Color
+        // became in a chain): an error names that step, not a hidden name (_h7) the model never wrote. Null when the
+        // variable did not come from a member.
+        private readonly Dictionary<string, string> _madeBy = new(StringComparer.OrdinalIgnoreCase);
+
+        internal string? MadeBy(string? id)
+        {
+            return id is not null && _madeBy.TryGetValue(id, out string member) && member.Length > 0 ? member : null;
+        }
+
+        // The variable that holds the shape whose content a variable holds: tbl for tT, when Set tT = tbl.Table - its
+        // Parent. For an error on a table, a chart, a SmartArt graphic or a group's items that names a member of the
+        // shape (tT.Delete): it is written on the shape. Null when no variable holds that shape, or it cannot be read.
+        internal string? HolderOf(string? id)
+        {
+            if (id is null || !_handles.TryGetValue(id, out object? value) || value is null || !System.Runtime.InteropServices.Marshal.IsComObject(value))
+            {
+                return null;
+            }
+
+            try
+            {
+                object shape = ((dynamic)value).Parent;
+                if (!string.Equals(ComSecurityPolicy.TryGetTypeName(shape), "Shape", StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                string key = ShapeKey((int)((dynamic)shape).Parent.SlideID, (int)((dynamic)shape).Id);
+                foreach (KeyValuePair<string, object?> kv in _handles)
+                {
+                    if (!IsSyntheticId(kv.Key) && kv.Value is not null && System.Runtime.InteropServices.Marshal.IsComObject(kv.Value) &&
+                        string.Equals(ComSecurityPolicy.TryGetTypeName(kv.Value), "Shape", StringComparison.Ordinal) &&
+                        Guard.Try(() => ShapeKey((int)((dynamic)kv.Value).Parent.SlideID, (int)((dynamic)kv.Value).Id), "") == key)
+                    {
+                        return kv.Key;
+                    }
+                }
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                // gone, or not in a slide's shapes
+            }
+            return null;
+        }
+
+        // Binds a variable. The handles ignore case as VBA does, and a key keeps the spelling it was first bound with: a
+        // variable bound again written another way (tt after tT) is re-keyed, so that the shape list names it as it
+        // was written last.
+        private void Bind(string id, object? value)
+        {
+            if (_handles.ContainsKey(id) && !_handles.Keys.Contains(id, StringComparer.Ordinal))
+            {
+                _handles.Remove(id);
+            }
+
+            _handles[id] = value;
+        }
+
         internal static Type? InteropTypeFor(string? comTypeName)
         {
             return FindInteropType(comTypeName);
@@ -796,8 +855,9 @@ namespace Pptcom.ComProxy
             if (id is not null && id.Length > 0 && !TryLetIntoDefault(op, id, resultValue))
             {
                 NoteMissingSet(op, resultValue);
-                _handles[id] = resultValue;
+                Bind(id, resultValue);
                 _handleSlide[id] = resultSlide;
+                _madeBy[id] = member ?? "";
                 _literalIds.Remove(id);
             }
         }
@@ -884,7 +944,7 @@ namespace Pptcom.ComProxy
                 _handleSlide.TryGetValue(src, out srcSlide);
             }
 
-            _handles[id] = v;
+            Bind(id, v);
             _handleSlide[id] = srcSlide;
             // A constant from the script (string/number/RGB folded by the parser); a copy of another
             // variable or a run-time $calc/$concat result is still worth reporting.
@@ -926,7 +986,7 @@ namespace Pptcom.ComProxy
 
             if (id is not null && id.Length > 0)
             {
-                _handles[id] = tempPath;
+                Bind(id, tempPath);
             }
         }
 

@@ -15,17 +15,70 @@ namespace Pptcom.ComProxy
         private const uint DISP_E_UNKNOWNNAME = 0x80020006;
         private const uint DISP_E_MEMBERNOTFOUND = 0x80020003;
 
-        // The types a deck script moves between; searched for "'X' is a member of: ..." hints.
-        private static readonly string[] RelatedTypes =
+        // The types a deck script moves between, searched for "'X' is a member of: ..." hints, in families: the shapes
+        // and their text, tables and groups; a chart's; a SmartArt graphic's. The family of the type the member was
+        // looked up on is searched (a chart's Font is not a TextRange's), each type with the way a script reaches it
+        // when that is not plain. The shape list shows what is inside tables, charts, SmartArt graphics and groups.
+        private static readonly (string Type, string Via)[] RelatedTypes =
         [
-            "Shape", "TextFrame", "TextRange", "Font", "ParagraphFormat", "BulletFormat", "FillFormat", "LineFormat",
-            "ColorFormat", "ShadowFormat", "Slide", "Shapes", "Presentation", "PageSetup", "Table", "Cell", "Column", "Row",
-            "PictureFormat", "TextFrame2", "TextRange2", "ParagraphFormat2", "Font2", "BulletFormat2",
+            ("Shape", ""), ("TextFrame", ""), ("TextRange", ""), ("Font", ""), ("ParagraphFormat", ""), ("BulletFormat", ""), ("FillFormat", ""),
+            ("LineFormat", ""), ("ColorFormat", ""), ("ShadowFormat", ""), ("Slide", ""), ("Shapes", ""), ("Presentation", ""), ("PageSetup", ""),
+            ("Table", "shape.Table"), ("Cell", "shape.Table.Cell(row, column)"), ("Column", "shape.Table.Columns(n)"), ("Row", "shape.Table.Rows(n)"),
+            ("Columns", "shape.Table.Columns"), ("Rows", "shape.Table.Rows"), ("CellRange", "shape.Table.Rows(n).Cells"), ("GroupShapes", "shape.GroupItems"),
+            ("PictureFormat", ""), ("TextFrame2", ""), ("TextRange2", ""), ("ParagraphFormat2", ""), ("Font2", ""), ("BulletFormat2", ""),
         ];
+
+        private static readonly HashSet<string> RelatedTypeNames = new(RelatedTypes.Select(static t => t.Type), StringComparer.OrdinalIgnoreCase);
+
+        private static readonly (string Type, string Via)[] ChartTypes =
+        [
+            ("Chart", "shape.Chart"), ("ChartGroup", "Chart.ChartGroups(n)"), ("Series", "Chart.SeriesCollection(n)"),
+            ("Point", "Chart.SeriesCollection(n).Points(n)"), ("DataLabels", "Chart.SeriesCollection(n).DataLabels"),
+            ("Axis", "Chart.Axes(1) for the categories, Axes(2) for the values"), ("TickLabels", "Chart.Axes(n).TickLabels"),
+            ("Gridlines", "Chart.Axes(n).MajorGridlines"), ("AxisTitle", "Chart.Axes(n).AxisTitle"), ("ChartArea", "Chart.ChartArea"),
+            ("PlotArea", "Chart.PlotArea"), ("Legend", "Chart.Legend"), ("ChartTitle", "Chart.ChartTitle"),
+            ("ChartFont", "Chart.ChartArea.Font, Legend.Font, TickLabels.Font...; its Color is the color itself"),
+            ("ChartFormat", "Chart.ChartArea.Format, SeriesCollection(n).Format..."), ("ChartData", "Chart.ChartData"),
+        ];
+
+        private static readonly (string Type, string Via)[] SmartArtTypes =
+        [
+            ("SmartArt", "shape.SmartArt"), ("SmartArtNodes", "shape.SmartArt.AllNodes"), ("SmartArtNode", "shape.SmartArt.AllNodes(n)"),
+            ("SmartArtLayout", "shape.SmartArt.Layout"), ("TextFrame2", "shape.SmartArt.AllNodes(n).TextFrame2"),
+            ("TextRange2", "shape.SmartArt.AllNodes(n).TextFrame2.TextRange"), ("Font2", "shape.SmartArt.AllNodes(n).TextFrame2.TextRange.Font"),
+        ];
+
+        // The other types of a chart, as their ITypeInfo names them: collections and parts not searched as owners.
+        private static readonly HashSet<string> ChartFamily = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "SeriesCollection", "Axes", "ChartGroups", "Points", "ChartBorder", "ChartColorFormat", "ChartFillFormat", "ChartCharacters",
+            "DataLabel", "DisplayUnitLabel", "LegendEntries", "LegendEntry", "LegendKey", "Trendline", "Trendlines", "ErrorBars", "Walls",
+            "Floor", "UpBars", "DownBars", "DropLines", "HiLoLines", "LeaderLines", "SeriesLines", "ChartCategory",
+        };
+
+        // The family searched for the owners of a member that `type` lacks.
+        private static (string Type, string Via)[] FamilyOf(string? type)
+        {
+            if (type is null)
+            {
+                return RelatedTypes;
+            }
+
+            if (ChartFamily.Contains(type) || Array.Exists(ChartTypes, t => string.Equals(t.Type, type, StringComparison.OrdinalIgnoreCase)))
+            {
+                return ChartTypes;
+            }
+
+            return type.StartsWith("SmartArt", StringComparison.OrdinalIgnoreCase) ? SmartArtTypes : RelatedTypes;
+        }
 
         // Up to this many members a type's whole member list goes into the hint; above it (Shape has
         // about 100) only the members whose name shares a word with the one written.
         private const int FullListLimit = 30;
+
+        // What a shape holds, reached through it (shape.Table, shape.Chart, shape.SmartArt, shape.GroupItems): a member of
+        // the shape written on one of them goes to the shape.
+        private static readonly HashSet<string> HeldTypes = new(StringComparer.OrdinalIgnoreCase) { "Table", "Chart", "SmartArt", "GroupShapes" };
 
         private static readonly HashSet<string> PositionMembers = new(StringComparer.OrdinalIgnoreCase)
             { "Left", "Top", "Width", "Height" };
@@ -60,7 +113,7 @@ namespace Pptcom.ComProxy
 
                 if (targetType == "(value)")
                 {
-                    return "value|" + target;
+                    return "value|" + (IsSynthetic(target) ? "." + engine.MadeBy(target) : target) + "|" + member;
                 }
 
                 if (real is InvalidOperationException)
@@ -121,7 +174,7 @@ namespace Pptcom.ComProxy
 
             if (targetType == "(value)")
             {
-                return target + " holds a plain value, not a PowerPoint object, so it has no member '" + member + "'." + rawNote;
+                return PlainValueHint(engine, action, target, member) + rawNote;
             }
             // Our own checks (policy, Let rule, unknown handle ...) already speak plainly. Errors from
             // PowerPoint arrive as COMException, or as ArgumentException etc. when it returns
@@ -151,7 +204,7 @@ namespace Pptcom.ComProxy
                     return typeLabel + "." + member + " is read-only; it cannot be assigned." + rawNote;
                 }
 
-                return who + " has no member '" + member + "'." + MemberHints(type, typeLabel, target, member) + rawNote;
+                return who + " has no member '" + member + "'." + MemberHints(type, typeLabel, target, member, engine.HolderOf(target)) + rawNote;
             }
 
             if (action == ComOpAction.Set)
@@ -184,11 +237,32 @@ namespace Pptcom.ComProxy
 
         // Where the member lives instead: a near spelling on the same type, a one-hop path
         // (Shape.TextRange -> Shape.TextFrame.TextRange, FontSize -> Font.Size), or other types.
-        private static string MemberHints(string? type, string typeLabel, string? target, string member)
+        // tT.Delete, tT.Left: what a table, a chart, a SmartArt graphic or a group's items lack and their shape has is the
+        // shape's. Null for any other member or type.
+        private static string? ToHolder(string? type, string typeLabel, string member, string? holder)
+        {
+            Type? shapeType = ComProxyEngine.InteropTypeFor("Shape");
+            if (!HeldTypes.Contains(Clean(type) ?? "") || shapeType is null || !HasMember(shapeType, member))
+            {
+                return null;
+            }
+
+            return "'" + member + "' belongs to the shape that holds the " + typeLabel + ", not to the " + typeLabel + ": " +
+                   (holder is not null ? holder + "." + member + "." : "write it on that shape's variable (as the shape list names it): shape." + member + ".");
+        }
+
+        // `holder`: the variable of the shape that holds the object the member was written on (ComProxyEngine.HolderOf).
+        private static string MemberHints(string? type, string typeLabel, string? target, string member, string? holder)
         {
             List<string> hints = [];
+            bool pathFound = false;
             Type? iface = ComProxyEngine.InteropTypeFor(type);
             string varText = target is not null && !IsSynthetic(target) ? target : typeLabel;
+            // first, before the paths inside (tT.Rows(n).Delete), which read as the likelier fix otherwise
+            if (ToHolder(type, typeLabel, member, holder) is string toHolder)
+            {
+                hints.Add(toHolder);
+            }
             if (iface is not null)
             {
                 List<string> paths = [.. OneHopPaths(iface, member).Select(h => varText + "." + h.Key + "." + h.Value)];
@@ -196,6 +270,7 @@ namespace Pptcom.ComProxy
                 // item of a collection, when no plain hop has it. pptcom has no For, so say it takes
                 // one statement per item.
                 List<ItemHop> items = paths.Count == 0 ? ItemHopPaths(iface, member) : [];
+                pathFound = items.Count > 0;
                 if (items.Count > 0)
                 {
                     ItemHop h0 = items[0];
@@ -216,6 +291,7 @@ namespace Pptcom.ComProxy
                 }
                 if (paths.Count > 0)
                 {
+                    pathFound = true;
                     hints.Add("Did you mean " + string.Join(" or ", paths.Distinct(StringComparer.Ordinal).Take(3)) + "?");
                 }
 
@@ -237,21 +313,24 @@ namespace Pptcom.ComProxy
                 }
             }
 
-            List<string> owners = [.. RelatedTypes
-                .Where(t =>
-                {
-                    if (string.Equals(t, Clean(type), StringComparison.OrdinalIgnoreCase))
+            // A chart's or a SmartArt graphic's member that a path above already names is not listed again by owner.
+            (string Type, string Via)[] family = FamilyOf(Clean(type));
+            List<(string Type, string Via)> owners = ReferenceEquals(family, RelatedTypes) || !pathFound
+                ? [.. family.Where(t =>
                     {
-                        return false;
-                    }
+                        if (string.Equals(t.Type, Clean(type), StringComparison.OrdinalIgnoreCase))
+                        {
+                            return false;
+                        }
 
-                    Type? it = ComProxyEngine.InteropTypeFor(t);
-                    return it is not null && HasMember(it, member);
-                })];
+                        Type? it = ComProxyEngine.InteropTypeFor(t.Type);
+                        return it is not null && HasMember(it, member);
+                    })]
+                : [];
             if (owners.Count > 0)
             {
-                hints.Add("'" + member + "' is a member of: " + string.Join(", ", owners) + "." +
-                          (owners.Exists(static o => o.EndsWith("2", StringComparison.Ordinal))
+                hints.Add("'" + member + "' is a member of: " + string.Join(", ", owners.Select(static o => o.Via.Length > 0 ? o.Type + " (" + o.Via + ")" : o.Type)) + "." +
+                          (ReferenceEquals(family, RelatedTypes) && owners.Exists(static o => o.Type.EndsWith("2", StringComparison.Ordinal))
                               ? " The ...2 types are reached through shape.TextFrame2 (e.g. shape.TextFrame2.TextRange.ParagraphFormat)."
                               : ""));
             }
@@ -499,6 +578,43 @@ namespace Pptcom.ComProxy
             return ComScriptParser.IsHiddenName(id);
         }
 
+        // `x.Member` where x holds a number, text or True/False. In a chain the value is what the step before gave: in
+        // ch.Chart.ChartArea.Font.Color.RGB = ..., a chart's Font.Color is the color itself, not a ColorFormat with .RGB
+        // as a shape's Fill.ForeColor is. That step is named, with its value and the fix - the hidden name the chain
+        // was given (_h7) means nothing to the model, which then took the error for a misreading of its RGB(...).
+        private static string PlainValueHint(ComProxyEngine engine, string? action, string? target, string? member)
+        {
+            object? value = null;
+            if (target is not null)
+            {
+                engine.TryGetHandle(target, out value);
+            }
+
+            string what = value switch
+            {
+                string s => "the text " + ComScriptParser.ToVbaLiteral(s),
+                bool b => b ? "True" : "False",
+                null => "Nothing",
+                _ => "the number " + Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture),
+            };
+            string noMember = ", not a PowerPoint object, so it has no member '" + member + "'.";
+            if (!IsSynthetic(target))
+            {
+                return target + " holds a plain value (" + what + ")" + noMember;
+            }
+
+            string? step = engine.MadeBy(target);
+            if (step is null)
+            {
+                return "The value before ." + member + " in this expression is a plain value (" + what + ")" + noMember;
+            }
+
+            return "." + step + " gives a plain value here (" + what + ")" + noMember + " " +
+                   (action == ComOpAction.Set
+                       ? "Assign the value to ." + step + " itself, without ." + member + ": ... ." + step + " = value."
+                       : "Use ." + step + " itself, without ." + member + ".");
+        }
+
         // Properties of iface one hop away from `member` (property name -> member on that object):
         // Shape.Columns -> Table.Columns, FontSize -> Font.Size, ForeColorRGB -> ForeColor.RGB.
         private static List<KeyValuePair<string, string>> OneHopPaths(Type iface, string member)
@@ -525,14 +641,17 @@ namespace Pptcom.ComProxy
                     continue;
                 }
 
+                // A property that takes an index (a collection's Item) is written with it: Rows.Item(n).Height.
+                int indexes = p.GetIndexParameters().Length;
+                string hop = indexes > 0 ? p.Name + "(" + string.Join(", ", Enumerable.Repeat("n", indexes)) + ")" : p.Name;
                 if (HasMember(pt, member))
                 {
-                    hops.Add(new KeyValuePair<string, string>(p.Name, member));
+                    hops.Add(new KeyValuePair<string, string>(hop, member));
                 }
                 else if (member.Length > p.Name.Length && member.StartsWith(p.Name, StringComparison.OrdinalIgnoreCase)
                          && HasMember(pt, member.Substring(p.Name.Length)))
                 {
-                    hops.Add(new KeyValuePair<string, string>(p.Name, member.Substring(p.Name.Length)));
+                    hops.Add(new KeyValuePair<string, string>(hop, member.Substring(p.Name.Length)));
                 }
             }
             return hops;
@@ -557,7 +676,7 @@ namespace Pptcom.ComProxy
             List<ItemHop> found = [];
             bool fits(Type t)
             {
-                return RelatedTypes.Contains(t.Name.TrimStart('_'), StringComparer.OrdinalIgnoreCase) && HasMember(t, member);
+                return RelatedTypeNames.Contains(t.Name.TrimStart('_')) && HasMember(t, member);
             }
 
             foreach (PropertyInfo p in ObjectProperties(iface))
@@ -600,7 +719,7 @@ namespace Pptcom.ComProxy
             List<string> found = [];
             bool related(PropertyInfo p)
             {
-                return RelatedTypes.Contains(p.PropertyType.Name.TrimStart('_'), StringComparer.OrdinalIgnoreCase);
+                return RelatedTypeNames.Contains(p.PropertyType.Name.TrimStart('_'));
             }
 
             void splitAt(string before, Type t)
@@ -659,7 +778,7 @@ namespace Pptcom.ComProxy
             List<string> found = [];
             static bool related(PropertyInfo p)
             {
-                return RelatedTypes.Contains(p.PropertyType.Name.TrimStart('_'), StringComparer.OrdinalIgnoreCase);
+                return RelatedTypeNames.Contains(p.PropertyType.Name.TrimStart('_'));
             }
 
             foreach (PropertyInfo p1 in ObjectProperties(iface).Where(related))
