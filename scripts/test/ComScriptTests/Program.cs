@@ -553,6 +553,21 @@ namespace ComScriptTests
                    ComSecurityPolicy.CheckMemberOnType("ChartData", "Activate") is string activate && activate.Contains("not needed") &&
                    ComSecurityPolicy.CheckMemberOnType("ChartData", "ActivateChartDataWindow") is not null && ComSecurityPolicy.CheckMemberOnType("ChartData", "Workbook") is null,
                    ComSecurityPolicy.CheckMemberOnType("ChartData", "Activate"));
+
+            // A chart's line is turned off before it is shown (PowerPoint leaves it off when DashStyle follows Visible = msoTrue).
+            (string? Type, string Property, int Index, object? Value)[] shows = [("LineFormat", "Visible", 0, -1), ("LineFormat", "visible", 0, true), ("_LineFormat", "Visible", 0, 1)];
+            (string? Type, string Property, int Index, object? Value)[] others =
+            [
+                ("LineFormat", "Visible", 0, 0), ("LineFormat", "Visible", 0, false), ("LineFormat", "Visible", 0, "True"), ("LineFormat", "Visible", 0, null),
+                ("FillFormat", "Visible", 0, -1), ("LineFormat", "DashStyle", 0, -1), ("LineFormat", "Visible", 1, -1), (null, "Visible", 0, -1),
+            ];
+            List<string> wrong = [.. shows.Where(static c => !ComProxyEngine.ShowsLine(c.Type, c.Property, c.Index, c.Value))
+                                       .Concat(others.Where(static c => ComProxyEngine.ShowsLine(c.Type, c.Property, c.Index, c.Value)))
+                                       .Select(static c => c.Type + "." + c.Property + "(" + c.Index.ToString(CultureInfo.InvariantCulture) + ") = " + Convert.ToString(c.Value, CultureInfo.InvariantCulture))];
+            Report("chart lines: Visible set true on a LineFormat (msoTrue, True, msoCTrue) is told from anything else", wrong.Count == 0, string.Join(", ", wrong));
+            Report("chart lines: a line whose Parent is a chart part's format (IMsoChartFormat, ChartFormat), not a shape's",
+                   ComProxyEngine.IsChartFormat("IMsoChartFormat") && ComProxyEngine.IsChartFormat("ChartFormat") && !ComProxyEngine.IsChartFormat("Shape") && !ComProxyEngine.IsChartFormat(null),
+                   "");
         }
 
         // A member written on a plain value. In a chain (a chart's Font.Color is the color itself, so Font.Color.RGB has

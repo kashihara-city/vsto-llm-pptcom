@@ -1022,6 +1022,13 @@ namespace Pptcom.ComProxy
                     Array.Copy(indexArgs, putArgs, indexArgs.Length);
                     putArgs[indexArgs.Length] = setValue;
                     NoteRounding(targetObj, action, property, indexArgs, setValue);
+                    if (IsShowingChartLine(targetObj, property, indexArgs.Length, setValue))
+                    {
+                        targetObj.GetType().InvokeMember(
+                            property, BindingFlags.SetProperty | BindingFlags.Public | BindingFlags.Instance,
+                            binder: null, targetObj, [0], ComCulture); // msoFalse first
+                    }
+
                     targetObj.GetType().InvokeMember(
                         property, BindingFlags.SetProperty | BindingFlags.Public | BindingFlags.Instance,
                         binder: null, targetObj, putArgs, ComCulture);
@@ -1066,6 +1073,44 @@ namespace Pptcom.ComProxy
                 default:
                     throw new InvalidOperationException("unknown action: " + action);
             }
+        }
+
+        // A chart's line that had none (a bar's outline, the value axis, the chart area's border) stays off when
+        // Visible = msoTrue is followed by DashStyle, whatever is set after; Visible = msoFalse just before keeps it on,
+        // and leaves a line already shown as it was. So the engine sets msoFalse before a chart line's msoTrue. A shape's
+        // line has no such trouble and is left alone: both are LineFormat, but a chart's has the chart element's format
+        // as Parent (IMsoChartFormat), a shape's the shape.
+        private static bool IsShowingChartLine(object targetObj, string property, int indexCount, object? value)
+        {
+            if (!ShowsLine(ComSecurityPolicy.TryGetTypeName(targetObj), property, indexCount, value))
+            {
+                return false;
+            }
+
+            object? parent = Guard.Try<object?>(() => targetObj.GetType().InvokeMember(
+                "Parent", BindingFlags.GetProperty | BindingFlags.Public | BindingFlags.Instance, binder: null, targetObj, args: null, ComCulture), fallback: null);
+            return IsChartFormat(ComSecurityPolicy.TryGetTypeName(parent));
+        }
+
+        // Visible set to a true value (msoTrue, True, msoCTrue) on a LineFormat.
+        internal static bool ShowsLine(string? typeName, string property, int indexCount, object? value)
+        {
+            return indexCount == 0 && string.Equals(property, "Visible", StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(typeName?.TrimStart('_'), "LineFormat", StringComparison.Ordinal) &&
+                   value switch
+                   {
+                       bool on => on,
+                       string => false,
+                       IConvertible number => Guard.Try(() => Convert.ToInt32(number, CultureInfo.InvariantCulture) != 0, fallback: false),
+                       _ => false,
+                   };
+        }
+
+        // The format of a chart's part, a line's Parent there: IMsoChartFormat as its type library names it, ChartFormat in PowerPoint's.
+        internal static bool IsChartFormat(string? typeName)
+        {
+            string? name = typeName?.TrimStart('_');
+            return string.Equals(name, "IMsoChartFormat", StringComparison.Ordinal) || string.Equals(name, "ChartFormat", StringComparison.Ordinal);
         }
 
         // Shapes.AddChart2 / AddChart, with no chart's data of the deck open (PowerPoint makes no chart then): the data
