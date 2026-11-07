@@ -225,6 +225,7 @@
     </Compile>
     <Compile Include="ComProxy\DeckAnimations.cs" />
     <Compile Include="ComProxy\DeckReader.cs" />
+    <Compile Include="ComProxy\ShapeContents.cs" />
     <Compile Include="ComProxy\DeckDefaults.cs" />
     <Compile Include="ComProxy\ComOpResult.cs" />
     <Compile Include="ComProxy\ComLineStatus.cs" />

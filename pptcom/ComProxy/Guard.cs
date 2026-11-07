@@ -19,5 +19,19 @@ namespace Pptcom.ComProxy
             return ex is not (OutOfMemoryException or StackOverflowException or AccessViolationException or
                      ThreadAbortException);
         }
+
+        // A best-effort read of the deck, for a property a shape may not have (an effect without a direction, a chart
+        // without a title): its value, or `fallback` when reading it fails.
+        public static T Try<T>(Func<T> read, T fallback)
+        {
+            try
+            {
+                return read();
+            }
+            catch (Exception ex) when (IsRecoverable(ex))
+            {
+                return fallback;
+            }
+        }
     }
 }

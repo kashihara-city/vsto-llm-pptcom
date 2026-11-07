@@ -58,5 +58,19 @@ namespace Pptcom.ComProxy
         }
 
         public static int Count => Map.Count;
+
+        // The other way: the name of a value, without `prefix` ("Fly" for 2 of MsoAnimEffect with "msoAnimEffect"), or
+        // null when the enum has no such value.
+        public static string? NameOf(Type enumType, int value, string prefix = "")
+        {
+            object e = Enum.ToObject(enumType, value);
+            if (!Enum.IsDefined(enumType, e))
+            {
+                return null;
+            }
+
+            string name = Enum.GetName(enumType, e) ?? "";
+            return name.StartsWith(prefix, StringComparison.Ordinal) ? name.Substring(prefix.Length) : name;
+        }
     }
 }

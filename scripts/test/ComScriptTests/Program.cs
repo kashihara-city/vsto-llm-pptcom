@@ -52,6 +52,7 @@ namespace ComScriptTests
             TypeRuleTests();
             RoundingTests();
             AnimationTests();
+            ContentTests();
             SelectionTests();
             RenderSizeTests();
             OverlapTests();
@@ -692,6 +693,234 @@ namespace ComScriptTests
             public float AdvanceTime { get; }
         }
 
+        // Under a table, a chart, a SmartArt graphic and a group, the shape list shows what is in it (ShapeContents), with
+        // the way a script reaches it, cut at the Limits with a count of the rest. Late-bound on stand-ins for the shapes;
+        // they have no Fill or Line, which the list leaves out when it cannot read them.
+        private static void ContentTests()
+        {
+            static ContentShape textShape(int id, int type, string name, string text)
+            {
+                return new ContentShape { Id = id, Type = type, Name = name, HasTextFrame = -1, TextFrame = new SelFrame { TextRange = new SelText { Text = text } } };
+            }
+
+            ContentShape heading = textShape(11, 1, "Rounded Rectangle 4", "見出し");
+            heading.AutoShapeType = 5; // msoShapeRoundedRectangle
+            ContentSlide slide = new();
+            slide.Shapes.List.AddRange([
+                new ContentShape { Id = 2, Type = 19, Name = "Table 1", HasTable = -1, Table = new ContentTable([["項目", "内容", "備考"], ["署名", "長い文章のセルです", ""], ["公布", "x", "y"]]) },
+                new ContentShape
+                {
+                    Id = 3, Type = 3, Name = "Chart 2", HasChart = -1,
+                    Chart = new ContentChart([new ContentSeries { Name = "窓口", Values = OneBased(120.0, 135.5, null, 150.0), XValues = OneBased("2022", "2023", "2024", "2025") },
+                                              new ContentSeries { Name = "電子", Values = OneBased(20.0, 45.0, 60.0, 80.0) },]),
+                },
+                new ContentShape
+                {
+                    Id = 4, Type = 24, Name = "Diagram 3", HasSmartArt = -1,
+                    SmartArt = new ContentSmartArt([(1, "申請"), (2, "書類確認"), (1, "決定")]),
+                },
+                new ContentShape
+                {
+                    Id = 5, Type = 6, Name = "cards", Fill = new ContentFill(),
+                    GroupItems = new ContentItems([heading, textShape(12, 17, "TextBox 5", "本文")]),
+                },
+            ]);
+            Dictionary<string, List<string>> variables = new(StringComparer.Ordinal)
+            {
+                [ComProxyEngine.ShapeKey(256, 2)] = ["tbl"],
+                [ComProxyEngine.ShapeKey(256, 11)] = ["hd"],
+            };
+            ShapeContents.Limits limits = new() { TableRows = 2, TableColumns = 2, TextChars = 5, ChartSeries = 1, ChartPoints = 3, SmartArtNodes = 2, GroupItems = 1, };
+            string brief = DeckReader.Brief(new SelDeck(slide), 1, variables, limits);
+            string expected = "Slide 1 (720x540 pt, 4 shapes):\n" +
+                              "[1] = tbl Table L10 T20 W300 H100, 3 rows x 3 columns (Table.Cell(row, column)):\n" +
+                              "    row 1: \"項目\" | \"内容\" | ... and 1 more column\n" +
+                              "    row 2: \"署名\" | \"長い文章の\"... (9 characters) | ... and 1 more column\n" +
+                              "    ... and 1 more row\n" +
+                              "[2] Chart L10 T20 W300 H100, xlColumnClustered, title \"利用者数\", 2 series (Chart.SeriesCollection(n)):\n" +
+                              "    categories: \"2022\" | \"2023\" | \"2024\" | ... and 1 more\n" +
+                              "    1 \"窓口\": 120 | 135.5 | Empty | ... and 1 more\n" +
+                              "    ... and 1 more series\n" +
+                              "[3] SmartArt L10 T20 W300 H100, layout \"基本ステップ\", 3 nodes (SmartArt.AllNodes(n), indented by Level):\n" +
+                              "    1 \"申請\"\n" +
+                              "      2 \"書類確認\"\n" +
+                              "    ... and 1 more node\n" +
+                              "[4] Group 'cards' L10 T20 W300 H100, 2 shapes (GroupItems(n)):\n" +
+                              "    GroupItems(1) = hd RoundedRectangle L10 T20 W300 H100 \"見出し\"\n" +
+                              "    ... and 1 more shape\n";
+            Report("contents: tables, charts, SmartArt and groups, each with the way a script reaches it, cut at the limits", brief == expected, "\n" + brief);
+
+            string all = DeckReader.Brief(new SelDeck(slide), 1, variables);
+            Report("contents: within the default limits, nothing is cut",
+                   !all.Contains("more") && !all.Contains("characters)") && all.Contains("    row 3: \"公布\" | \"x\" | \"y\"\n") &&
+                   all.Contains("    2 \"電子\": 20 | 45 | 60 | 80\n") && all.Contains("    GroupItems(2) TextBox L10 T20 W300 H100 \"本文\"\n"), "\n" + all);
+            ContentTable withMerged = new([["a", "b", "上" + "\r" + "下"], ["c", "d", ""], ["e", "左" + "\r" + "右", ""]], (1, 3, 2, 3), (3, 2, 3, 3));
+            ContentSlide merged = new();
+            merged.Shapes.List.Add(new ContentShape { Id = 2, Type = 19, Name = "Table 1", HasTable = -1, Table = withMerged });
+            string mergedBrief = DeckReader.Brief(new SelDeck(merged), 1);
+            Report("contents: merged cells give their text once, the others the cell they are merged with",
+                   mergedBrief.EndsWith("    row 1: \"a\" | \"b\" | \"上\" & vbCr & \"下\"\n" +
+                                        "    row 2: \"c\" | \"d\" | (merged with Cell(1, 3))\n" +
+                                        "    row 3: \"e\" | \"左\" & vbCr & \"右\" | (merged with Cell(3, 2))\n", StringComparison.Ordinal), "\n" + mergedBrief);
+            Report("contents: a cut text does not split a character made of two UTF-16 units",
+                   ShapeContents.Text("𠮷野家の牛丼", 1) == "\"\"... (7 characters)", ShapeContents.Text("𠮷野家の牛丼", 1));
+        }
+
+        // An array as COM hands one over: numbered from 1.
+        private static Array OneBased(params object?[] items)
+        {
+            Array a = Array.CreateInstance(typeof(object), [items.Length], [1]);
+            for (int i = 0; i < items.Length; i++)
+            {
+                a.SetValue(items[i], i + 1);
+            }
+
+            return a;
+        }
+
+        // slide.Shapes(i), .Shapes.Count and .SlideID, as late binding reaches PowerPoint's Slide. No TimeLine and no
+        // transition: the list has no animations to show.
+        internal sealed class ContentSlide : DynamicObject
+        {
+            public int SlideID = 256;
+            public ContentItems Shapes = new([]);
+
+            public override bool TryInvokeMember(InvokeMemberBinder binder, object?[]? args, out object? result)
+            {
+                result = binder.Name == "Shapes" && args is { Length: 1 } ? Shapes.Item((int)args[0]!) : null;
+                return result is not null;
+            }
+        }
+
+        // A slide's shapes, a group's GroupItems.
+        internal sealed class ContentItems(List<ContentShape> list)
+        {
+            public readonly List<ContentShape> List = list;
+            public int Count => List.Count;
+
+            public ContentShape Item(int index)
+            {
+                return List[index - 1];
+            }
+        }
+
+        // Any shape: what it holds is set for its kind.
+        internal sealed class ContentShape
+        {
+            public int Id, Type, AutoShapeType;
+            public string Name = "";
+            public double Left = 10, Top = 20, Width = 300, Height = 100;
+            public int HasTable, HasChart, HasSmartArt, HasTextFrame;
+            public SelFrame? TextFrame;
+            public ContentTable? Table;
+            public ContentChart? Chart;
+            public ContentSmartArt? SmartArt;
+            public ContentItems? GroupItems;
+            public ContentFill? Fill;
+        }
+
+        // Table.Rows.Count, Columns.Count and Cell(row, column).Shape: its place and TextFrame.TextRange.Text. Every cell of
+        // merged cells gives the place and text of the first one, as PowerPoint's do.
+        internal sealed class ContentTable(string[][] cells, params (int Row, int Column, int ToRow, int ToColumn)[] merged)
+        {
+            private readonly string[][] _cells = cells;
+            public ContentCount Rows = new(cells.Length);
+            public ContentCount Columns = new(cells[0].Length);
+
+            public ContentCell Cell(int row, int column)
+            {
+                (int r, int c) = (row, column);
+                foreach ((int fromRow, int fromColumn, int toRow, int toColumn) in merged)
+                {
+                    if (row >= fromRow && row <= toRow && column >= fromColumn && column <= toColumn)
+                    {
+                        (r, c) = (fromRow, fromColumn);
+                    }
+                }
+
+                return new ContentCell
+                {
+                    Shape = new ContentShape { Left = c * 100, Top = r * 40, TextFrame = new SelFrame { TextRange = new SelText { Text = _cells[r - 1][c - 1] } } },
+                };
+            }
+        }
+
+        // A group's Fill, which reads "mixed" (msoTriStateMixed as the color) when its shapes' fills differ.
+        internal sealed class ContentFill
+        {
+            public int Visible = -1, Type = 1;
+            public double Transparency { get; }
+            public ContentColor ForeColor = new() { RGB = int.MinValue };
+        }
+
+        internal sealed class ContentColor
+        {
+            public int RGB;
+        }
+
+        internal sealed class ContentCount(int count)
+        {
+            public int Count { get; } = count;
+        }
+
+        internal sealed class ContentCell
+        {
+            public ContentShape Shape = new();
+        }
+
+        // Chart.SeriesCollection() and SeriesCollection(n), as PowerPoint's Chart has them; a column chart with a title.
+        internal sealed class ContentChart(List<ContentSeries> series)
+        {
+            public int ChartType = (int)Microsoft.Office.Core.XlChartType.xlColumnClustered;
+            public bool HasTitle = true;
+            public SelText ChartTitle = new() { Text = "利用者数" };
+
+            public ContentCount SeriesCollection()
+            {
+                return new ContentCount(series.Count);
+            }
+
+            public ContentSeries SeriesCollection(int index)
+            {
+                return series[index - 1];
+            }
+        }
+
+        internal sealed class ContentSeries
+        {
+            public string Name = "";
+            public Array? Values, XValues;
+        }
+
+        // SmartArt.Layout.Name and AllNodes(n): Level and TextFrame2.TextRange.Text.
+        internal sealed class ContentSmartArt(List<(int Level, string Text)> nodes)
+        {
+            public ContentLayout Layout = new();
+            public ContentNodes AllNodes = new(nodes);
+        }
+
+        internal sealed class ContentLayout
+        {
+            public string Name = "基本ステップ";
+        }
+
+        internal sealed class ContentNodes(List<(int Level, string Text)> nodes)
+        {
+            public int Count => nodes.Count;
+
+            public ContentNode Item(int index)
+            {
+                return new ContentNode { Level = nodes[index - 1].Level, TextFrame2 = new SelFrame { TextRange = new SelText { Text = nodes[index - 1].Text } } };
+            }
+        }
+
+        internal sealed class ContentNode
+        {
+            public int Level;
+            public int Hidden { get; }
+            public SelFrame TextFrame2 = new();
+        }
+
         // What the user had selected reaches the model with its place in the shape's text (DeckReader.ReadSelection and
         // DescribeSelection, late-bound on stand-ins for PowerPoint's window, selection and slide): the same word twice
         // in one shape must not read the same for either one.
@@ -831,7 +1060,7 @@ namespace ComScriptTests
         }
 
         // ActivePresentation.Slides(i), on a 720x540 slide.
-        internal sealed class SelDeck(SelSlide slide) : DynamicObject
+        internal sealed class SelDeck(object slide) : DynamicObject
         {
             public StubPageSetup PageSetup = new(720);
 

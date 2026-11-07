@@ -244,8 +244,11 @@ namespace Pptcom.ComProxy
         // and then the slide's animations and transition, when it has any (DeckAnimations).
         // Names PowerPoint made up ("Rounded Rectangle 15") are left out, as the type says the same;
         // names a script gave are kept ('card1'). The text is complete, as a VBA literal.
-        public static string Brief(object? presentation, int slideIndex, IDictionary<string, List<string>>? variables = null)
+        // Under a table, a chart, a SmartArt graphic or a group, what is in it (ShapeContents), up to `limits`
+        // (ShapeContents.Limits.Default when null).
+        public static string Brief(object? presentation, int slideIndex, IDictionary<string, List<string>>? variables = null, ShapeContents.Limits? limits = null)
         {
+            limits ??= ShapeContents.Limits.Default;
             dynamic pres = Deck(presentation);
             dynamic slide = pres.Slides(slideIndex);
             int shapeCount = (int)slide.Shapes.Count;
@@ -254,7 +257,7 @@ namespace Pptcom.ComProxy
             List<ShapeBox> boxes = [];
             for (int i = 1; i <= shapeCount; i++)
             {
-                AppendShape(sb, slide, i, variables);
+                AppendShape(sb, slide, i, variables, limits);
                 try
                 {
                     dynamic shape = slide.Shapes(i);
@@ -409,17 +412,29 @@ namespace Pptcom.ComProxy
                    (more > 0 ? Invariant($"; and {more} more") : "") + "\n";
         }
 
-        // One line of Brief: the slide's shape Shapes(i).
-        private static void AppendShape(StringBuilder sb, dynamic slide, int i, IDictionary<string, List<string>>? variables)
+        // One shape of Brief: the slide's shape Shapes(i), and what is in it under it.
+        private static void AppendShape(StringBuilder sb, dynamic slide, int i, IDictionary<string, List<string>>? variables, ShapeContents.Limits limits)
         {
-            dynamic shape = slide.Shapes(i);
+            sb.Append('[').Append(i).Append("] ");
+            AppendShapeLine(sb, (object)slide, (object)slide.Shapes(i), variables, ContentIndent, limits);
+        }
+
+        // Under a shape's line, what is in it (ShapeContents), indented by this.
+        private const string ContentIndent = "    ";
+
+        // A shape's line after its number ("[3] ", "GroupItems(2) "): the variables that hold it, its type, name, position
+        // and size, fill, line and text; then what is in a table, a chart, a SmartArt graphic or a group, on lines
+        // starting with `indent`.
+        internal static void AppendShapeLine(StringBuilder sb, dynamic slide, dynamic shape, IDictionary<string, List<string>>? variables, string indent,
+                                             ShapeContents.Limits limits)
+        {
             string type = TypeName(shape);
             if (type.StartsWith("AutoShape(msoShape", StringComparison.Ordinal))
             {
                 type = type.Substring("AutoShape(msoShape".Length).TrimEnd(')');
             }
 
-            sb.Append('[').Append(i).Append("] ").Append(VariablesOf(variables, slide, shape)).Append(type);
+            sb.Append(VariablesOf(variables, slide, shape)).Append(type);
             string name = (string)shape.Name ?? "";
             if (!AutoNamePattern.IsMatch(name))
             {
@@ -429,10 +444,12 @@ namespace Pptcom.ComProxy
             sb.Append(" L").Append(R(shape.Left)).Append(" T").Append(R(shape.Top))
               .Append(" W").Append(R(shape.Width)).Append(" H").Append(R(shape.Height));
             // Colors and weights as numbers: from a rendering the model could only guess them (a thin dotted line
-            // comes out paler than it is).
+            // comes out paler than it is). Not for a table (its fill is per cell), a chart (its look is in the chart; the
+            // shape's own Fill and Line read black and a weight of "mixed") or a group (its shapes are listed under it,
+            // each with its own; the group's read "mixed" when they differ).
             try
             {
-                if ((int)shape.HasTable == 0)
+                if ((int)shape.HasTable == 0 && Guard.Try(() => (int)shape.HasChart == 0, fallback: true) && (int)shape.Type != 6)
                 {
                     AppendFill(sb, shape.Fill);
                     AppendLine(sb, shape.Line);
@@ -460,7 +477,8 @@ namespace Pptcom.ComProxy
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
             }
-            sb.Append('\n');
+            (string head, string lines) = ShapeContents.Describe((object)slide, (object)shape, variables, indent, limits);
+            sb.Append(head).Append('\n').Append(lines);
         }
 
         // " fill RGB(245,246,247)", " fill gradient RGB(126,183,236) to RGB(0,90,163), GradientAngle 90" or " fill picture",
@@ -720,7 +738,7 @@ namespace Pptcom.ComProxy
                 sb.Append("When the user sent this, PowerPoint showed slide ").Append(s.Slide).Append(" with this selected (as in pptread):\n");
                 foreach (int i in indexes)
                 {
-                    AppendShape(sb, slide, i, variables);
+                    AppendShape(sb, slide, i, variables, ShapeContents.Limits.Default);
                 }
 
                 if (s.InGroup.Count > 0)

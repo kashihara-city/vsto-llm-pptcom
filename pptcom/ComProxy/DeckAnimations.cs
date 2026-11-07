@@ -84,7 +84,7 @@ namespace Pptcom.ComProxy
                     {
                         dynamic sequence = timeLine.InteractiveSequences.Item(s);
                         int count = (int)sequence.Count;
-                        string shape = count > 0 ? Try(() => ShapeLabel(labels, (object)sequence.Item(1).Timing.TriggerShape), "a shape") : "a shape";
+                        string shape = count > 0 ? Guard.Try(() => ShapeLabel(labels, (object)sequence.Item(1).Timing.TriggerShape), "a shape") : "a shape";
                         sb.Append(Invariant($"  InteractiveSequences({s}).Item(#):\n"));
                         AppendSequence(sb, (object)sequence, count, labels, shape);
                     }
@@ -141,14 +141,14 @@ namespace Pptcom.ComProxy
             dynamic timing = effect.Timing;
             int trigger = (int)timing.TriggerType;
             double delay = Num((object)timing.TriggerDelayTime), duration = Num((object)timing.Duration);
-            double repeat = Try(() => Num((object)timing.RepeatCount), 1.0);
-            bool back = Try(() => (int)timing.AutoReverse != 0, fallback: false);
-            bool exit = Try(() => (int)effect.Exit != 0, fallback: false);
+            double repeat = Guard.Try(() => Num((object)timing.RepeatCount), 1.0);
+            bool back = Guard.Try(() => (int)timing.AutoReverse != 0, fallback: false);
+            bool exit = Guard.Try(() => (int)effect.Exit != 0, fallback: false);
             int type = (int)effect.EffectType;
-            int paragraph = Try(() => (int)effect.Paragraph, 0);
-            string shape = Try(() => ShapeLabel(labels, (object)effect.Shape), "?");
-            string what = (EnumName(typeof(Microsoft.Office.Interop.PowerPoint.MsoAnimEffect), type, "msoAnimEffect") ?? Invariant($"effect {type}")) +
-                          (exit ? " (exit)" : "") + Try(() => Side((int)effect.EffectParameters.Direction, exit), "") +
+            int paragraph = Guard.Try(() => (int)effect.Paragraph, 0);
+            string shape = Guard.Try(() => ShapeLabel(labels, (object)effect.Shape), "?");
+            string what = (EnumResolver.NameOf(typeof(Microsoft.Office.Interop.PowerPoint.MsoAnimEffect), type, "msoAnimEffect") ?? Invariant($"effect {type}")) +
+                          (exit ? " (exit)" : "") + Guard.Try(() => Side((int)effect.EffectParameters.Direction, exit), "") +
                           (paragraph > 0 ? Invariant($", paragraph {paragraph}") : "");
             string how = (trigger == WithPrevious ? "with previous" : trigger == AfterPrevious ? "after previous" : "on click") +
                          ", delay " + N(delay) + ", " + N(duration) + " s" +
@@ -162,7 +162,7 @@ namespace Pptcom.ComProxy
         // not the way it moves. Other directions (Clockwise, Horizontal ...) by name; nothing for an effect without one.
         internal static string Side(int direction, bool exit)
         {
-            string? name = EnumName(typeof(Microsoft.Office.Interop.PowerPoint.MsoAnimDirection), direction, "msoAnimDirection");
+            string? name = EnumResolver.NameOf(typeof(Microsoft.Office.Interop.PowerPoint.MsoAnimDirection), direction, "msoAnimDirection");
             if (name is null || string.Equals(name, "None", StringComparison.Ordinal))
             {
                 return "";
@@ -182,14 +182,14 @@ namespace Pptcom.ComProxy
                 dynamic transition = slide.SlideShowTransition;
                 int effect = (int)transition.EntryEffect;
                 string? name = effect == 0 ? null
-                    : EnumName(typeof(Microsoft.Office.Interop.PowerPoint.PpEntryEffect), effect, "ppEffect") ?? Invariant($"effect {effect}");
-                bool advance = Try(() => (int)transition.AdvanceOnTime != 0, fallback: false);
+                    : EnumResolver.NameOf(typeof(Microsoft.Office.Interop.PowerPoint.PpEntryEffect), effect, "ppEffect") ?? Invariant($"effect {effect}");
+                bool advance = Guard.Try(() => (int)transition.AdvanceOnTime != 0, fallback: false);
                 if (name is null && !advance)
                 {
                     return "";
                 }
 
-                double duration = name is null ? 0 : Try(() => Num((object)transition.Duration), 0.0);
+                double duration = name is null ? 0 : Guard.Try(() => Num((object)transition.Duration), 0.0);
                 return "Slide transition: " + (name ?? "none") + (duration > 0 ? ", " + N(duration) + " s" : "") +
                        (advance ? ", then on to the next slide after " + N(Num((object)transition.AdvanceTime)) + " s" : "") + "\n";
             }
@@ -228,18 +228,6 @@ namespace Pptcom.ComProxy
             return labels.TryGetValue((int)shape.Id, out string label) ? label : "'" + (string)shape.Name + "'";
         }
 
-        private static string? EnumName(Type enumType, int value, string prefix)
-        {
-            object e = Enum.ToObject(enumType, value);
-            if (!Enum.IsDefined(enumType, e))
-            {
-                return null;
-            }
-
-            string name = Enum.GetName(enumType, e) ?? "";
-            return name.StartsWith(prefix, StringComparison.Ordinal) ? name.Substring(prefix.Length) : name;
-        }
-
         private static double Num(object value)
         {
             return Convert.ToDouble(value, CultureInfo.InvariantCulture);
@@ -248,18 +236,6 @@ namespace Pptcom.ComProxy
         private static string N(double value)
         {
             return value.ToString("0.##", CultureInfo.InvariantCulture);
-        }
-
-        private static T Try<T>(Func<T> read, T fallback)
-        {
-            try
-            {
-                return read();
-            }
-            catch (Exception ex) when (Guard.IsRecoverable(ex))
-            {
-                return fallback;
-            }
         }
     }
 }
