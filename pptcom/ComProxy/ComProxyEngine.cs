@@ -38,6 +38,23 @@ namespace Pptcom.ComProxy
             "AddPicture", "AddPicture2", "AddMediaObject", "AddMediaObject2", "UserPicture",
         };
 
+        // Charts' data the scripts opened in Excel, closed by the engine (ChartDataWorkbooks), and the objects of it that
+        // variables hold: when the data closes, those variables are given ClosedChartData instead, so that a script that
+        // uses one is told to read it again rather than getting Excel's error.
+        private readonly ChartDataWorkbooks _chartData = new();
+        private readonly List<object> _chartDataValues = [];
+
+        private sealed class ClosedChartData
+        {
+            public static readonly ClosedChartData Instance = new();
+        }
+
+        private static InvalidOperationException ChartDataClosed(string id)
+        {
+            return new InvalidOperationException(id + " held a chart's data, which pptcom closed when the pptcom call ended (or for AddChart2): read it again from the chart " +
+                                                 "in this call, as in Set ws = ch.Chart.ChartData.Workbook.Worksheets(1)");
+        }
+
         // Handles of the variables the engine knows (for multi-round callers that carry ids).
         public IEnumerable<string> KnownHandles => _handles.Keys;
 
@@ -241,32 +258,39 @@ namespace Pptcom.ComProxy
                 return result;
             }
 
-            foreach (JToken token in ops)
+            try
             {
-                JObject op = (JObject)token;
-                string? id = (string?)op["id"];
-                string? action = (string?)op["action"];
-                string? target = (string?)op["target"];
-                string? member = (string?)op["member"];
+                foreach (JToken token in ops)
+                {
+                    JObject op = (JObject)token;
+                    string? id = (string?)op["id"];
+                    string? action = (string?)op["action"];
+                    string? target = (string?)op["target"];
+                    string? member = (string?)op["member"];
 
-                ComOpResult opResult = new()
-                {
-                    Id = id,
-                    Action = action,
-                    Target = target,
-                    Member = member,
-                };
-                string? error = await TryRunOpAsync(op).ConfigureAwait(true);
-                if (error is not null)
-                {
-                    opResult.Success = false;
-                    opResult.Error = error;
+                    ComOpResult opResult = new()
+                    {
+                        Id = id,
+                        Action = action,
+                        Target = target,
+                        Member = member,
+                    };
+                    string? error = await TryRunOpAsync(op).ConfigureAwait(true);
+                    if (error is not null)
+                    {
+                        opResult.Success = false;
+                        opResult.Error = error;
+                        result.Ops.Add(opResult);
+                        result.Success = false;
+                        return result; // stop on first failure; caller sees exactly how far it got
+                    }
+                    opResult.Success = true;
                     result.Ops.Add(opResult);
-                    result.Success = false;
-                    return result; // stop on first failure; caller sees exactly how far it got
                 }
-                opResult.Success = true;
-                result.Ops.Add(opResult);
+            }
+            finally
+            {
+                await CloseChartDataAsync().ConfigureAwait(true);
             }
 
             result.Success = true;
@@ -341,6 +365,21 @@ namespace Pptcom.ComProxy
             {
                 MaxFailures = maxFailures,
             };
+            try
+            {
+                await RunLinesAsync(parsed, result, maxFailures).ConfigureAwait(true);
+            }
+            finally
+            {
+                // A chart's data the script opened does not stay open in Excel after it (ChartDataWorkbooks).
+                await CloseChartDataAsync().ConfigureAwait(true);
+            }
+
+            return result;
+        }
+
+        private async Task RunLinesAsync(ComScriptParser.ParseResult parsed, ComScriptResult result, int maxFailures)
+        {
             HashSet<string> poisoned = new(StringComparer.OrdinalIgnoreCase);
             HashSet<string> causes = new(StringComparer.Ordinal);
             int failures = 0;
@@ -411,7 +450,34 @@ namespace Pptcom.ComProxy
                     poisoned.ExceptWith(writes);
                 }
             }
-            return result;
+        }
+
+        // Closes the charts' data the scripts opened, once the charts have taken what was written last
+        // (ChartDataWorkbooks.Unsettled), and gives the variables that held part of it ClosedChartData.
+        private async Task CloseChartDataAsync()
+        {
+            TimeSpan wait = _chartData.Unsettled();
+            if (wait > TimeSpan.Zero)
+            {
+                await Task.Delay(wait, System.Threading.CancellationToken.None).ConfigureAwait(true);
+            }
+
+            _chartData.CloseAll();
+            if (_chartDataValues.Count == 0)
+            {
+                return;
+            }
+
+            foreach (string key in _handles.Keys.ToList())
+            {
+                object? v = _handles[key];
+                if (v is not null && _chartDataValues.Exists(x => ReferenceEquals(x, v)))
+                {
+                    _handles[key] = ClosedChartData.Instance;
+                }
+            }
+
+            _chartDataValues.Clear();
         }
 
         // The parsed ops of each line (by line number, from 1).
@@ -666,6 +732,11 @@ namespace Pptcom.ComProxy
                 throw new InvalidOperationException("unknown target handle: " + target);
             }
 
+            if (targetObj is ClosedChartData)
+            {
+                throw ChartDataClosed(target);
+            }
+
             _lastTargetType = targetObj is not null && System.Runtime.InteropServices.Marshal.IsComObject(targetObj)
                 ? (ComSecurityPolicy.TryGetTypeName(targetObj) ?? "?") : "(value)";
 
@@ -691,6 +762,12 @@ namespace Pptcom.ComProxy
                 throw new InvalidOperationException(target + " holds Nothing");
             }
 
+            // No chart's data of the deck may be open for AddChart2 (AddChart).
+            if (action == ComOpAction.Call && IsChartAdding(targetObj, member))
+            {
+                await CloseChartDataAsync().ConfigureAwait(true);
+            }
+
             // Application.ActivePresentation is the request's deck too, as the bare ActivePresentation is
             // (BindPresentation): asked of PowerPoint, it would be whichever deck the user has in front now.
             object? resultValue = IsApplicationActivePresentation(op, action, member, targetObj)
@@ -713,6 +790,8 @@ namespace Pptcom.ComProxy
                                                     "To use another presentation, ask the user to save it and attach it to the task pane, then read it with docread");
             }
 
+            NoteChartData(resultValue);
+
             object? resultSlide = TrackSlides(action, target, resultValue);
             if (id is not null && id.Length > 0 && !TryLetIntoDefault(op, id, resultValue))
             {
@@ -720,6 +799,22 @@ namespace Pptcom.ComProxy
                 _handles[id] = resultValue;
                 _handleSlide[id] = resultSlide;
                 _literalIds.Remove(id);
+            }
+        }
+
+        // A chart's data a script opened, for the engine to close (ChartDataWorkbooks): its workbook, when the script
+        // reaches it (ChartData.Workbook opens it), and every object of it the script may keep in a variable (CloseChartData).
+        private void NoteChartData(object? resultValue)
+        {
+            if (resultValue is null || !ComSecurityPolicy.IsChartDataObject(resultValue))
+            {
+                return;
+            }
+
+            _chartDataValues.Add(resultValue);
+            if (string.Equals(ComSecurityPolicy.TryGetTypeName(resultValue)?.TrimStart('_'), "Workbook", StringComparison.Ordinal))
+            {
+                _chartData.Add(resultValue);
             }
         }
 
@@ -851,6 +946,13 @@ namespace Pptcom.ComProxy
                 case ComOpAction.Set:
                     string property = RequireMember(member, "set");
                     object? setValue = ResolveArg(op["value"]);
+                    bool intoChartData = ComSecurityPolicy.IsChartDataObject(targetObj);
+                    string? valueBlock = intoChartData ? ComSecurityPolicy.CheckChartDataValue(setValue) : null;
+                    if (valueBlock is not null)
+                    {
+                        throw new InvalidOperationException("value refused by policy: " + valueBlock);
+                    }
+
                     // For an indexed property put (`Adjustments(1) = 0.1`) COM wants the index
                     // args first and the new value last.
                     object?[] indexArgs = ResolveArgs(op["args"] as JArray);
@@ -861,6 +963,11 @@ namespace Pptcom.ComProxy
                     targetObj.GetType().InvokeMember(
                         property, BindingFlags.SetProperty | BindingFlags.Public | BindingFlags.Instance,
                         binder: null, targetObj, putArgs, ComCulture);
+                    if (intoChartData)
+                    {
+                        _chartData.Wrote();
+                    }
+
                     return null;
 
                 case ComOpAction.Call:
@@ -877,7 +984,18 @@ namespace Pptcom.ComProxy
                         }
                     }
                     NoteRounding(targetObj, action, method, callArgs, setValue: null);
-                    return InvokeCallOrIndex(targetObj, method, callArgs);
+                    if (IsChartAdding(targetObj, method))
+                    {
+                        return AddChart(targetObj, method, callArgs);
+                    }
+
+                    object? called = InvokeCallOrIndex(targetObj, method, callArgs);
+                    if (string.Equals(method, "ClearContents", StringComparison.OrdinalIgnoreCase) && ComSecurityPolicy.IsChartDataObject(targetObj))
+                    {
+                        _chartData.Wrote();
+                    }
+
+                    return called;
 
                 case ComOpAction.Item:
                     object?[] itemArgs = ResolveArgs(op["args"] as JArray);
@@ -886,6 +1004,51 @@ namespace Pptcom.ComProxy
                 default:
                     throw new InvalidOperationException("unknown action: " + action);
             }
+        }
+
+        // Shapes.AddChart2 / AddChart, with no chart's data of the deck open (PowerPoint makes no chart then): the data
+        // the scripts opened is closed before (ExecuteOneAsync); when the call still fails as it does for open data and
+        // the deck has charts, the user has one open, and the data of every chart on the deck is closed before one more
+        // try. The new chart's data, which PowerPoint opens, is kept to be closed in its turn (ChartDataWorkbooks).
+        private object? AddChart(object shapes, string method, object?[] args)
+        {
+            object? shape;
+            try
+            {
+                shape = InvokeCallOrIndex(shapes, method, args);
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex) && ChartDataWorkbooks.MayBeOpenData(ex))
+            {
+                if (Presentation is not { } deck || Guard.Try(() => ChartDataWorkbooks.CloseEveryChart(deck), 0) == 0)
+                {
+                    throw;
+                }
+
+                try
+                {
+                    shape = InvokeCallOrIndex(shapes, method, args);
+                }
+                catch (Exception again) when (Guard.IsRecoverable(again) && ChartDataWorkbooks.MayBeOpenData(again))
+                {
+                    throw new InvalidOperationException(DescribeException(again) + ". PowerPoint makes no chart while the data of a chart of this deck is open in Excel; " +
+                                                        "pptcom closed the data of the deck's charts and tried again, without success. The user may be editing one: " +
+                                                        "ask them to close the chart's data (the Excel window), then add the chart again", again);
+                }
+            }
+
+            if (shape is not null)
+            {
+                _chartData.AddDataOf(shape);
+            }
+
+            return shape;
+        }
+
+        // Shapes.AddChart2 or Shapes.AddChart.
+        private static bool IsChartAdding(object targetObj, string? member)
+        {
+            return (string.Equals(member, "AddChart2", StringComparison.OrdinalIgnoreCase) || string.Equals(member, "AddChart", StringComparison.OrdinalIgnoreCase)) &&
+                   string.Equals(ComSecurityPolicy.TryGetTypeName(targetObj), "Shapes", StringComparison.Ordinal);
         }
 
         // Slide tracking for auto-renders: a handle belongs to the slide it was reached from;
@@ -1495,7 +1658,7 @@ namespace Pptcom.ComProxy
                     throw new InvalidOperationException("unknown reference: " + s);
                 }
 
-                return refVal;
+                return refVal is ClosedChartData ? throw ChartDataClosed(refId) : refVal;
             }
             if (EnumResolver.TryResolve(s, out object enumVal))
             {

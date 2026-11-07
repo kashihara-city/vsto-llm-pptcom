@@ -39,6 +39,20 @@ No animation unless the user asks for motion. When asked, add it like this:
   fx.Timing.TriggerDelayTime = 0.4   ' seconds, counted from the click, not from the previous effect
   fx.Timing.Duration = 0.6   ' last: setting Direction or Exit afterwards puts Duration back to 0.5
 
+No chart unless the user asks for one: it takes many steps and fails easily. When asked, make it like this, data and all in one pptcom call:
+  Set ch = sld.Shapes.AddChart2(-1, xlColumnClustered, 40, 120, 600, 340)
+  Set ws = ch.Chart.ChartData.Workbook.Worksheets(1)   ' the chart's data: series names in row 1, categories in column A
+  ws.Range("B1").Value = "Counter"
+  ws.Range("C1").Value = "Online"
+  ws.Range("A2").Value = "FY2023"   ' categories as text: numbers there (2023) make column A a series
+  ws.Range("B2").Value = 135
+  ws.Range("C2").Value = 45
+  ws.Range("A3").Value = "FY2024"
+  ws.Range("B3").Value = 150
+  ws.Range("C3").Value = 80
+  ch.Chart.SetSourceData "='Sheet1'!$A$1:$C$3"   ' the cells the chart shows; a new chart's data fills A1:D5
+The data closes when the pptcom call ends. Of it only Worksheets(n), Range, Cells, Value, Value2 and ClearContents can be used, and text starting with = + - @ is refused (Excel would take it as a formula).
+
 A pptcom result looks like this:
   OK: 12 lines executed. Defined: sld, title, card. Values: h = 64.5
 or, when something failed:

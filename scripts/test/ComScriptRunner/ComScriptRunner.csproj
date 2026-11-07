@@ -53,6 +53,7 @@
     <Compile Include="..\..\..\pptcom\ComProxy\VbaOps.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\DeckProbe.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\DeckDefaults.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\ChartDataWorkbooks.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\DeckAnimations.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\DeckReader.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\ShapeContents.cs" />

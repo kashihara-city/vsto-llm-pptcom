@@ -50,6 +50,7 @@ namespace ComScriptTests
             StatementTests();
             DeckTests();
             TypeRuleTests();
+            ChartDataPolicyTests();
             RoundingTests();
             AnimationTests();
             ContentTests();
@@ -507,6 +508,44 @@ namespace ComScriptTests
             Report("policy: nothing is called or set on an object whose type could not be read",
                    ComSecurityPolicy.CheckMemberOnType(typeName: null, "Count") is not null && ComSecurityPolicy.CheckSetOnType(typeName: null, "Left") is not null &&
                    ComSecurityPolicy.CheckMemberOnType("Shapes", "Count") is null && ComSecurityPolicy.CheckSetOnType("Shape", "Left") is null, "allowed");
+        }
+
+        // A chart's data is an Excel workbook, and through it all of Excel: of the Excel type library only the cells of a
+        // chart's data sheet are open (ComSecurityPolicy.ChartDataMembers), and no formula goes into them.
+        private static void ChartDataPolicyTests()
+        {
+            Guid excel = ComSecurityPolicy.ExcelTypeLib;
+            Report("chart data: its workbook, sheets, sheet and ranges are kept, nothing else of Excel",
+                   Array.TrueForAll(["_Workbook", "Sheets", "_Worksheet", "Range"], t => ComSecurityPolicy.IsReturnKindAllowed(excel, t)) &&
+                   !Array.Exists(["_Application", "Workbooks", "_Chart", "Names", "Hyperlinks", "QueryTables", "Shapes", "Window"], t => ComSecurityPolicy.IsReturnKindAllowed(excel, t)) &&
+                   !ComSecurityPolicy.IsReturnKindAllowed(excel, typeName: null), "kept");
+
+            List<string> refused = [.. new[]
+                {
+                    ("_Workbook", "Worksheets", false), ("Sheets", "Item", false), ("_Worksheet", "Range", false), ("_Worksheet", "Cells", false),
+                    ("_Worksheet", "Name", false), ("Range", "Value", false), ("Range", "Value2", false), ("Range", "ClearContents", false),
+                    ("Range", "Offset", false), ("Range", "Value", true), ("Range", "Value2", true),
+                }.Where(static m => ComSecurityPolicy.CheckChartDataMember(m.Item1, m.Item2, m.Item3) is not null).Select(static m => m.Item1 + "." + m.Item2)];
+            Report("chart data: what reaches and writes the cells is open", refused.Count == 0, string.Join(", ", refused));
+            List<string> open = [.. new[]
+                {
+                    ("Range", "Formula", false), ("Range", "FormulaLocal", false), ("Range", "Formula2", false), ("Range", "Hyperlinks", false),
+                    ("Range", "Worksheet", false), ("Range", "Application", false), ("_Workbook", "Application", false), ("_Workbook", "Close", false),
+                    ("_Workbook", "SaveAs", false), ("_Workbook", "VBProject", false), ("_Worksheet", "Parent", false), ("_Application", "Run", false),
+                    ("_Application", "ExecuteExcel4Macro", false), ("Range", "Formula", true), ("_Worksheet", "Name", true), ("Range", "Item", true),
+                }.Where(static m => ComSecurityPolicy.CheckChartDataMember(m.Item1, m.Item2, m.Item3) is null).Select(static m => m.Item1 + "." + m.Item2)];
+            Report("chart data: everything else of Excel is refused", open.Count == 0, string.Join(", ", open));
+
+            object?[] formulas = ["=1+1", "＝1+1", "+A1", "-A1", "@SUM(1,2)", "  =1", "\u3000＝1", "＋1", "－1", "＠x", "-5", new object?[] { "a", "=1" }, new object()];
+            List<string> passed = [.. formulas.Where(static v => ComSecurityPolicy.CheckChartDataValue(v) is null).Select(static v => Convert.ToString(v, CultureInfo.InvariantCulture) ?? "")];
+            Report("chart data: text Excel takes as a formula is refused, half- or full-width, after spaces, in an Array", passed.Count == 0, string.Join(", ", passed));
+            object?[] values = ["窓口", "2022", "1/2", "A-1", "", 120, -5, 4.5, true, null, new DateTime(2026, 11, 7, 0, 0, 0, DateTimeKind.Unspecified), new object?[] { "a", 3, null }];
+            List<string> failed = [.. values.Where(static v => ComSecurityPolicy.CheckChartDataValue(v) is not null).Select(static v => Convert.ToString(v, CultureInfo.InvariantCulture) ?? "")];
+            Report("chart data: numbers, text, dates, True/False, Empty and Array(...) of them are written", failed.Count == 0, string.Join(", ", failed));
+            Report("chart data: opened by reading ChartData.Workbook, not by Activate (which can leave PowerPoint on a modal alert)",
+                   ComSecurityPolicy.CheckMemberOnType("ChartData", "Activate") is string activate && activate.Contains("not needed") &&
+                   ComSecurityPolicy.CheckMemberOnType("ChartData", "ActivateChartDataWindow") is not null && ComSecurityPolicy.CheckMemberOnType("ChartData", "Workbook") is null,
+                   ComSecurityPolicy.CheckMemberOnType("ChartData", "Activate"));
         }
 
         // A fraction where a parameter takes a whole number (an enum, a Long) goes in rounded as VBA rounds it, without an

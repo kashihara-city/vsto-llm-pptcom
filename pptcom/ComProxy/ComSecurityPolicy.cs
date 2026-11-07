@@ -12,7 +12,7 @@ namespace Pptcom.ComProxy
     //   2. Return-type allowlist - a get/call/item result may only be kept as a handle if it
     //      belongs to a known-Office type library. This is what stops a multi-hop chain from
     //      ever reaching something outside the Office object model, even if a single member name
-    //      looks innocuous.
+    //      looks innocuous. Of Excel's, only a chart's data, member by member (ChartDataMembers).
     internal static class ComSecurityPolicy
     {
         private static readonly HashSet<string> BlockedMembers = new(StringComparer.OrdinalIgnoreCase)
@@ -83,6 +83,115 @@ namespace Pptcom.ComProxy
             new Guid("91493440-5A91-11CF-8700-00AA0060263B"), // Microsoft PowerPoint Object Library
         ];
 
+        // ---- a chart's data (Excel) ----------------------------------------------------------------------
+        //
+        // A chart's data is an Excel workbook (Chart.ChartData.Workbook), and through it Excel itself: its Application,
+        // other workbooks, macros, the XLM functions (ExecuteExcel4Macro), which start programs and read files. So of the
+        // Excel type library only what writes a chart's numbers and labels is open, type by type and member by member
+        // (ChartDataMembers): Workbook.Worksheets(n), Worksheet.Range / Cells, and Range.Value / Value2, the only members
+        // that may be set. A formula is refused even there (CheckChartDataValue): a cell can fetch a URL (WEBSERVICE) or
+        // start a program through a link (DDE). The engine closes the workbooks (ChartDataWorkbooks).
+        internal static readonly Guid ExcelTypeLib = new("00020813-0000-0000-C000-000000000046");
+
+        private sealed class ChartDataRule(string[] read, string[] set)
+        {
+            public readonly HashSet<string> Read = new(read, StringComparer.OrdinalIgnoreCase);
+            public readonly HashSet<string> Set = new(set, StringComparer.OrdinalIgnoreCase);
+        }
+
+        // By the name the object's ITypeInfo gives, with or without its leading _ (NameForms).
+        private static readonly Dictionary<string, ChartDataRule> ChartDataMembers = new(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Workbook", new ChartDataRule(["Worksheets"], []) },
+            { "Sheets", new ChartDataRule(["Item", "Count"], []) },
+            { "Worksheet", new ChartDataRule(["Range", "Cells", "Name"], []) },
+            {
+                "Range", new ChartDataRule(["Value", "Value2", "Text", "ClearContents", "Cells", "Item", "Offset", "Resize", "Rows", "Columns", "Count",
+                                            "Address", "Row", "Column",], ["Value", "Value2"])
+            },
+        };
+
+        private const string ChartDataScope =
+            "a chart's data sheet takes only Workbook.Worksheets(n), Worksheet.Range(\"B2\") / Cells(row, column) / Name, and Range.Value or Range.Value2 " +
+            "(to set or read), Range.ClearContents, and to read Cells, Offset, Resize, Rows, Columns, Count, Address, Row, Column and Text";
+
+        private static ChartDataRule? ChartDataRuleOf(string? typeName)
+        {
+            if (typeName is null)
+            {
+                return null;
+            }
+
+            foreach (string name in NameForms(typeName))
+            {
+                if (ChartDataMembers.TryGetValue(name, out ChartDataRule rule))
+                {
+                    return rule;
+                }
+            }
+
+            return null;
+        }
+
+        // The rule for `member` (to read or call it, or to set it) on an object of the Excel type library: null when it
+        // is open, else the refusal for the model.
+        internal static string? CheckChartDataMember(string? typeName, string member, bool set)
+        {
+            ChartDataRule? rule = ChartDataRuleOf(typeName);
+            string type = (typeName ?? "?").TrimStart('_');
+            if (rule is null)
+            {
+                return type + "." + member + " (Excel's " + type + " is not open to scripts: " + ChartDataScope + ")";
+            }
+
+            if (set)
+            {
+                return rule.Set.Contains(member) ? null : type + "." + member + " cannot be set (only Range.Value and Range.Value2 can: " + ChartDataScope + ")";
+            }
+
+            return rule.Read.Contains(member) ? null : type + "." + member + " (not open to scripts on chart data: " + ChartDataScope + ")";
+        }
+
+        // What may be written into a chart's data: numbers, text, dates, True/False, Empty, and Array(...) of them - text
+        // not starting (after spaces) with = + - @ or their full-width forms, which Excel takes as a formula (it turns
+        // ＝1+1 into =1+1, too). Null when it may, else the refusal.
+        internal static string? CheckChartDataValue(object? value)
+        {
+            switch (value)
+            {
+                case null:
+                    return null;
+                case string text:
+                    string start = text.TrimStart(' ', '\t', '\r', '\n', '\u3000');
+                    return start.Length > 0 && "=+-@＝＋－＠".IndexOf(start[0]) >= 0
+                        ? "text that starts with = + - or @ (or ＝ ＋ － ＠) cannot be written to a chart's data: Excel would take it as a formula. " +
+                          "Write a number as a number (-5, not \"-5\"), and start text with something else"
+                        : null;
+                case object[] items:
+                    foreach (object? item in items)
+                    {
+                        string? refusal = CheckChartDataValue(item);
+                        if (refusal is not null)
+                        {
+                            return refusal;
+                        }
+                    }
+
+                    return null;
+                default:
+                    Type type = value.GetType();
+                    return type.IsPrimitive || type == typeof(decimal) || type == typeof(DateTime)
+                        ? null
+                        : "only numbers, text, dates, True/False or Array(...) of them can be written to a chart's data";
+            }
+        }
+
+        // Whether `value` is an object of the Excel type library (a chart's data, or reached from it).
+        public static bool IsChartDataObject(object? value)
+        {
+            return value is not null && Marshal.IsComObject(value) && TryGetTypeLibGuid(value) == ExcelTypeLib;
+        }
+
         public static bool IsMemberAllowed(string? member)
         {
             if (member is null || member.Length == 0)
@@ -102,6 +211,14 @@ namespace Pptcom.ComProxy
             "Presentations", "Windows", "ActiveWindow", "SlideShowWindows", "ProtectedViewWindows", "ActiveProtectedViewWindow",
         };
 
+        // Opening a chart's data in an Excel window: not needed, as reading ChartData.Workbook opens it (and the engine
+        // closes it, ChartDataWorkbooks); and after data opened in Excel by Activate is closed, the next Activate shows
+        // PowerPoint's modal alert ("close the dialog boxes open in Excel"), which waits for a click.
+        private static readonly HashSet<string> ChartDataOpeners = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "Activate", "ActivateChartDataWindow",
+        };
+
         // Members that are only dangerous on a specific object type (so a name-only block would
         // be too broad: blocking "Add" everywhere would also kill Slides.Add / Shapes.Add*).
         // Keyed by the COM interface name reported by the object's ITypeInfo, with or without its leading _ (NameForms).
@@ -109,6 +226,7 @@ namespace Pptcom.ComProxy
             new(StringComparer.OrdinalIgnoreCase)
             {
                 { "Application", OtherDeckMembers },
+                { "ChartData", ChartDataOpeners },
                 // Creating a new deck puts the work outside the one the user has open; opening
                 // one reads an arbitrary local/network file into the session.
                 { "Presentations", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Add", "Open", "Open2007", "OpenOld", "CheckOut", "CanCheckOut" } },
@@ -154,7 +272,7 @@ namespace Pptcom.ComProxy
                 return null;
             }
 
-            return CheckSetOnType(TryGetTypeName(target), member);
+            return TryGetTypeLibGuid(target) == ExcelTypeLib ? CheckChartDataMember(TryGetTypeName(target), member, set: true) : CheckSetOnType(TryGetTypeName(target), member);
         }
 
         // The same by type name (null: it could not be read).
@@ -188,7 +306,7 @@ namespace Pptcom.ComProxy
                 return null;
             }
 
-            return CheckMemberOnType(TryGetTypeName(target), member);
+            return TryGetTypeLibGuid(target) == ExcelTypeLib ? CheckChartDataMember(TryGetTypeName(target), member, set: false) : CheckMemberOnType(TryGetTypeName(target), member);
         }
 
         // The rule for `member` on an object of `typeName` (either form, NameForms), as CheckMemberOnTarget and the
@@ -208,6 +326,8 @@ namespace Pptcom.ComProxy
                     return ReferenceEquals(blocked, OtherDeckMembers)
                         ? "Application." + member + " (it reaches the user's other open presentations; this request works on ActivePresentation only. " +
                           "To use another presentation, ask the user to save it and attach it to the task pane, then read it with docread)"
+                        : ReferenceEquals(blocked, ChartDataOpeners)
+                        ? "ChartData." + member + " (not needed: reading ChartData.Workbook opens the chart's data, and pptcom closes it when the call ends)"
                         : typeName.TrimStart('_') + "." + member;
                 }
             }
@@ -278,8 +398,14 @@ namespace Pptcom.ComProxy
         // A COM result by its type library and its type name, either of them null when it could not be read: kept only
         // from an Office type library, and with a name that may be kept (IsReturnTypeAllowed). An unread name is refused,
         // as an unread type library is.
+        // Of the Excel type library, only the types of a chart's data (ChartDataMembers).
         internal static bool IsReturnKindAllowed(Guid? typeLib, string? typeName)
         {
+            if (typeLib == ExcelTypeLib)
+            {
+                return ChartDataRuleOf(typeName) is not null && IsReturnTypeAllowed(typeName!);
+            }
+
             return typeLib is Guid lib && AllowedTypeLibGuids.Contains(lib) && typeName is not null && IsReturnTypeAllowed(typeName);
         }
 

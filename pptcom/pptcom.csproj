@@ -223,6 +223,7 @@
     <Compile Include="ComProxy\ComProxyEngine.cs">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="ComProxy\ChartDataWorkbooks.cs" />
     <Compile Include="ComProxy\DeckAnimations.cs" />
     <Compile Include="ComProxy\DeckReader.cs" />
     <Compile Include="ComProxy\ShapeContents.cs" />
