@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -48,7 +49,7 @@ namespace Pptcom
 
                 try
                 {
-                    outcome.Renders.Add(new KeyValuePair<string, string>(Invariant($"slide {n}"), DeckReader.ExportSlidePng(engine.Presentation, n)));
+                    AddRendering(engine, outcome, n);
                     rendered.Add(n);
                     AddInventory(engine, outcome, n, variables);
                 }
@@ -71,9 +72,25 @@ namespace Pptcom
             return outcome;
         }
 
-        // The shape list that goes with a slide rendering (what a For Each over its Shapes would print).
+        // A slide's rendering, its time added to the call's (ToolResult.Renderings).
+        private static void AddRendering(ComProxyEngine engine, ToolResult outcome, int slide)
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+            try
+            {
+                outcome.Renders.Add(new KeyValuePair<string, string>(Invariant($"slide {slide}"), DeckReader.ExportSlidePng(engine.Presentation, slide)));
+            }
+            finally
+            {
+                outcome.Renderings += watch.Elapsed;
+            }
+        }
+
+        // The shape list that goes with a slide rendering (what a For Each over its Shapes would print), its time added to
+        // the call's (ToolResult.ShapeLists).
         private static void AddInventory(ComProxyEngine engine, ToolResult outcome, int slide, IDictionary<string, List<string>> variables)
         {
+            Stopwatch watch = Stopwatch.StartNew();
             try
             {
                 outcome.Inventories[Invariant($"slide {slide}")] = DeckReader.Brief(engine.Presentation, slide, variables);
@@ -81,6 +98,7 @@ namespace Pptcom
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
             }
+            outcome.ShapeLists += watch.Elapsed;
         }
 
         private static async Task<ToolResult> RunToolAsync(RunRecord run, ComProxyEngine engine, List<string> knownIds, ToolCall call)
@@ -119,7 +137,7 @@ namespace Pptcom
                 Dictionary<string, List<string>> variables = engine.ShapeVariables();
                 foreach (int n in toRender)
                 {
-                    o.Renders.Add(new KeyValuePair<string, string>(Invariant($"slide {n}"), DeckReader.ExportSlidePng(engine.Presentation, n)));
+                    AddRendering(engine, o, n);
                     AddInventory(engine, o, n, variables);
                 }
                 return o;
@@ -229,7 +247,9 @@ namespace Pptcom
             }
             // A failing statement no longer stops the script: only the statements that depend
             // on what it should have set are skipped (see ComProxyEngine.ExecuteScriptAsync).
+            Stopwatch watch = Stopwatch.StartNew();
             ComScriptResult result = await engine.ExecuteScriptAsync(parsed).ConfigureAwait(true);
+            TimeSpan scriptTime = watch.Elapsed;
             knownIds.AddRange(parsed.DefinedIds.Where(id => !knownIds.Contains(id) && engine.TryGetHandle(id, out _)));
             int applied = result.Count(ComLineStatus.Applied);
             // Defined: what this call made; Changed: what it did to objects from earlier calls (or
@@ -248,6 +268,7 @@ namespace Pptcom
                 return WithAutoRenders(engine, new ToolResult(done)
                 {
                     LinesApplied = applied,
+                    Script = scriptTime,
                 });
             }
             List<string> notAssigned = result.NotAssigned;
@@ -257,6 +278,7 @@ namespace Pptcom
             return WithAutoRenders(engine, new ToolResult(failed)
             {
                 LinesApplied = applied,
+                Script = scriptTime,
             });
         }
 

@@ -170,7 +170,7 @@ namespace Pptcom.Agent
                 string firstLine = result.Text.Split('\n')[0];
                 view.Log("TOOL_RESULT", turn, call.Name, firstLine);
                 state.ToolLines.Add(Invariant($"[{turn}] {call.Name} -> {firstLine}"));
-                log("--- tool " + call.Name + " args:\n" + call.Arguments + "\nresult:\n" + result.Text +
+                log("--- tool " + call.Name + TimesText(result) + " args:\n" + call.Arguments + "\nresult:\n" + result.Text +
                     (inventoryLog.Length > 0 ? "\n(shape lists sent with the renderings:)" + inventoryLog : ""));
             }
             if (renderings.Count > 0)
@@ -352,6 +352,22 @@ namespace Pptcom.Agent
         private static string Secs(TimeSpan? t)
         {
             return t is not null ? t.Value.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture) : "-";
+        }
+
+        // " (script 5820 ms, renderings 410 ms, shape lists 160 ms)" after a tool call's name in the session log: what of
+        // the time from the model's reply to the slides shown again went where. "" when the call had none of them.
+        internal static string TimesText(ToolResult result)
+        {
+            List<string> parts = [];
+            foreach ((string part, TimeSpan time) in new[] { ("script", result.Script), ("renderings", result.Renderings), ("shape lists", result.ShapeLists) })
+            {
+                if (time > TimeSpan.Zero)
+                {
+                    parts.Add(Invariant($"{part} {time.TotalMilliseconds:F0} ms"));
+                }
+            }
+
+            return parts.Count > 0 ? " (" + string.Join(", ", parts) + ")" : "";
         }
     }
 }

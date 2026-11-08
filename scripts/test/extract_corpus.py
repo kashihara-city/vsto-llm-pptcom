@@ -40,7 +40,7 @@ def scripts_of(run_dir):
     if os.path.isfile(log):
         lines = io.open(log, encoding="utf-8", errors="replace").read().split("\n")
         for i, l in enumerate(lines):
-            if l.endswith("--- tool pptcom args:") and i + 1 < len(lines):
+            if re.search(r"--- tool pptcom( \(.*\))? args:$", l) and i + 1 < len(lines):
                 try:
                     scripts.append(json.loads(lines[i + 1])["script"])
                 except Exception:

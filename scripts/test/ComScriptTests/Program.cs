@@ -65,6 +65,7 @@ namespace ComScriptTests
             CornerBandTests();
             SlideShapeTests();
             ImageSizeTests();
+            ComTypeTests();
             SelectionTests();
             RenderSizeTests();
             OverlapTests();
@@ -1043,6 +1044,32 @@ namespace ComScriptTests
                    CornerBands.Report([rounded], [across], [sheetInFront]).Length == 0 && CornerBands.Report([rounded], [across], [sheetBehind]).Contains("[10] top past") &&
                    CornerBands.Report([rounded], [across], [strip]).Contains("[10] top past the rounded top-left, top-right corners"),
                    CornerBands.Report([rounded], [across], [strip]));
+        }
+
+        // A COM object's type is read from it once and kept (ComSecurityPolicy): asked again, the same name and the same
+        // answer of the policy. A Scripting.Dictionary (the Scripting Runtime of every Windows) stands for an object of a type
+        // library outside Office, which is never kept as a handle; what is not a COM object has no type name.
+        private static void ComTypeTests()
+        {
+            Type? progId = Type.GetTypeFromProgID("Scripting.Dictionary");
+            object? dictionary = progId is null ? null : Activator.CreateInstance(progId);
+            try
+            {
+                string? first = ComSecurityPolicy.TryGetTypeName(dictionary);
+                string? again = ComSecurityPolicy.TryGetTypeName(dictionary);
+                Report("COM types: an object's type name is read and kept, the same when asked again; outside Office it is refused each time",
+                       dictionary is not null && first is not null && string.Equals(first, again, StringComparison.Ordinal) &&
+                       !ComSecurityPolicy.IsReturnValueAllowed(dictionary) && !ComSecurityPolicy.IsReturnValueAllowed(dictionary) &&
+                       !ComSecurityPolicy.IsChartDataObject(dictionary) && ComSecurityPolicy.TryGetTypeName("not a COM object") is null,
+                       first ?? "(no name)");
+            }
+            finally
+            {
+                if (dictionary is not null)
+                {
+                    System.Runtime.InteropServices.Marshal.ReleaseComObject(dictionary);
+                }
+            }
         }
 
         // An image's size is checked against the sizes its image prompt offers (ComProxyEngine.ImageSizes) before the image

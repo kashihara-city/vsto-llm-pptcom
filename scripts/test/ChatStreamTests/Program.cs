@@ -647,6 +647,10 @@ namespace ChatStreamTests
                   limit.State.HitTurnLimit && limit.State.Turns == 2 && limit.Shows("AI_TURN_LIMIT,REQUEST_DONE") && limit.State.Renders.Count == 2 &&
                   images.Count == 2 && images[0].Png is null && images[1].Png is not null && images[1].Inventory == "the shape list",
                   limit.Describe());
+            Check("a tool call's parts are timed in the session log after its name; a call without them is logged as before",
+                  limit.Logged.Exists(static l => l.StartsWith("--- tool pptcom (script 1234 ms, renderings 56 ms, shape lists 7 ms) args:\n", StringComparison.Ordinal)) &&
+                  tool.Logged.Exists(static l => l.StartsWith("--- tool pptcom args:\n", StringComparison.Ordinal)),
+                  string.Join(" | ", limit.Logged.Concat(tool.Logged).Where(static l => l.StartsWith("--- tool", StringComparison.Ordinal)).Select(static l => l.Split('\n')[0])));
 
             Run closed = await RunRequestAsync([CallsTool("pptcom")], tools: new FakeTools(closed: true)).ConfigureAwait(true);
             Run cut = await RunRequestAsync([Http(200, Sse(Finish("length"), "[DONE]"))]).ConfigureAwait(true);
@@ -685,8 +689,9 @@ namespace ChatStreamTests
                   noNotes.Describe() + " | " + full.Describe());
         }
 
-        // One request run by RequestRunner: what it came to, what the fakes saw, its conversation, and what it threw.
-        private sealed class Run(RequestState state, FakeView view, FakeTools tools, List<ChatMessage> messages, Exception? error)
+        // One request run by RequestRunner: what it came to, what the fakes saw, its conversation, what it wrote to the
+        // session log, and what it threw.
+        private sealed class Run(RequestState state, FakeView view, FakeTools tools, List<ChatMessage> messages, List<string> logged, Exception? error)
         {
             public RequestState State { get; } = state;
 
@@ -695,6 +700,8 @@ namespace ChatStreamTests
             public FakeTools Tools { get; } = tools;
 
             public List<ChatMessage> Messages { get; } = messages;
+
+            public List<string> Logged { get; } = logged;
 
             public Exception? Error { get; } = error;
 
@@ -738,19 +745,20 @@ namespace ChatStreamTests
             view ??= new FakeView(cancelRetry: false);
             tools ??= new FakeTools();
             List<ChatMessage> messages = [new ChatMessage("system", "You make slides."), new ChatMessage("user", "Make a slide.")];
+            List<string> logged = [];
             Exception? error = null;
             // A request that asks for more than the responses given waits for one that never comes: stopped, it fails.
             using CancellationTokenSource tooLong = new(TimeSpan.FromSeconds(20));
             try
             {
-                await new RequestRunner(settings, state, view, tools, static _ => { }).RunAsync(messages, tooLong.Token).ConfigureAwait(true);
+                await new RequestRunner(settings, state, view, tools, logged.Add).RunAsync(messages, tooLong.Token).ConfigureAwait(true);
             }
             catch (Exception e) when (Guard.IsRecoverable(e))
             {
                 error = e;
             }
 
-            return new Run(state, view, tools, messages, error);
+            return new Run(state, view, tools, messages, logged, error);
         }
 
         // The task pane as a request sees it: the codes it is told, in order; 再試行 pressed at once, or 中止 (`cancelRetry`).
@@ -781,7 +789,7 @@ namespace ChatStreamTests
         }
 
         // PowerPoint as a request sees it: each tool call answered "ran <name>", 3 statements applied, with a rendering of
-        // slide 1 and its shape list (`renders`); or the deck closed (`closed`).
+        // slide 1 and its shape list and how long the parts took (`renders`); or the deck closed (`closed`).
         private sealed class FakeTools(bool closed = false, bool renders = false) : IRequestTools
         {
             private static readonly string Png = WritePng();
@@ -804,6 +812,9 @@ namespace ChatStreamTests
                 {
                     result.Renders.Add(new KeyValuePair<string, string>("slide 1", Png));
                     result.Inventories["slide 1"] = "the shape list";
+                    result.Script = TimeSpan.FromMilliseconds(1234);
+                    result.Renderings = TimeSpan.FromMilliseconds(56);
+                    result.ShapeLists = TimeSpan.FromMilliseconds(7);
                 }
 
                 return Task.FromResult(result);

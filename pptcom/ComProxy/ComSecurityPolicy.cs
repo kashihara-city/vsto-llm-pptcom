@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using ComTypes = System.Runtime.InteropServices.ComTypes;
 
@@ -381,34 +382,7 @@ namespace Pptcom.ComProxy
 
         public static string? TryGetTypeName(object? comObject)
         {
-            if (comObject is not IDispatchMinimal dispatch)
-            {
-                return null;
-            }
-
-            ComTypes.ITypeInfo? typeInfo = null;
-            try
-            {
-                dispatch.GetTypeInfo(0, 0, out typeInfo);
-                if (typeInfo is null)
-                {
-                    return null;
-                }
-
-                typeInfo.GetDocumentation(-1, out string name, out string doc, out int helpContext, out string helpFile);
-                return name;
-            }
-            catch (Exception ex) when (Guard.IsRecoverable(ex))
-            {
-                return null;
-            }
-            finally
-            {
-                if (typeInfo is not null)
-                {
-                    Marshal.ReleaseComObject(typeInfo);
-                }
-            }
+            return TypeOf(comObject).Name;
         }
 
         public static bool IsReturnValueAllowed(object? value)
@@ -449,35 +423,82 @@ namespace Pptcom.ComProxy
 
         private static Guid? TryGetTypeLibGuid(object comObject)
         {
+            return TypeOf(comObject).Library;
+        }
+
+        // A COM object's type name and type library, either of them null when it could not be read.
+        private sealed class ComType(string? name, Guid? library)
+        {
+            public string? Name { get; } = name;
+
+            public Guid? Library { get; } = library;
+        }
+
+        private static readonly ComType UnknownType = new(name: null, library: null);
+
+        // What each COM object is, read from it once and kept while it lives (by its RCW, so a variable's object is read
+        // once for all the statements that use it): an object's type does not change, and the policy and the engine ask
+        // the objects of a statement for it several times (the member, the value kept, a chart's data, a line's look),
+        // each ask a call into PowerPoint. A read that failed is not kept: the next ask reads again, as before.
+        private static readonly ConditionalWeakTable<object, ComType> KnownTypes = new();
+
+        private static ComType TypeOf(object? comObject)
+        {
+            if (comObject is null || !Marshal.IsComObject(comObject))
+            {
+                return UnknownType;
+            }
+
+            if (KnownTypes.TryGetValue(comObject, out ComType known))
+            {
+                return known;
+            }
+
+            ComType read = ReadType(comObject);
+            return read.Name is not null && read.Library is not null ? KnownTypes.GetValue(comObject, _ => read) : read;
+        }
+
+        // The name and the type library from the object's type information (IDispatch.GetTypeInfo).
+        private static ComType ReadType(object comObject)
+        {
             if (comObject is not IDispatchMinimal dispatch)
             {
-                return null;
+                return UnknownType;
             }
 
             ComTypes.ITypeInfo? typeInfo = null;
             ComTypes.ITypeLib? typeLib = null;
             IntPtr pAttr = IntPtr.Zero;
+            string? name = null;
+            Guid? library = null;
             try
             {
                 dispatch.GetTypeInfo(0, 0, out typeInfo);
                 if (typeInfo is null)
                 {
-                    return null;
+                    return UnknownType;
                 }
 
-                typeInfo.GetContainingTypeLib(out typeLib, out int typeLibIndex);
-                if (typeLib is null)
+                try
                 {
-                    return null;
+                    typeInfo.GetDocumentation(-1, out string typeName, out _, out _, out _);
+                    name = typeName;
+                }
+                catch (Exception ex) when (Guard.IsRecoverable(ex))
+                {
+                    // no name: refused as an unknown type (IsReturnKindAllowed)
                 }
 
-                typeLib.GetLibAttr(out pAttr);
-                ComTypes.TYPELIBATTR attr = Marshal.PtrToStructure<ComTypes.TYPELIBATTR>(pAttr);
-                return attr.guid;
+                typeInfo.GetContainingTypeLib(out typeLib, out _);
+                if (typeLib is not null)
+                {
+                    typeLib.GetLibAttr(out pAttr);
+                    library = Marshal.PtrToStructure<ComTypes.TYPELIBATTR>(pAttr).guid;
+                }
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
-                return null; // no type library: not allowed (IsReturnValueAllowed)
+                // no type library: not allowed (IsReturnValueAllowed)
             }
             finally
             {
@@ -496,6 +517,8 @@ namespace Pptcom.ComProxy
                     Marshal.ReleaseComObject(typeLib);
                 }
             }
+
+            return new ComType(name, library);
         }
     }
 }

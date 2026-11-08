@@ -16,5 +16,11 @@ namespace Pptcom.Agent
 
         // pptcom statements the call applied
         public int LinesApplied;
+
+        // How long its parts took, for the session log (RequestRunner.TimesText): the script, the slides' renderings and
+        // their shape lists. Zero for a part the call did not have.
+        public TimeSpan Script;
+        public TimeSpan Renderings;
+        public TimeSpan ShapeLists;
     }
 }

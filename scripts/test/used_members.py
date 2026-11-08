@@ -15,7 +15,7 @@ MEMBER = re.compile(r"\.([A-Za-z_]\w*)")
 
 scripts = []
 log = open(os.path.expandvars(r"%LOCALAPPDATA%\KashiharaCity\pptcom\session.log"), encoding="utf-8").read()
-for m in re.finditer(r"--- tool pptcom args:\n(\{.*?\})\nresult:", log, re.S):
+for m in re.finditer(r"--- tool pptcom(?: \([^)\n]*\))? args:\n(\{.*?\})\nresult:", log, re.S):
     try:
         scripts.append(json.loads(m.group(1))["script"])
     except Exception:
