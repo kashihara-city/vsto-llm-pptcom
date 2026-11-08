@@ -241,7 +241,8 @@ namespace Pptcom.ComProxy
         //   Slide 3 (960x540 pt, 14 shapes):
         //   [13] = d2 RoundedRectangle L340 T412 W280 H100 fill RGB(255,255,255) line RGB(223,226,229) 1pt "品種は500以上" & vbCr & "..." | font 16pt RGB(40,40,40)
         //   Partly overlapping (fix it unless it is meant): [4] title and [6] badge, 120 x 6 pt
-        // and then the slide's animations and transition, when it has any (DeckAnimations).
+        // then text whose color is too close to what is behind it (TextContrast), and then the slide's animations and
+        // transition, when it has any (DeckAnimations).
         // Names PowerPoint made up ("Rounded Rectangle 15") are left out, as the type says the same;
         // names a script gave are kept ('card1'). The text is complete, as a VBA literal.
         // Under a table, a chart, a SmartArt graphic or a group, what is in it (ShapeContents), up to `limits`
@@ -280,6 +281,7 @@ namespace Pptcom.ComProxy
                 }
             }
             sb.Append(Overlaps(boxes));
+            sb.Append(Guard.Try(() => TextContrast.Describe((object)slide, variables), ""));
             sb.Append(DeckAnimations.Describe((object)slide, slideIndex, variables));
             return sb.ToString();
         }
@@ -349,7 +351,7 @@ namespace Pptcom.ComProxy
         }
 
         // Where the shape's text is drawn (TextRange.BoundLeft ...), or null when it has none.
-        private static ShapeBox? TextBounds(dynamic shape)
+        internal static ShapeBox? TextBounds(dynamic shape)
         {
             if ((int)shape.HasTextFrame == 0 || (int)shape.TextFrame.HasText == 0)
             {
@@ -559,7 +561,7 @@ namespace Pptcom.ComProxy
         }
 
         // A COM color (0x00BBGGRR) as VBA writes it: "RGB(214,0,32)".
-        private static string Rgb(dynamic color)
+        internal static string Rgb(dynamic color)
         {
             int c = (int)color;
             return Invariant($"RGB({c & 0xFF},{(c >> 8) & 0xFF},{(c >> 16) & 0xFF})");
@@ -788,7 +790,7 @@ namespace Pptcom.ComProxy
         }
 
         // "= d2 " when the script holds this shape in a variable (or several: "= card, c1 ").
-        private static string VariablesOf(IDictionary<string, List<string>>? variables, dynamic slide, dynamic shape)
+        internal static string VariablesOf(IDictionary<string, List<string>>? variables, dynamic slide, dynamic shape)
         {
             if (variables is null)
             {

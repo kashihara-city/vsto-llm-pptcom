@@ -57,6 +57,7 @@ namespace ComScriptTests
             AnimationTests();
             ContentTests();
             ShapeNameTests();
+            ContrastTests();
             SelectionTests();
             RenderSizeTests();
             OverlapTests();
@@ -865,6 +866,59 @@ namespace ComScriptTests
         // MsoShapeType; a number only where no name is known. What the installed Office added to the enums since the
         // interop assemblies (the Morph transitions) is named and resolves where its type library is registered; a
         // machine without Office (CI) has the interop assemblies' names only, and keeps them where both have a value.
+        // Text too close in color to what is behind it (TextContrast): on a card under it, on its own fill, on the slide's
+        // background, below 3:1 (WCAG 2's ratio) at any size; nothing said of text on a picture.
+        private static void ContrastTests()
+        {
+            static int rgb(int r, int g, int b)
+            {
+                return r | (g << 8) | (b << 16);
+            }
+
+            static TextContrast.Layer layer(int index, string name, double left, double top, double width, double height, TextContrast.FillKind fill, int color,
+                                            params TextContrast.TextStyle[] styles)
+            {
+                DeckReader.ShapeBox frame = new(index, name, left, top, width, height);
+                return new TextContrast.Layer(frame, fill, color, styles.Length > 0 ? frame : null, styles);
+            }
+
+            int white = rgb(255, 255, 255), navy = rgb(17, 48, 68), gray = rgb(90, 105, 120), cream = rgb(253, 247, 231), mid = rgb(140, 140, 140);
+            Report("contrast: WCAG's ratio, 21:1 for black on white and 1:1 for the same color",
+                   Math.Abs(TextContrast.Ratio(0, white) - 21) < 0.01 && Math.Abs(TextContrast.Ratio(navy, navy) - 1) < 0.0001, "");
+
+            TextContrast.FillKind none = TextContrast.FillKind.None, solid = TextContrast.FillKind.Solid, unknown = TextContrast.FillKind.Unknown;
+            List<TextContrast.Layer> slide =
+            [
+                layer(1, "card", 40, 100, 400, 300, solid, navy),
+                layer(2, "h4a", 60, 120, 300, 40, none, 0, new TextContrast.TextStyle(14, bold: false, gray)),
+                layer(3, "h4b", 60, 200, 300, 40, none, 0, new TextContrast.TextStyle(20, bold: true, white)),
+                layer(4, "foot", 40, 500, 300, 20, none, 0, new TextContrast.TextStyle(11, bold: false, rgb(160, 150, 135))),
+                layer(5, "badge", 500, 100, 200, 60, solid, rgb(80, 90, 100), new TextContrast.TextStyle(16, bold: false, rgb(60, 70, 80))),
+                layer(6, "photo", 500, 200, 300, 200, unknown, 0),
+                layer(7, "caption", 520, 300, 200, 30, none, 0, new TextContrast.TextStyle(12, bold: false, gray)),
+            ];
+            string report = TextContrast.Report(slide, solid, cream);
+            Report("contrast: text on the card under it, on its own fill and on the slide's background is listed with the ratio and what is needed",
+                   report.StartsWith("Low contrast (fix it unless it is meant): ", StringComparison.Ordinal) &&
+                   report.Contains("[2] h4a 14pt RGB(90,105,120) on [1] card RGB(17,48,68), 2.4:1;") &&
+                   report.Contains("[5] badge 16pt RGB(60,70,80) on its own fill RGB(80,90,100)") &&
+                   report.Contains("[4] foot 11pt RGB(160,150,135) on the slide background RGB(253,247,231), 2.7:1"),
+                   report);
+            Report("contrast: white on the card, and text on a picture, are not listed",
+                   !report.Contains("h4b") && !report.Contains("caption"), report);
+
+            string judge(double size, int color)
+            {
+                return TextContrast.Report([layer(1, "t", 0, 0, 100, 40, none, 0, new TextContrast.TextStyle(size, bold: false, color))], solid, white);
+            }
+
+            Report("contrast: below 3:1 is listed at any size, 3:1 and above is not, and the line says no more than the ratio",
+                   judge(12, mid).Length == 0 && judge(40, rgb(190, 190, 190)).Contains("1.8:1") && !report.Contains("needs"),
+                   judge(40, rgb(190, 190, 190)));
+            Report("contrast: nothing is said when the slide's background cannot be judged (a picture, a gradient)",
+                   TextContrast.Report([layer(1, "t", 0, 0, 100, 40, none, 0, new TextContrast.TextStyle(12, bold: false, mid))], unknown, 0).Length == 0, "");
+        }
+
         private static void ShapeNameTests()
         {
             ContentSlide slide = new();
