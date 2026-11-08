@@ -294,9 +294,7 @@ namespace Pptcom.Agent
         // were shortened.
         public static int ElideOldDocReads(List<ChatMessage> messages, int keep)
         {
-            HashSet<string> ids = new(messages.Where(static m => m.ToolCalls is not null)
-                .SelectMany(static m => m.ToolCalls).Where(static c => c.Name == "docread").Select(static c => c.Id), StringComparer.Ordinal);
-            List<ChatMessage> results = [.. messages.Where(m => m.Role == "tool" && m.ToolCallId is not null && ids.Contains(m.ToolCallId))];
+            List<ChatMessage> results = [.. ResultsWithTools(messages).Where(static r => r.Tool == "docread").Select(static r => r.Result)];
             int replaced = 0;
             foreach (ChatMessage m in results.Take(Math.Max(0, results.Count - keep)))
             {
@@ -311,6 +309,24 @@ namespace Pptcom.Agent
                 replaced++;
             }
             return replaced;
+        }
+
+        // Each tool result with the name of the call it answers: the call of its id in the assistant message it follows. Not
+        // by the id alone: a server that sends no ids gets call_0, call_1 ... from StreamedReply in every turn.
+        private static IEnumerable<(ChatMessage Result, string? Tool)> ResultsWithTools(List<ChatMessage> messages)
+        {
+            Dictionary<string, string> calls = new(StringComparer.Ordinal);
+            foreach (ChatMessage m in messages)
+            {
+                if (m.Role == "assistant" && m.ToolCalls is not null)
+                {
+                    calls = m.ToolCalls.GroupBy(static c => c.Id, StringComparer.Ordinal).ToDictionary(static g => g.Key, static g => g.First().Name, StringComparer.Ordinal);
+                }
+                else if (m.Role == "tool")
+                {
+                    yield return (m, m.ToolCallId is not null && calls.TryGetValue(m.ToolCallId, out string name) ? name : null);
+                }
+            }
         }
 
         private const string ElidedDocReadNote = "(the text is left out of this conversation to keep it short; read it again with docread if you need it)";

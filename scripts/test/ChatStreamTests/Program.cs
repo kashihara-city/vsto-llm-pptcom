@@ -381,6 +381,20 @@ namespace ChatStreamTests
             int again = Compaction.ElideOldReasoning(messages, Compaction.KeepRecent) + Compaction.ElideOldScripts(messages, Compaction.KeepRecent) +
                         Compaction.ElideOldDocReads(messages, Compaction.KeepRecent) + Compaction.ElideOldShapeLists(messages, Compaction.KeepRecent);
             Check("shortening again leaves nothing more out", again == 0, Invariant($"{again}"));
+
+            // A server that sends no ids: every turn's call is call_0, and only docread's results lose their text.
+            List<ChatMessage> plain = [new ChatMessage("system", "s"), new ChatMessage("user", "make slides")];
+            AddTurn(plain, "0", "pptcom", "{\"script\":\"a = 1\"}", "1 of 2 lines applied\nFAILED line 2: ...", slide: 1);
+            AddTurn(plain, "0", "docread", "{\"doc\":\"d1\"}", "d1 lines 1\ntext 1", slide: null);
+            AddTurn(plain, "0", "imagegen", "{\"name\":\"hero\",\"prompt\":\"p\"}", "Generated image bound to hero\nMain colors: ...", slide: null);
+            AddTurn(plain, "0", "docread", "{\"doc\":\"d1\"}", "d1 lines 2\ntext 2", slide: null);
+            AddTurn(plain, "0", "pptread", "{\"slide\":\"1\"}", "Presentation: 1 slide(s)\nRenderings ...", slide: 1);
+            int plainDocReads = Compaction.ElideOldDocReads(plain, keep: 1);
+            List<string> plainResults = plain.FindAll(static m => m.Role == "tool").ConvertAll(static m => m.Content ?? "");
+            Check("calls without ids: only the older docread result loses its text, not pptcom's, imagegen's or pptread's",
+                  plainDocReads == 1 && plainResults[1].StartsWith("d1 lines 1\n(the text is left out", StringComparison.Ordinal) && plainResults[3] == "d1 lines 2\ntext 2" &&
+                  plainResults[0].Contains("FAILED line 2") && plainResults[2].Contains("Main colors") && plainResults[4].Contains("Renderings"),
+                  string.Join(" | ", plainResults));
             string? inReply = Compaction.NotesOf(new ChatReply { Content = " Next: a ", Reasoning = "thinking", FinishReason = "stop" });
             string? inReasoning = Compaction.NotesOf(new ChatReply { Content = "", Reasoning = "Next: b", FinishReason = "stop" });
             string? cut = Compaction.NotesOf(new ChatReply { Content = "Next: c", FinishReason = "length" });

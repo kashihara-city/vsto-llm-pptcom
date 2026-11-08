@@ -1007,10 +1007,11 @@ namespace ComScriptTests
                    !report.Contains("inset") && !report.Contains("bg"), report);
             Report("corners: nothing over square corners",
                    CornerBands.Report([new CornerBands.Card(card, 0)], [across, bottom, stripe]).Length == 0, "");
-            DeckReader.ShapeBox sheetInFront = band(20, "sheet", 0, 0, 960, 540), sheetBehind = band(5, "sheet", 0, 0, 960, 540);
-            Report("corners: not what an opaque rectangle in front of both hides; one behind them hides nothing",
-                   CornerBands.Report([rounded], [across], [sheetInFront]).Length == 0 && CornerBands.Report([rounded], [across], [sheetBehind]).Contains("[10] top past"),
-                   CornerBands.Report([rounded], [across], [sheetBehind]));
+            DeckReader.ShapeBox sheetInFront = band(20, "sheet", 0, 0, 960, 540), sheetBehind = band(5, "sheet", 0, 0, 960, 540), strip = band(21, "strip", 0, 0, 960, 101);
+            Report("corners: not what an opaque rectangle in front of both covers wholly; one behind them, or over a strip of it only, hides nothing",
+                   CornerBands.Report([rounded], [across], [sheetInFront]).Length == 0 && CornerBands.Report([rounded], [across], [sheetBehind]).Contains("[10] top past") &&
+                   CornerBands.Report([rounded], [across], [strip]).Contains("[10] top past the rounded top-left, top-right corners"),
+                   CornerBands.Report([rounded], [across], [strip]));
         }
 
         // A shape's kind by name in the shape list, from the enums: an AutoShape's form, a placeholder's role, any other
