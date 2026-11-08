@@ -282,7 +282,8 @@ namespace Pptcom
 
                 run.Pane.Control.ShowContinue(c.Stopped is not null);
                 // what the request did not change is as it was at its start (SeenAtStart): only its slides are read again
-                HashSet<int> changed = c.Engine.TakeChangedSlideIds();
+                // (all of them after a change that could not be tied to a slide: changed null)
+                HashSet<int>? changed = c.Engine.TakeChangedSlideIds();
                 c.LastSeen = DeckReader.TakeFingerprint(c.Engine.Presentation, c.Engine.ShapeVariables(), run.SeenAtStart, changed);
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))

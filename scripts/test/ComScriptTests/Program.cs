@@ -70,6 +70,7 @@ namespace ComScriptTests
             UsageBatchTests();
             SelectionTests();
             FingerprintTests();
+            ChangeTrackingTests();
             RenderSizeTests();
             OverlapTests();
             Console.WriteLine();
@@ -557,22 +558,32 @@ namespace ComScriptTests
                    literal == "- - Sheet1|$B$2:$B$3" && union == "- - Sheet1|$B$2:$B$3" && parsed("=SUM(A1)") == "null" && ChartDataWorkbooks.ParseSeries(formula: null) is null,
                    string.Join(" / ", plain, quoted, literal, union));
 
-            Array column = Array.CreateInstance(typeof(object), [3, 1], [1, 1]);
+            Array column = Array.CreateInstance(typeof(object), [2, 1], [1, 1]);
             column.SetValue(39.0, 1, 1);
             column.SetValue(value: null, 2, 1);
-            column.SetValue("n/a", 3, 1);
             Array row = Array.CreateInstance(typeof(object), [1, 2], [1, 1]);
             row.SetValue("2021年度", 1, 1);
             row.SetValue("2022年度", 1, 2);
             List<object?> values = ChartDataWorkbooks.Flat(column), categories = ChartDataWorkbooks.Flat(row);
-            Report("chart data: the chart's values and text categories against the cells (an empty cell shows as nothing or 0)",
-                   values.Count == 3 && categories.Count == 2 && (string?)categories[1] == "2022年度" &&
-                   ChartDataWorkbooks.SameNumbers(values, [39.0, 0.0, 7.0]) && ChartDataWorkbooks.SameNumbers(values, [39.0, null, null]) &&
-                   !ChartDataWorkbooks.SameNumbers(values, [38.0, 0.0, 7.0]) && !ChartDataWorkbooks.SameNumbers(values, [39.0, 5.0, 7.0]) &&
-                   !ChartDataWorkbooks.SameNumbers(values, [39.0, 0.0]) &&
-                   ChartDataWorkbooks.SameTexts(categories, ["2021年度", "2022年度"]) && !ChartDataWorkbooks.SameTexts(categories, ["2021年度", "分類 2"]) &&
-                   ChartDataWorkbooks.SameTexts([5.0, "a"], ["5", "a"]) && !ChartDataWorkbooks.SameTexts(categories, ["2021年度"]),
+            const ChartDataWorkbooks.Match same = ChartDataWorkbooks.Match.Same, different = ChartDataWorkbooks.Match.Different, unknown = ChartDataWorkbooks.Match.Unknown;
+            Report("chart data: the chart's values against the cells - numbers, an empty cell as nothing or 0; text in a value cell cannot be told",
+                   values.Count == 2 && (string?)categories[1] == "2022年度" &&
+                   ChartDataWorkbooks.CompareValues(values, [39.0, 0.0]) == same && ChartDataWorkbooks.CompareValues(values, [39.0, null]) == same &&
+                   ChartDataWorkbooks.CompareValues(values, ["39", null]) == same && ChartDataWorkbooks.CompareValues(values, [38.0, 0.0]) == different &&
+                   ChartDataWorkbooks.CompareValues(values, [39.0, 5.0]) == different && ChartDataWorkbooks.CompareValues(values, [39.0]) == different &&
+                   ChartDataWorkbooks.CompareValues(["n/a"], [321.0]) == unknown,
                    string.Join(",", values));
+            Report("chart data: categories and series names as text or as numbers (2020 still shown for 2091 differs); a date shown formatted cannot be told",
+                   ChartDataWorkbooks.CompareCategories(categories, ["2021年度", "2022年度"]) == same &&
+                   ChartDataWorkbooks.CompareCategories(categories, ["2021年度", "分類 2"]) == different &&
+                   ChartDataWorkbooks.CompareCategories(categories, ["2021年度"]) == different &&
+                   ChartDataWorkbooks.CompareCategories([2091.0], [2020.0]) == different && ChartDataWorkbooks.CompareCategories([2091.0], [2091.0]) == same &&
+                   ChartDataWorkbooks.CompareCategories([2091.0], ["2,091"]) == same && ChartDataWorkbooks.CompareCategories([46024.0], ["2026/01/02"]) == unknown &&
+                   ChartDataWorkbooks.CompareCategories([null], [""]) == same &&
+                   ChartDataWorkbooks.CompareName(2088.0, "2030") == different && ChartDataWorkbooks.CompareName(2088.0, "2088") == same &&
+                   ChartDataWorkbooks.CompareName("貸出冊数", "貸出冊数") == same && ChartDataWorkbooks.CompareName("貸出冊数", "系列 1") == different &&
+                   ChartDataWorkbooks.CompareName(cell: null, "系列 1") == unknown,
+                   "");
         }
 
         // A chart's data is an Excel workbook, and through it all of Excel: of the Excel type library only the cells of a
@@ -1643,6 +1654,19 @@ namespace ComScriptTests
                    readsAtEnd == 0 && kept.Text == "title" && kept.Variables == "= t1 " && read.Left == 50 &&
                    next.Lines.Count == 1 && next.Lines[0].StartsWith("slide 1:", StringComparison.Ordinal) && next.Lines[0].Contains("text changed"),
                    string.Join(" | ", next.Lines) + Invariant($" (reads of slide 1's text at the end: {readsAtEnd})"));
+        }
+
+        // Which ops count as changing their slide (ComProxyEngine.MayChange): sets and calls, and gets of what is no property -
+        // box.Delete without parentheses is parsed as a get, and deletes the shape - or of a type the interop does not have.
+        private static void ChangeTrackingTests()
+        {
+            Report("change tracking: a get of a method (box.Delete) or of an unknown type's member changes; a property get does not",
+                   ComProxyEngine.MayChange(ComOpAction.Get, "Shape", "Delete") && ComProxyEngine.MayChange(ComOpAction.Get, "Slide", "Duplicate") &&
+                   !ComProxyEngine.MayChange(ComOpAction.Get, "Shape", "Left") && !ComProxyEngine.MayChange(ComOpAction.Get, "Shape", "fill") &&
+                   !ComProxyEngine.MayChange(ComOpAction.Get, "Shapes", "Count") && !ComProxyEngine.MayChange(ComOpAction.Get, "_Presentation", "Slides") &&
+                   ComProxyEngine.MayChange(ComOpAction.Get, typeName: null, "Value") && ComProxyEngine.MayChange(ComOpAction.Set, "Shape", "Left") &&
+                   ComProxyEngine.MayChange(ComOpAction.Call, "Shapes", "AddShape") && !ComProxyEngine.MayChange(ComOpAction.Item, "Slides", member: null),
+                   "");
         }
 
         // ActivePresentation.Slides.Count and Slides(n), as late binding reaches them.

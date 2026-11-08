@@ -57,6 +57,24 @@ namespace Pptcom.ComProxy
             return new[] { iface }.Concat(iface.GetInterfaces()).SelectMany(static t => t.GetMembers());
         }
 
+        // Whether the interface has a property of that name (any case), its own or inherited; worked out once for each.
+        public static bool IsProperty(Type iface, string member)
+        {
+            string key = iface.FullName + "." + member.ToUpperInvariant();
+            lock (Properties)
+            {
+                if (!Properties.TryGetValue(key, out bool found))
+                {
+                    found = Members(iface).Any(m => m is PropertyInfo && string.Equals(m.Name, member, StringComparison.OrdinalIgnoreCase));
+                    Properties[key] = found;
+                }
+
+                return found;
+            }
+        }
+
+        private static readonly Dictionary<string, bool> Properties = new(StringComparer.Ordinal);
+
         // The interface's name without its leading _ (_Presentation: Presentation).
         public static string DisplayName(Type iface)
         {

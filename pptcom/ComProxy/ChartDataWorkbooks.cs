@@ -51,9 +51,9 @@ namespace Pptcom.ComProxy
         }
 
         // How long to wait before looking again whether the charts took what was written (zero: close now): nothing
-        // open or nothing written, every chart showing its data, or SettleLimit past the last write - zero; a chart that
-        // cannot be compared with its data - until SettleTime after the last write. A chart not showing its data yet is
-        // refreshed, for one on a slide not shown.
+        // open or nothing written, every chart showing its data, or SettleLimit past the last write - zero; a chart still
+        // showing something else - SettleCheck, the chart refreshed (for one on a slide not shown); a chart that cannot be
+        // told (ShowsData null), or none known - until SettleTime after the last write.
         public TimeSpan WaitBeforeClose()
         {
             TimeSpan since = DateTime.UtcNow - _lastWrite;
@@ -62,28 +62,27 @@ namespace Pptcom.ComProxy
                 return TimeSpan.Zero;
             }
 
-            bool comparable = _openData.Count > 0;
-            bool all = true;
+            bool different = false, unknown = _openData.Count == 0;
             foreach (KeyValuePair<object, object> data in _openData)
             {
                 bool? shows = Guard.Try<bool?>(() => ShowsData(data.Key, data.Value), fallback: null);
                 if (shows is null)
                 {
-                    comparable = false;
+                    unknown = true;
                 }
                 else if (shows == false)
                 {
-                    all = false;
+                    different = true;
                     Refresh(data.Key);
                 }
             }
 
-            if (!comparable)
+            if (different)
             {
-                return since >= SettleTime ? TimeSpan.Zero : SettleTime - since;
+                return SettleCheck;
             }
 
-            return all ? TimeSpan.Zero : SettleCheck;
+            return unknown && since < SettleTime ? SettleTime - since : TimeSpan.Zero;
         }
 
         // A workbook a script reached or opened.
@@ -173,38 +172,60 @@ namespace Pptcom.ComProxy
 
         // ---- whether a chart shows what its data holds ----
 
-        // Whether each series of the chart shows the cells its formula names in the workbook: its values (as numbers),
-        // and its name and categories where those cells hold text. Throws when they cannot be read (WaitBeforeClose then
-        // waits as before); a part that is no reference to one sheet's cells (a literal, a union) is not compared.
-        internal static bool ShowsData(dynamic chart, dynamic workbook)
+        // Whether each series of the chart shows the cells its formula names in the workbook - its values, categories and
+        // name (CompareValues, CompareCategories, CompareName): false when one shows something else, null when one cannot
+        // be told and none differs (WaitBeforeClose then waits as before); throws when they cannot be read. A part that is
+        // no reference to one sheet's cells (a literal, a union) is not written through the data, and not compared.
+        internal static bool? ShowsData(dynamic chart, dynamic workbook)
         {
-            dynamic all = chart.SeriesCollection();
-            int count = (int)all.Count;
-            for (int i = 1; i <= count; i++)
+            object book = workbook;
+            Match all = Match.Same;
+            dynamic collection = chart.SeriesCollection();
+            int count = (int)collection.Count;
+            for (int i = 1; i <= count && all != Match.Different; i++)
             {
-                dynamic series = all.Item(i);
+                dynamic series = collection.Item(i);
                 SeriesCells cells = ParseSeries((string)series.Formula) ?? throw new FormatException("not a SERIES formula");
-                if (cells.Values is { } values && !SameNumbers(Flat(Value2((object)workbook, values)), Flat((object)series.Values)))
+                if (cells.Values is { } values)
                 {
-                    return false;
+                    all = Worse(all, CompareValues(Flat(Value2(book, values)), Flat((object)series.Values)));
                 }
 
-                // categories of more than one row and column are levels, which XValues gives otherwise: not compared
-                if (cells.Categories is { } categories && Value2((object)workbook, categories) is var raw &&
-                    !(raw is Array levels && levels.Rank == 2 && levels.GetLength(0) > 1 && levels.GetLength(1) > 1) &&
-                    !SameTexts(Flat(raw), Flat((object)series.XValues)))
+                if (cells.Categories is { } categories)
                 {
-                    return false;
+                    object? raw = Value2(book, categories);
+                    // categories of more than one row and column are levels, which XValues gives otherwise
+                    bool levels = raw is Array a && a.Rank == 2 && a.GetLength(0) > 1 && a.GetLength(1) > 1;
+                    all = Worse(all, levels ? Match.Unknown : CompareCategories(Flat(raw), Flat((object)series.XValues)));
                 }
 
-                if (cells.Name is { } name && Flat(Value2((object)workbook, name)) is { Count: 1 } named && named[0] is string text &&
-                    !string.Equals(text, (string)series.Name, StringComparison.Ordinal))
+                if (cells.Name is { } name)
                 {
-                    return false;
+                    List<object?> named = Flat(Value2(book, name));
+                    all = Worse(all, named.Count == 1 ? CompareName(named[0], (object)series.Name) : Match.Unknown);
                 }
             }
 
-            return true;
+            return all switch
+            {
+                Match.Same => true,
+                Match.Different => false,
+                _ => null,
+            };
+        }
+
+        // How a chart's part compares with its cells: it shows them, it shows something else, or it cannot be told (a date
+        // or a number shown in a format, text in a value cell, an empty name...).
+        internal enum Match
+        {
+            Same,
+            Different,
+            Unknown,
+        }
+
+        private static Match Worse(Match a, Match b)
+        {
+            return a == Match.Different || b == Match.Different ? Match.Different : a == Match.Unknown || b == Match.Unknown ? Match.Unknown : Match.Same;
         }
 
         // The cells a series formula names: its name, categories and values (each null when it is not a reference to
@@ -330,50 +351,80 @@ namespace Pptcom.ComProxy
             return list;
         }
 
-        // The chart's values the same as the cells': as many, and each number equal (an empty cell shows as nothing or
-        // 0); a cell holding text is not compared.
-        internal static bool SameNumbers(List<object?> cells, List<object?> shown)
+        // The chart's values against the cells' (Range.Value2): as many, each number equal, an empty cell shown as
+        // nothing or 0. A cell holding anything else (text, an error) cannot be told.
+        internal static Match CompareValues(List<object?> cells, List<object?> shown)
         {
             if (cells.Count != shown.Count)
             {
-                return false;
+                return Match.Different;
             }
 
-            for (int i = 0; i < cells.Count; i++)
+            Match all = Match.Same;
+            for (int i = 0; i < cells.Count && all != Match.Different; i++)
             {
-                if (cells[i] is null)
+                Match one = cells[i] switch
                 {
-                    if (shown[i] is not null && !(Number(shown[i]) is double zero && zero == 0))
-                    {
-                        return false;
-                    }
-                }
-                else if (Number(cells[i]) is double cell && (Number(shown[i]) is not double value || Math.Abs(cell - value) > 1e-9 * Math.Max(1, Math.Abs(cell))))
-                {
-                    return false;
-                }
+                    null or "" => shown[i] is null or "" || (Number(shown[i]) is double zero && zero == 0) ? Match.Same : Match.Different,
+                    double cell => SameNumber(cell, shown[i]),
+                    _ => Match.Unknown,
+                };
+                all = Worse(all, one);
             }
 
-            return true;
+            return all;
         }
 
-        // The chart's categories the same as the cells' where those hold text: as many, and the same text.
-        internal static bool SameTexts(List<object?> cells, List<object?> shown)
+        // The chart's categories against the cells': as many; text the same text, a number the same number (the chart
+        // may give it as text: then read as a number, and when it is not one - a date, a format - it cannot be told),
+        // an empty cell nothing. A cell holding anything else (an error) cannot be told.
+        internal static Match CompareCategories(List<object?> cells, List<object?> shown)
         {
             if (cells.Count != shown.Count)
             {
-                return false;
+                return Match.Different;
             }
 
-            for (int i = 0; i < cells.Count; i++)
+            Match all = Match.Same;
+            for (int i = 0; i < cells.Count && all != Match.Different; i++)
             {
-                if (cells[i] is string text && !string.Equals(text, Convert.ToString(shown[i], CultureInfo.InvariantCulture), StringComparison.Ordinal))
+                Match one = cells[i] switch
                 {
-                    return false;
-                }
+                    null or "" => shown[i] is null or "" ? Match.Same : Match.Different,
+                    string text => string.Equals(text, Convert.ToString(shown[i], CultureInfo.InvariantCulture), StringComparison.Ordinal) ? Match.Same : Match.Different,
+                    double cell => SameNumber(cell, shown[i]),
+                    _ => Match.Unknown,
+                };
+                all = Worse(all, one);
             }
 
-            return true;
+            return all;
+        }
+
+        // A series' name (Series.Name, text) against its cell: the same text, or the same number; an empty cell (the
+        // chart then names the series itself) or anything else cannot be told.
+        internal static Match CompareName(object? cell, object? shown)
+        {
+            return cell switch
+            {
+                string text when text.Length > 0 => string.Equals(text, shown as string, StringComparison.Ordinal) ? Match.Same : Match.Different,
+                double number => SameNumber(number, shown),
+                _ => Match.Unknown,
+            };
+        }
+
+        // A number against what the chart shows for it: a number, or text that reads as one; text that does not cannot
+        // be told.
+        private static Match SameNumber(double cell, object? shown)
+        {
+            double? value = Number(shown) ?? (shown is string text &&
+                double.TryParse(text, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out double read) ? read : null);
+            if (value is not double v)
+            {
+                return shown is null ? Match.Different : Match.Unknown;
+            }
+
+            return Math.Abs(cell - v) <= 1e-9 * Math.Max(1, Math.Abs(cell)) ? Match.Same : Match.Different;
         }
 
         private static double? Number(object? value)

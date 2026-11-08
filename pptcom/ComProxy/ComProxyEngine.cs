@@ -917,7 +917,7 @@ namespace Pptcom.ComProxy
 
             NoteChartData(targetObj, member, resultValue);
 
-            object? resultSlide = TrackSlides(action, target, resultValue);
+            object? resultSlide = TrackSlides(action, target, targetObj, member, resultValue);
             if (id is not null && id.Length > 0 && !TryLetIntoDefault(op, id, resultValue))
             {
                 NoteMissingSet(op, resultValue);
@@ -1237,9 +1237,11 @@ namespace Pptcom.ComProxy
         }
 
         // Slide tracking for auto-renders: a handle belongs to the slide it was reached from;
-        // a result that IS a slide (Slides(n), Slides.Add) starts a new owner. Mutating ops
-        // (set/call) mark their owner slide as touched. Returns the slide the result belongs to.
-        private object? TrackSlides(string action, string target, object? resultValue)
+        // a result that IS a slide (Slides(n), Slides.Add) starts a new owner. Ops that may change
+        // something (MayChange) mark their owner slide as touched, and a new slide they made; one
+        // with no slide to mark changed what cannot be told (_untrackedChange). Returns the slide the
+        // result belongs to.
+        private object? TrackSlides(string action, string target, object targetObj, string? member, object? resultValue)
         {
             _handleSlide.TryGetValue(target, out object? targetSlide);
             object? resultSlide = targetSlide;
@@ -1248,16 +1250,46 @@ namespace Pptcom.ComProxy
             {
                 resultSlide = resultValue;
             }
-            if (action == ComOpAction.Set || action == ComOpAction.Call)
+            if (MayChange(action, targetObj, member))
             {
                 MarkTouched(targetSlide);
-                if (action == ComOpAction.Call && !ReferenceEquals(resultSlide, targetSlide))
+                bool madeSlide = resultSlide is not null && !ReferenceEquals(resultSlide, targetSlide);
+                if (madeSlide)
                 {
                     MarkTouched(resultSlide); // Slides.Add
+                }
+                else if (targetSlide is null)
+                {
+                    _untrackedChange = true;
                 }
             }
 
             return resultSlide;
+        }
+
+        // An op that may change the deck: a set or a call, and a get of a member the interop interface does not know as a
+        // property - a method written without parentheses (box.Delete is parsed as a get), or a member of a type it does
+        // not have (Excel's).
+        private static bool MayChange(string action, object targetObj, string? member)
+        {
+            return MayChange(action, ComSecurityPolicy.TryGetTypeName(targetObj), member);
+        }
+
+        // The same, by the COM type name of the op's target (null: not known).
+        internal static bool MayChange(string action, string? typeName, string? member)
+        {
+            if (string.Equals(action, ComOpAction.Set, StringComparison.Ordinal) || string.Equals(action, ComOpAction.Call, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (!string.Equals(action, ComOpAction.Get, StringComparison.Ordinal) || member is null || member.Length == 0)
+            {
+                return false;
+            }
+
+            Type? iface = InteropTypes.Find(typeName);
+            return iface is null || !InteropTypes.IsProperty(iface, member);
         }
 
         // The statement's fractions that COM rounds where a whole number goes (RoundedArguments), for its line result.
@@ -1491,8 +1523,10 @@ namespace Pptcom.ComProxy
         private readonly List<object> _touchedSlides = [];
 
         // The slides changed since the last TakeChangedSlideIds: those of all of a request's calls, where _touchedSlides
-        // has one call's. The deck is read again at a request's end only on these (DeckReader.TakeFingerprint).
+        // has one call's. The deck is read again at a request's end only on these (DeckReader.TakeFingerprint) - or all
+        // of it, after a change whose slide could not be told (_untrackedChange: of the presentation, its page setup...).
         private readonly List<object> _changedSlides = [];
+        private bool _untrackedChange;
 
         private void MarkTouched(object? slide)
         {
@@ -1517,9 +1551,12 @@ namespace Pptcom.ComProxy
             _touchedSlides.Add(slide);
         }
 
-        // The SlideIDs of the slides changed since the last call (one deleted since is left out), forgetting them.
-        public HashSet<int> TakeChangedSlideIds()
+        // The SlideIDs of the slides changed since the last call (one deleted since is left out), forgetting them; null
+        // when a change since could not be tied to a slide (then the whole deck is to be read again).
+        public HashSet<int>? TakeChangedSlideIds()
         {
+            bool untracked = _untrackedChange;
+            _untrackedChange = false;
             HashSet<int> ids = [];
             foreach (object s in _changedSlides)
             {
@@ -1534,7 +1571,7 @@ namespace Pptcom.ComProxy
             }
 
             _changedSlides.Clear();
-            return ids;
+            return untracked ? null : ids;
         }
 
         // Current 1-based indexes of the slides changed since the last call (resolved now, so
