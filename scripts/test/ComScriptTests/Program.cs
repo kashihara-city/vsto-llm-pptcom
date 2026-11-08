@@ -585,16 +585,17 @@ namespace ComScriptTests
                    ChartDataWorkbooks.CompareName(cell: null, "系列 1") == unknown,
                    "");
 
-            // the cells a write covers against a series name cell (a write there is refused in data opened again)
-            static bool covers(string written, string name)
+            // the first cell of a write in the header row of the data's table (a value written there is refused in data opened again)
+            static string? shared(string written, string header)
             {
-                return ChartDataWorkbooks.Areas(written) is { } w && ChartDataWorkbooks.Areas(name) is { } n && w.Exists(a => n.Exists(a.Overlaps));
+                return ChartDataWorkbooks.Areas(written) is { } w && ChartDataWorkbooks.Areas(header) is { } h ? ChartDataWorkbooks.FirstShared(w, h) : "unread";
             }
 
-            Report("chart data: Range addresses read as areas - cells, ranges, whole columns and rows, several areas - and what covers a name cell",
-                   covers("$B$1", "$B$1") && covers("$A$1:$C$1", "$B$1") && covers("$B:$B", "$B$1") && covers("$1:$1", "$C$1") &&
-                   covers("$A$5,$B$1", "$B$1") && covers("b1", "$B$1") && covers("$AA$10", "AA10") &&
-                   !covers("$B$2:$B$5", "$B$1") && !covers("$A$1", "$B$1") && !covers("$C:$C", "$B$1") &&
+            Report("chart data: Range addresses read as areas - cells, ranges, whole columns and rows, several areas - and the first cell of a write in a header row",
+                   shared("$B$1", "$A$1:$D$1") == "B1" && shared("$A$1:$C$1", "$A$1:$D$1") == "A1" && shared("$B:$B", "$A$1:$D$1") == "B1" &&
+                   shared("$1:$1", "$A$1:$D$1") == "A1" && shared("$A$5,$D$1,$C$1", "$A$1:$D$1") == "C1" && shared("b1", "$A$1:$D$1") == "B1" &&
+                   shared("$AA$1:$AC$9", "$Z$1:$AB$1") == "AA1" && shared("$A$1:$D$5", "$A$1:$D$1") == "A1" &&
+                   shared("$B$2:$B$5", "$A$1:$D$1") is null && shared("$E$1", "$A$1:$D$1") is null && shared("$A$6", "$A$1:$D$1") is null &&
                    ChartDataWorkbooks.Areas("") is null && ChartDataWorkbooks.Areas("A1B") is null && ChartDataWorkbooks.Areas("Sheet1!A1") is null,
                    "");
         }

@@ -1100,7 +1100,7 @@ namespace Pptcom.ComProxy
 
                     if (intoChartData)
                     {
-                        RefuseSeriesNameWrite(targetObj);
+                        RefuseHeaderWrite(targetObj);
                     }
 
                     // For an indexed property put (`Adjustments(1) = 0.1`) COM wants the index
@@ -1242,28 +1242,22 @@ namespace Pptcom.ComProxy
             return shape;
         }
 
-        // ClearContents on cells of a chart's data, called or written without parentheses (a get): a write, refused like
-        // one on a series name cell (RefuseSeriesNameWrite) before it is made.
-        private bool IsChartDataClearing(object targetObj, string? member)
+        // ClearContents on cells of a chart's data, called or written without parentheses (a get): a write, which the data
+        // is closed only after the chart has taken (ChartDataWorkbooks.Wrote).
+        private static bool IsChartDataClearing(object targetObj, string? member)
         {
-            if (!string.Equals(member, "ClearContents", StringComparison.OrdinalIgnoreCase) || !ComSecurityPolicy.IsChartDataObject(targetObj))
-            {
-                return false;
-            }
-
-            RefuseSeriesNameWrite(targetObj);
-            return true;
+            return string.Equals(member, "ClearContents", StringComparison.OrdinalIgnoreCase) && ComSecurityPolicy.IsChartDataObject(targetObj);
         }
 
-        // A write into a series name cell of a chart's data opened again (ChartDataWorkbooks.SeriesNameAt): after it,
-        // PowerPoint does not open the chart's data again, so it is refused, with the way that works.
-        private void RefuseSeriesNameWrite(object cells)
+        // A value written into the header row of a chart data's table in data opened again (ChartDataWorkbooks.HeaderCellAt):
+        // after it, PowerPoint does not open the chart's data again, so it is refused, with the way that works.
+        private void RefuseHeaderWrite(object cells)
         {
-            if (_chartData.SeriesNameAt(cells) is (int series, string cell))
+            if (_chartData.HeaderCellAt(cells) is (string cell, string header))
             {
-                throw new InvalidOperationException(Invariant($"{cell} holds the name of series {series}: written after the chart's data was opened again, ") +
-                                                    "PowerPoint can no longer open that data (only the pptcom call that made the chart can write series names into the cells). " +
-                                                    Invariant($"Rename the series through the chart instead: .Chart.SeriesCollection({series}).Name = \"...\" (the cell keeps the old name)"));
+                throw new InvalidOperationException(Invariant($"{cell} is in the header row of the chart's data ({header}: series names, or categories of a chart plotted by rows): ") +
+                                                    "a value written there after the data was opened again keeps PowerPoint from opening it any more; only the pptcom call that made the chart can write that row. " +
+                                                    "Leave the row as it is and write the cells below it; rename a series through the chart instead: .Chart.SeriesCollection(n).Name = \"...\" (the cell keeps the old name)");
             }
         }
 

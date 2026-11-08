@@ -30,8 +30,10 @@ namespace Pptcom.ComProxy
         // Each chart whose data is open, with its workbook, for WaitBeforeClose to compare them.
         private readonly List<KeyValuePair<object, object>> _openData = [];
         // Workbooks a ChartData.Workbook read opened rather than found open (AddChart2 opens its chart's data): in these
-        // PowerPoint cannot take a series name written into its cell - after it the chart's data does not open any
-        // more (ChartData.Workbook stays Nothing, Activate fails) - so such a write is refused (SeriesNameAt).
+        // PowerPoint cannot take a value written into the header row of the data's table (series names, or categories
+        // of a chart plotted by rows) - after it the chart's data does not open any more (ChartData.Workbook stays
+        // Nothing, Activate fails) - so such a write is refused (HeaderCellAt). Cells outside the table, and the header
+        // cleared (Excel names it 列1) or the whole table cleared (the table goes), do not do it.
         private readonly List<object> _reopened = [];
         private DateTime _lastWrite = DateTime.MinValue;
         private bool _written;
@@ -180,10 +182,11 @@ namespace Pptcom.ComProxy
             _written = false;
         }
 
-        // The series whose name cell a write into `range` (cells of a chart's data) would change, and that cell, when the
-        // data was opened again (_reopened) - such a write breaks the chart's data; null otherwise (data AddChart2
-        // opened, cells no series name is in, or what cannot be read).
-        public (int Series, string Cell)? SeriesNameAt(object range)
+        // The first cell of `range` (cells of a chart's data) in the header row of a table on its sheet, and that header
+        // row, when the data was opened again (_reopened) - a value written there breaks the chart's data; null otherwise
+        // (data AddChart2 opened, cells outside every header row, or what cannot be read). The header row is read as it
+        // is now: the series renamed through the chart leave their old name cells in it.
+        public (string Cell, string Header)? HeaderCellAt(object range)
         {
             if (_reopened.Count == 0)
             {
@@ -197,41 +200,72 @@ namespace Pptcom.ComProxy
                 return null;
             }
 
-            string sheet = Guard.Try(() => (string)cells.Worksheet.Name, "");
             List<CellArea>? written = Areas(Guard.Try(() => (string)cells.Address, ""));
             if (written is null)
             {
                 return null;
             }
 
-            foreach (KeyValuePair<object, object> data in _openData)
+            foreach (string header in Guard.Try(() => HeaderRows(cells.Worksheet), fallback: new List<string>()))
             {
-                if (ReferenceEquals(data.Value, book) &&
-                    Guard.Try<(int, string)?>(() => NameCellIn(data.Key, sheet, written), fallback: null) is (int series, string cell))
+                if (Areas(header) is { } head && FirstShared(written, head) is { } cell)
                 {
-                    return (series, cell);
+                    return (cell, header.Replace("$", ""));
                 }
             }
 
             return null;
         }
 
-        // The first series of the chart whose name cell (in its formula) is on `sheet` within `written`.
-        private static (int, string)? NameCellIn(dynamic chart, string sheet, List<CellArea> written)
+        // The address of each table's header row on the sheet (a table shown without one has none).
+        private static List<string> HeaderRows(dynamic sheet)
         {
-            dynamic collection = chart.SeriesCollection();
-            int count = (int)collection.Count;
+            List<string> rows = [];
+            dynamic tables = sheet.ListObjects;
+            int count = (int)tables.Count;
             for (int i = 1; i <= count; i++)
             {
-                CellRange? name = ParseSeries((string)collection.Item(i).Formula)?.Name;
-                if (name is not null && string.Equals(name.Sheet, sheet, StringComparison.OrdinalIgnoreCase) &&
-                    Areas(name.Address) is { } named && named.Exists(n => written.Exists(w => w.Overlaps(n))))
+                dynamic? header = tables.Item(i).HeaderRowRange;
+                if (header is not null)
                 {
-                    return (i, name.Address.Replace("$", ""));
+                    rows.Add((string)header.Address);
                 }
             }
 
-            return null;
+            return rows;
+        }
+
+        // The first cell (topmost, then leftmost) that the areas of `written` share with those of `other`, as "B1"; null
+        // when they share none.
+        internal static string? FirstShared(List<CellArea> written, List<CellArea> other)
+        {
+            int row = 0, column = 0;
+            foreach (CellArea w in written)
+            {
+                foreach (CellArea o in other)
+                {
+                    int top = Math.Max(w.Top, o.Top), left = Math.Max(w.Left, o.Left);
+                    if (w.Overlaps(o) && (row == 0 || top < row || (top == row && left < column)))
+                    {
+                        row = top;
+                        column = left;
+                    }
+                }
+            }
+
+            return row == 0 ? null : ColumnName(column) + row.ToString(CultureInfo.InvariantCulture);
+        }
+
+        // 1 -> "A", 27 -> "AA".
+        private static string ColumnName(int column)
+        {
+            string name = "";
+            for (; column > 0; column = (column - 1) / 26)
+            {
+                name = (char)('A' + ((column - 1) % 26)) + name;
+            }
+
+            return name;
         }
 
         // A rectangle of cells, rows and columns from 1 (a whole column or row reaching to int.MaxValue).
