@@ -22,7 +22,7 @@ CUTOFF = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=
 # name: (repository, tag); the archive is deps/<name>.tar.gz
 SOURCES = {'anydoc': ('firecrawl/anydoc', 'v0.2.4')}
 # name: (repository, tag, release asset); the archive is deps/<name>.zip
-RELEASES = {'pdfjs': ('mozilla/pdf.js', 'v6.4.299', 'pdfjs-6.4.299-dist.zip')}
+RELEASES = {'pdfjs': ('mozilla/pdf.js', 'v6.5.438', 'pdfjs-6.5.438-dist.zip')}
 # name: (repository, tag, release asset, version); not kept in deps/
 TOOLS = {
     # must be the version of the wasm-bindgen crate in anydoc's Cargo.lock (checked below)

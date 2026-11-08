@@ -10,11 +10,11 @@
   },
   "pdfjs": {
     "repository": "mozilla/pdf.js",
-    "version": "v6.4.299",
-    "published_at": "2026-10-03T16:40:51Z",
-    "url": "https://github.com/mozilla/pdf.js/releases/download/v6.4.299/pdfjs-6.4.299-dist.zip",
+    "version": "v6.5.438",
+    "published_at": "2026-11-01T18:15:43Z",
+    "url": "https://github.com/mozilla/pdf.js/releases/download/v6.5.438/pdfjs-6.5.438-dist.zip",
     "archive": "pdfjs.zip",
-    "sha256": "f2245eb7ef3f674c872fe568a177bfec15874f5c034613e55d8e307f93ebd86d"
+    "sha256": "fcbe9ba21d9911843e3502adc178a7f549a524a4055f887bedc942e5490c6ba1"
   },
   "wasm-bindgen": {
     "repository": "wasm-bindgen/wasm-bindgen",

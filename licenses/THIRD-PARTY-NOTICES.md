@@ -9,10 +9,10 @@ vsto-llm-pptcom ships the following third-party components. Versions are those i
 | Microsoft.Web.WebView2 (SDK: Microsoft.Web.WebView2.Core, .WinForms, WebView2Loader.dll) | 1.0.4314.35 | Microsoft (BSD-style), with the third-party notices below | Core and WinForms merged into pptcom.dll; `runtimes\win-x86\native\WebView2Loader.dll` and `runtimes\win-x64\native\WebView2Loader.dll` |
 | Microsoft.Office.Tools.Common.v4.0.Utilities.dll (Visual Studio Tools for Office) | 10.0 | Distributable Code of Visual Studio 2022 | next to pptcom.dll |
 | anydoc (firecrawl/anydoc, built to WebAssembly from the source of v0.2.4) | 0.2.4 | MIT, with the Rust crates listed below | embedded in pptcom.dll (task pane: `vendor/anydoc/`) |
-| PDF.js (Mozilla's release archive `pdfjs-6.4.299-dist.zip`) | 6.4.299 | Apache-2.0 | embedded in pptcom.dll (task pane: `vendor/pdfjs/`) |
-| Adobe CMap resources (with PDF.js) | 6.4.299 | BSD-3-Clause | embedded in pptcom.dll (`vendor/pdfjs/cmaps/`) |
-| OpenJPEG, JBIG2 (PDFium) and qcms decoders as WebAssembly (with PDF.js) | 6.4.299 | BSD-2-Clause, BSD-3-Clause, MIT; PDF.js's bindings Apache-2.0 | embedded in pptcom.dll (`vendor/pdfjs/wasm/`) |
-| CGATS001Compat-v2-micro.icc (with PDF.js) | 6.4.299 | CC0-1.0 | embedded in pptcom.dll (`vendor/pdfjs/iccs/`) |
+| PDF.js (Mozilla's release archive `pdfjs-6.5.438-dist.zip`) | 6.5.438 | Apache-2.0 | embedded in pptcom.dll (task pane: `vendor/pdfjs/`) |
+| Adobe CMap resources (with PDF.js) | 6.5.438 | BSD-3-Clause | embedded in pptcom.dll (`vendor/pdfjs/cmaps/`) |
+| OpenJPEG, JBIG2 (PDFium) and qcms decoders as WebAssembly (with PDF.js) | 6.5.438 | BSD-2-Clause, BSD-3-Clause, MIT; PDF.js's bindings Apache-2.0 | embedded in pptcom.dll (`vendor/pdfjs/wasm/`) |
+| CGATS001Compat-v2-micro.icc (with PDF.js) | 6.5.438 | CC0-1.0 | embedded in pptcom.dll (`vendor/pdfjs/iccs/`) |
 
 Not shipped: the Microsoft Edge WebView2 Runtime (part of Windows), and the Office primary interop assemblies
 (Microsoft.Office.Interop.PowerPoint, office, Microsoft.Vbe.Interop 15.0), which Office installs in the GAC.
