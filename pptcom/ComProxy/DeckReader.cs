@@ -262,7 +262,7 @@ namespace Pptcom.ComProxy
                 try
                 {
                     dynamic shape = slide.Shapes(i);
-                    if ((int)shape.Type != 9) // msoLine: a line crossing a box is how lines are drawn
+                    if ((int)shape.Type != 9 && !IsHidden(shape)) // msoLine: a line crossing a box is how lines are drawn; a hidden shape is not drawn
                     {
                         ShapeBox frame = FrameOf(slide, shape, i, variables);
                         bool frameShows = FrameShows(shape);
@@ -361,6 +361,13 @@ namespace Pptcom.ComProxy
             return new ShapeBox(0, "", (double)range.BoundLeft, (double)range.BoundTop, (double)range.BoundWidth, (double)range.BoundHeight);
         }
 
+        // A shape set to Visible = msoFalse: listed as hidden, and left out of what the lines after the list judge from
+        // what is drawn (overlaps, rounded corners, contrast).
+        internal static bool IsHidden(dynamic shape)
+        {
+            return Guard.Try(() => (int)shape.Visible == 0, fallback: false);
+        }
+
         // A shape's frame, named by the first variable that holds it ("card1"), as the lines after the shape list name it.
         internal static ShapeBox FrameOf(dynamic slide, dynamic shape, int index, IDictionary<string, List<string>>? variables)
         {
@@ -447,6 +454,11 @@ namespace Pptcom.ComProxy
 
             sb.Append(" L").Append(R(shape.Left)).Append(" T").Append(R(shape.Top))
               .Append(" W").Append(R(shape.Width)).Append(" H").Append(R(shape.Height));
+            if (IsHidden(shape))
+            {
+                sb.Append(" hidden"); // Visible = msoFalse: it is not in the rendering
+            }
+
             // Colors and weights as numbers: from a rendering the model could only guess them (a thin dotted line
             // comes out paler than it is). Not for a table (its fill is per cell), a chart (its look is in the chart; the
             // shape's own Fill and Line read black and a weight of "mixed") or a group (its shapes are listed under it,

@@ -225,7 +225,7 @@ namespace Pptcom.ComProxy
         private static Layer? Read(dynamic slide, dynamic shape, int index, IDictionary<string, List<string>>? variables)
         {
             int type = (int)shape.Type;
-            if (type == (int)MsoShapeType.msoLine || Guard.Try(() => (int)shape.Connector != 0, fallback: false))
+            if (type == (int)MsoShapeType.msoLine || Guard.Try(() => (int)shape.Connector != 0, fallback: false) || DeckReader.IsHidden(shape))
             {
                 return null;
             }

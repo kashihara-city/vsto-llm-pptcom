@@ -143,7 +143,7 @@ namespace Pptcom.ComProxy
         private static (Card? Card, DeckReader.ShapeBox? Band, DeckReader.ShapeBox? Cover) Read(dynamic slide, dynamic shape, int index, IDictionary<string, List<string>>? variables)
         {
             int type = (int)shape.Type;
-            if (Math.Abs((double)shape.Rotation) > 0.01)
+            if (Math.Abs((double)shape.Rotation) > 0.01 || DeckReader.IsHidden(shape))
             {
                 return (null, null, null);
             }

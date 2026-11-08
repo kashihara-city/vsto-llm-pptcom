@@ -1022,7 +1022,7 @@ namespace ComScriptTests
         {
             ContentSlide slide = new();
             slide.Shapes.List.AddRange([
-                new ContentShape { Id = 2, Type = 1, AutoShapeType = 4, Name = "Diamond 1" },
+                new ContentShape { Id = 2, Type = 1, AutoShapeType = 4, Name = "Diamond 1", Visible = 0 },
                 new ContentShape { Id = 3, Type = 5, Name = "Freeform 2" },
                 new ContentShape { Id = 4, Type = 14, Name = "Title 3", PlaceholderFormat = new ContentPlaceholder { Type = 1 } },
                 new ContentShape { Id = 5, Type = 1, AutoShapeType = 999, Name = "Shape 4" },
@@ -1032,6 +1032,8 @@ namespace ComScriptTests
             string kinds = string.Join(" | ", lines.Skip(1).Take(5).Select(static l => l.Split(' ')[1]));
             Report("shape names: an AutoShape's form, a placeholder's role, another MsoShapeType, and a number where no name is known",
                    kinds == "Diamond | Freeform | Placeholder(Title) | AutoShape(999) | Type(99)", kinds);
+            Report("shapes: one set to Visible = msoFalse says it is hidden, the others nothing",
+                   lines[1].Contains(" W300 H100 hidden") && !lines.Skip(2).Any(static l => l.Contains("hidden")), lines[1]);
 
             Report("enums: the interop assemblies' name stays where the installed Office also has the value",
                    EnumResolver.NameOf(typeof(Microsoft.Office.Core.MsoShapeType), 24, "mso") == "SmartArt", EnumResolver.NameOf(typeof(Microsoft.Office.Core.MsoShapeType), 24, "mso"));
@@ -1166,7 +1168,7 @@ namespace ComScriptTests
         // Any shape: what it holds is set for its kind.
         internal sealed class ContentShape
         {
-            public int Id, Type, AutoShapeType;
+            public int Id, Type, AutoShapeType, Visible = -1;
             public string Name = "";
             public double Left = 10, Top = 20, Width = 300, Height = 100;
             public int HasTable, HasChart, HasSmartArt, HasTextFrame;
