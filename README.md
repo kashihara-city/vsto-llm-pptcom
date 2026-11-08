@@ -25,8 +25,7 @@ PowerPointで開いているプレゼンテーションを、LLMが作ったり�
 
 ![橿原市第5期地域福祉推進計画（PDF）を添付して「この資料を5枚にまとめて」と依頼し、続けて1枚目の文字の高さを揃えるよう頼んだところ。右が作業ウィンドウで、オンプレミスで動かしているモデルを使っている](docs/image.png)
 
-<details>
-<summary>作例: 同じ依頼でモデルを替えたもの</summary>
+### 作例: 同じ依頼でモデルを替えたもの
 
 総務省の通知「地方自治法等に基づく事務手続における旧氏の取扱いについて」の[本文](https://www.soumu.go.jp/main_content/001083961.pdf)・[別紙1](https://www.soumu.go.jp/main_content/001083971.pdf)・[別紙2](https://www.soumu.go.jp/main_content/001083966.pdf)のPDFを添付し、内容をまとめる依頼をしたものです（アドイン0.0.8、画像生成はZ-Image）。スライドの内容的な正誤は確かめていません。
 
@@ -50,7 +49,6 @@ PowerPointで開いているプレゼンテーションを、LLMが作ったり�
 
 下の段の3つはオンプレミスのvLLMで動かしたもので、いずれも思考ありです。DeepSeek-V4.1-Flash-1017はオリジナルウェイト（[deepseek-ai/DeepSeek-V4.1-Flash-1017](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017)）、Qwen3.8-Flash-NextはNVFP4に量子化したもの（[Inferact/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/Inferact/Qwen3.8-Flash-Next-NVFP4)）、Gemma 4 31BはQAT版（[google/gemma-4-31B-it-qat-w4a16-ct](https://huggingface.co/google/gemma-4-31B-it-qat-w4a16-ct)）です。
 
-</details>
 
 ## 必要な設定
 
@@ -210,15 +208,19 @@ C#のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.N
 
 | 実行するもの | 調べること |
 |---|---|
-| `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcomスクリプトの解析と実行。式の値をVBScriptの値（`expected.tsv`。式を足したら`make_expected.vbs`で作り直す）と、VBScriptと違うところはVBAの値と照らす。受け付ける文と断る文、モデルへの報告の文、依頼のプレゼンテーションの固定、ほかのプレゼンテーションに届くメンバーを断ること。型ごとの規則が型名の先頭の`_`の有無によらず効くこと、XML部品（CustomXMLParts など）を変数に持たせないこと、型名が読めない物を断ること。整数や列挙型の引数に渡した小数が、どの引数に何として入ったか（VBAと同じ丸め）を知らせること。図形一覧に添えるアニメーションの一覧（効果ごとの再生される時刻と、来る向き）。図形一覧の表・グラフ（値の軸の範囲も）・SmartArt・グループの中身と、長いものの省略。グラフのデータ（Excel）で使える型とメンバーが、セルの値を読み書きするものに限られることと、数式になる文字を断ること。図形一覧の図形の種類と形の名前、グラフの番号つきの既定（ApplyLayout、ChartStyle）を断ること。グラフの線を表示にする代入を、図形の線と見分けること |
-| `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMの応答の読み取り（模擬サーバー）。終わりまで届いた応答、分かれて届くツール呼び出し、途中で切れた応答、サーバー側の失敗と接続先に届かない失敗の見分け、APIキーをhttpの接続先に送らないこと、中止と待ち時間の上限、`mm_processor_kwargs`の送り直し、画像の待ちの終わり方。要約の頼み方（ツールを付けたまま`tool_choice: none`）、モデル一覧の最大入力の読み取り、会話を短くするときに省くもの、メモの置き方、後の依頼に渡す短い経過（「続ける」のあと再び短くしたときも）。依頼ごとに渡すツールとシステムプロンプト（資料が無ければdocread、画像生成モデルが無ければimagegenと画像の行を外す）。imagegenが返す画像の主な色と縁の色 |
-| `node scripts/test/docs-queue.cjs` | 作業ウィンドウの添付の受け付け（`docs.js`）。読み出す前に「読み取り中」になり、どこで失敗しても添付か失敗で終わり、後のファイルが続くこと。画像は変換せずにそのまま添付し、貼り付けは文字が無いときだけ添付すること |
-| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼が1つだけ送られること、依頼の終わり方の表示、ターンの上限で止まったあとの「続ける」、コンテキスト上限の入力、モデルの選択肢（未選択、使わない）と画像生成プロンプト、APIキーの入力（一度だけ送り、欄に残さない）と削除（設定欄の中で確認してから）、設定欄が勝手に閉じないこと、送信の直後や実行中に「新しい会話」を送らないこと |
-| `python -X utf8 scripts/test/js-syntax.py` | 作業ウィンドウのJavaScriptが構文として読めること（Nodeの`--check`） |
-| `python -X utf8 scripts/test/i18n.py` | 文言のコードが`ja.json`にあり、値の数と言語がそろい、コードに日本語の文が無いこと |
-| `python -X utf8 scripts/test/no-secrets.py` | Gitが追跡するファイルに、私有IP、社内のホスト名、APIキー、開発機のパス、鍵や証明書が無いこと。`--history`で全コミット、`--self-test`で自分自身を確かめる。パターンで見分けられない語は`notes/secrets-denylist.txt`（Gitの管理外、1行に1語）に書くと照合する |
+| `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcomスクリプトの解析と実行（式の値はVBScriptとVBAの値と照らす）。断る文とメンバー、依頼のプレゼンテーションの固定、グラフのデータで使えるもの。モデルへの報告（エラーの案内、引数の丸め、図形一覧の中身とアニメーション） |
+| `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMとの通信（応答の読み取り、失敗の見分け、中止と待ち時間、APIキーの扱い）。モデルに渡すもの（ツールとシステムプロンプト、会話の短縮、表示言語と日付、画像の色） |
+| `node scripts/test/docs-queue.cjs` | 作業ウィンドウの添付（`docs.js`）。どこで失敗しても後のファイルが続くこと、画像と貼り付けの扱い |
+| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼の送り方と終わり方、「続ける」、設定欄、APIキーの入力と削除 |
+| `python -X utf8 scripts/test/js-syntax.py` | 作業ウィンドウのJavaScriptが構文として読めること |
+| `python -X utf8 scripts/test/i18n.py` | 文言のコードと言語ファイルがそろい、コードに日本語の文が無いこと |
+| `python -X utf8 scripts/test/no-secrets.py` | Gitが追跡するファイルに、私有IP、社内のホスト名、APIキー、開発機のパス、鍵や証明書が無いこと |
 | `python -X utf8 scripts/deps/netanalyzers-config.py --check` | NetAnalyzersの規則の一覧が、固定した版のパッケージと合うこと |
-| `python -X utf8 scripts/test/build-warnings.py <ログ>...` | ビルドの警告が、解析器1つが読み込めない既知のCS8032だけであること（ログはMSBuildの`-flp:logfile=<ログ>;warningsonly`） |
+| `python -X utf8 scripts/test/build-warnings.py <ログ>...` | ビルドの警告が、既知のCS8032だけであること |
+
+- ComScriptTestsの式の値は`expected.tsv`（VBScriptで求めた値）と照らします。式を足したら`make_expected.vbs`で作り直します。
+- no-secrets.pyは、`--history`で全コミットを、`--self-test`で自分自身を確かめます。パターンで見分けられない語は`notes/secrets-denylist.txt`（Gitの管理外、1行に1語）に書くと照合します。
+- build-warnings.pyのログは、MSBuildの`-flp:logfile=<ログ>;warningsonly`で作ります。CS8032は、解析器の1つが読み込めないという警告です。
 
 ### 実機でのテスト
 

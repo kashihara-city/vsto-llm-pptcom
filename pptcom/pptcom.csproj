@@ -191,6 +191,7 @@
     <Compile Include="Agent\StreamProgress.cs" />
     <Compile Include="Agent\StreamedReply.cs" />
     <Compile Include="Agent\ToolCall.cs" />
+    <Compile Include="Agent\UserLocale.cs" />
     <!-- The model's instructions, its tool definitions, the image prompts (the rules and sizes of imagegen, one for each
          kind of image model) and what it is asked when its conversation is shortened, read by AgentFile. -->
     <EmbeddedResource Include="Agent\system-prompt.txt">

@@ -1895,16 +1895,6 @@ namespace Pptcom
             return _deckDefaults;
         }
 
-        // Local date and time, fixed for the whole request. It goes at the top of the user message,
-        // not into the system prompt, so the system prompt + tool definitions stay byte-identical
-        // across requests and the server's prefix cache keeps covering them.
-        private static string CurrentTimeLine()
-        {
-            DateTimeOffset now = DateTimeOffset.Now;
-            string offset = (now.Offset < TimeSpan.Zero ? "-" : "+") + now.Offset.ToString(@"hh\:mm", CultureInfo.InvariantCulture);
-            return "Current date and time: " + now.ToString("yyyy-MM-dd (ddd) HH:mm", CultureInfo.InvariantCulture) + " (UTC" + offset + ")";
-        }
-
         // Completed by the task pane's 再試行 button; cancelled by 中止 (the request's token).
         private TaskCompletionSource<bool>? _retryWait; // set while a request waits for 再試行
 
@@ -1944,14 +1934,17 @@ namespace Pptcom
             // The selection is left out when carrying on: the user pressed 続ける, they did not point at anything.
             string selection = stopped is not null ? "" : SelectionContext(run, conversation);
             string context = ContextBeforeRequest(conversation, run, selection, new HashSet<string>(pictures.Select(static p => p.Label), StringComparer.Ordinal));
-            string systemPrompt = AgentTools.SystemPrompt(CurrentDeckDefaults(run).Fill(SystemPrompt), withImages: conversation.ImageModel.Length > 0);
+            // PowerPoint's UI language: the one to reply and write in (system prompt), and its calendars (date line)
+            string language = OfficeUiLanguage();
+            string systemPrompt = AgentTools.SystemPrompt(CurrentDeckDefaults(run).Fill(SystemPrompt), withImages: conversation.ImageModel.Length > 0)
+                .Replace(UserLocale.LanguagePlaceholder, UserLocale.LanguageName(language));
             List<ChatMessage> messages = [new ChatMessage("system", systemPrompt), .. earlier];
             if (stopped is not null)
             {
                 messages.AddRange(stopped.Messages);
             }
 
-            run.OwnMessage = new ChatMessage("user", CurrentTimeLine() + "\n\n" + context + userMessage) { Images = pictures.Count > 0 ? pictures : null };
+            run.OwnMessage = new ChatMessage("user", UserLocale.DateLine(DateTimeOffset.Now, language) + "\n\n" + context + userMessage) { Images = pictures.Count > 0 ? pictures : null };
             messages.Add(run.OwnMessage);
             run.Messages = messages;
             LogToFile("=== request: " + userMessage +

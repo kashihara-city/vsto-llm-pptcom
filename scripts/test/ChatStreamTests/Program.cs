@@ -50,6 +50,7 @@ namespace ChatStreamTests
             CompactionTests();
             OfferedTests();
             ImageColorsTests();
+            UserLocaleTests();
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -514,6 +515,34 @@ namespace ChatStreamTests
         // The colors imagegen reports (ImageColors): the main ones with their share, a background's few steps of noise
         // counted as one color (its average, also across the boxes it is counted in), colors further apart kept apart,
         // the edge's color, transparent pixels left out; and the same from a PNG file.
+        // The language environment the model is told of (UserLocale): the language's name for the system prompt, and the
+        // date line with the dates of the language's own calendars (Japanese era years, the Taiwan calendar), none for one
+        // with the Gregorian calendar only. The dates are Windows' own (CultureInfo), which this checks they stay.
+        private static void UserLocaleTests()
+        {
+            Console.WriteLine("== the user's language and calendars");
+            Check("the language's name with its region and script",
+                  UserLocale.LanguageName("ja-JP") == "Japanese (Japan)" && UserLocale.LanguageName("zh-TW") == "Chinese (Traditional, Taiwan)" &&
+                  UserLocale.LanguageName("no-such-language-tag") == "no-such-language-tag",
+                  UserLocale.LanguageName("ja-JP") + " / " + UserLocale.LanguageName("zh-TW"));
+
+            DateTimeOffset now = new(2026, 11, 8, 8, 30, 0, TimeSpan.FromHours(9));
+            string line = UserLocale.DateLine(now, "ja-JP");
+            Check("the date line, with the Japanese era year", line == "Current date and time: 2026-11-08 (Sun) 08:30 (UTC+09:00); Japanese calendar: 令和8年11月8日", line);
+            string first = UserLocale.LocalCalendarDates(new DateTime(2019, 5, 1, 0, 0, 0, DateTimeKind.Unspecified), "ja-JP");
+            string before = UserLocale.LocalCalendarDates(new DateTime(2019, 4, 30, 0, 0, 0, DateTimeKind.Unspecified), "ja-JP");
+            Check("an era's first year and the day before it", first == "; Japanese calendar: 令和元年5月1日" && before == "; Japanese calendar: 平成31年4月30日", first + " | " + before);
+            string taiwan = UserLocale.LocalCalendarDates(now.DateTime, "zh-TW"), thai = UserLocale.LocalCalendarDates(now.DateTime, "th-TH");
+            Check("Taiwan and Thai calendars by their .NET names", taiwan == "; Taiwan calendar: 115年11月8日" && thai.StartsWith("; ThaiBuddhist calendar: ", StringComparison.Ordinal) && thai.Contains("2569"),
+                  taiwan + " | " + thai);
+            Check("nothing more for a language with the Gregorian calendar only, or one .NET does not know",
+                  UserLocale.LocalCalendarDates(now.DateTime, "en-US").Length == 0 && UserLocale.LocalCalendarDates(now.DateTime, "no-such-language-tag").Length == 0, "");
+
+            string prompt = File.ReadAllText(Path.Combine(AgentFolder(), "system-prompt.txt"));
+            int places = prompt.Split([UserLocale.LanguagePlaceholder], StringSplitOptions.None).Length - 1;
+            Check("the system prompt names the language for the reply and the slide text", places == 2, Invariant($"{places} places"));
+        }
+
         private static void ImageColorsTests()
         {
             Console.WriteLine("== the colors of a generated image");
