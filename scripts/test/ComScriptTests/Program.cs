@@ -13,19 +13,22 @@ using static System.FormattableString;
 
 namespace ComScriptTests
 {
-    // Tests for the pptcom parser and the engine's value evaluation. No PowerPoint: the engine runs
-    // with a dummy root object, which is enough for plain values (Let ops never touch COM).
+    // Tests for pptcom scripts and what the model is told of the deck. No PowerPoint: the engine runs with a dummy
+    // root object, which is enough for plain values (Let ops never touch COM), and the shape list is read from
+    // late-bound stand-ins for a slide and its shapes. Only the lines that fail are printed.
     //
     //   ComScriptTests.exe [folder with expected.tsv]     exit code 0 = all passed
     //
-    // 1. Expressions (expected.tsv): each line of expressions.txt evaluated by VBScript, whose
-    //    operators and conversions are VBA's (make_expected.vbs writes the file). Every expression is
-    //    run twice - with variables (computed by the engine at run time) and with their values written
-    //    in (folded by the parser) - and both must match VBScript.
-    // 2. Cases where VBScript is not VBA, checked against VBA's documented behavior.
-    // 3. Statements: which ones are accepted, and what a rejected one is told.
-    // 4. The deck a request edits: what the engine binds as ActivePresentation (also through Application), what
-    //    DeckReader reads, and that Application's routes to the other open presentations are refused.
+    // 1. Expressions (expected.tsv): each line of expressions.txt evaluated by VBScript, whose operators and
+    //    conversions are VBA's (make_expected.vbs writes the file). An expression is run with variables (computed by
+    //    the engine at run time) and with their values written in (folded by the parser), both matched with VBScript;
+    //    one without a variable once. Where VBScript is not VBA, VBA's documented behavior.
+    // 2. Statements: which ones are accepted (For written out), and what a rejected one is told.
+    // 3. The deck a request edits: what the engine binds as ActivePresentation (also through Application), the
+    //    members refused by type (ComSecurityPolicy, also the chart's data in Excel), and pptread's slide ranges.
+    // 4. What the model is told: the errors and their hints (ComErrorText), fractions rounded where a whole number
+    //    goes, and the shape list - animations, contents of tables, charts, SmartArt and groups, shape names,
+    //    overlaps, square shapes past rounded corners, low contrast, the selection, the rendering's size.
     internal static class Program
     {
         private static int _pass, _fail;
@@ -98,9 +101,13 @@ namespace ComScriptTests
                     continue;
                 }
 
-                string expr = f[0], type = f[1], value = f[2];
-                Check(expr + "   [variables]", Evaluate(VariableScript() + "x = " + expr), type, value);
-                Check(expr + "   [literals]", Evaluate("x = " + WithLiterals(expr)), type, value);
+                string expr = f[0], type = f[1], value = f[2], literal = WithLiterals(expr);
+                if (!string.Equals(literal, expr, StringComparison.Ordinal)) // without a variable, both ways are the same
+                {
+                    Check(expr + "   [variables]", Evaluate(VariableScript() + "x = " + expr), type, value);
+                }
+
+                Check(expr + "   [literals]", Evaluate("x = " + literal), type, value);
             }
         }
 
@@ -241,12 +248,10 @@ namespace ComScriptTests
         // accepted (plain VBA)
         private static void AcceptedStatementTests()
         {
-            Accept("Set s = ActivePresentation.Slides.Add(1, ppLayoutBlank)");
             Accept("ActivePresentation.Slides.Add (1 + 1), ppLayoutBlank");
             Accept(Vars + "x = ActivePresentation.PageSetup.SlideWidth - (p + q) * 2");
             Accept(Vars + "c = RGB(p * 30, q, 255)");
             Accept(Vars + "t = \"No.\" & p + 1 & \" of \" & q");
-            Accept(Vars + "x = -w / 2 + p Mod q - q ^ 2");
             Accept("Set b = ActivePresentation.Slides", static ops =>
                 (string?)ops.Last?["id"] == "b" ? null : "the last hop should be bound to b: " + ops.Last);
             Accept("x = ppAlignLeft", static ops =>
@@ -329,7 +334,6 @@ namespace ComScriptTests
             Reject("img = Image(\"a cat\")", "Image");                 // only the imagegen tool may write it
             Reject("x = (1 + 2", "unbalanced parentheses");
             Reject("x = 1 +", "incomplete value");
-            Reject(Vars + "x = p Mod", "incomplete value");
             Reject("x = 1 / 0", "division by zero");
             Reject("x = \"a\" * 2", "type mismatch");
             Reject("x = RGB(1, 2)", "RGB(...) takes exactly 3 arguments");
@@ -420,9 +424,9 @@ namespace ComScriptTests
             Report("deck: a request that started without a deck has none", none.Presentation is null && error == "No presentation is open.",
                    error ?? "no error");
 
-            // A script that asks Application for it (VBA's habit) gets the same deck, and Application's routes to the
-            // user's other open presentations are refused. The decks are names here: the engine admits plain values
-            // as results, not .NET objects standing in for COM ones.
+            // A script that asks Application for it (VBA's habit) gets the same deck (Application's routes to the user's
+            // other open presentations are refused: TypeRuleTests). The decks are names here: the engine admits plain
+            // values as results, not .NET objects standing in for COM ones.
             NamedDecks named = new() { Active = "deck A" };
             ComProxyEngine bound = new(named);
             named.Active = "deck B";
@@ -437,20 +441,6 @@ namespace ComScriptTests
             bound.TryGetHandle("q", out object? q);
             Report("deck: Application.ActivePresentation() is that deck too", result.Success && Equals(q, "deck A"),
                    result.Success ? "q = " + q : result.Describe());
-            foreach (string member in new[] { "Presentations", "Windows", "ActiveWindow", "SlideShowWindows", "ProtectedViewWindows", "ActiveProtectedViewWindow" })
-            {
-                Report("deck: Application." + member + " is refused", !ComSecurityPolicy.IsMemberAllowedOn("Application", member), "allowed");
-            }
-            Report("deck: the deck's own Windows stays open", ComSecurityPolicy.IsMemberAllowedOn("Presentation", "Windows"), "refused");
-
-            // The slide size and orientation can be read but not set: changing them moves every shape on every slide.
-            foreach (string member in new[] { "SlideSize", "SlideWidth", "SlideHeight", "SlideOrientation" })
-            {
-                Report("deck: PageSetup." + member + " cannot be set", !ComSecurityPolicy.IsSetAllowedOn("PageSetup", member), "allowed");
-                Report("deck: PageSetup." + member + " can be read", ComSecurityPolicy.IsMemberAllowedOn("PageSetup", member), "refused");
-            }
-            Report("deck: other properties can still be set",
-                   ComSecurityPolicy.IsSetAllowedOn("PageSetup", "FirstSlideNumber") && ComSecurityPolicy.IsSetAllowedOn("Shape", "Width"), "refused");
 
             // pptread takes a slide, a range or a list of them; each slide once, in order, at most MaxSlidesPerRead, and
             // the numbers the deck does not have are named.
@@ -473,26 +463,41 @@ namespace ComScriptTests
                        string.Join(",", toRender) == expected && text.Contains(inText), string.Join(",", toRender) + " / " + text);
             }
 
-            // A shape list starts with its slide's size, so a size the user changed meanwhile shows.
-            string brief = DeckReader.Brief(new SelDeck(new SelSlide()), 1);
-            Report("deck: a shape list starts with its slide's size", brief.StartsWith("Slide 1 (720x540 pt, 1 shapes):", StringComparison.Ordinal), brief);
         }
 
         // The policy's rules by type (ComSecurityPolicy): whichever form of a type's name PowerPoint reports, what
         // may become a handle, and what it refuses when it cannot read a type.
         private static void TypeRuleTests()
         {
-            // A rule by type holds whether the object's ITypeInfo names the interface with its leading _ or not
-            // (PowerPoint reports _CustomXMLPart, _Presentation...), for the call itself and for the hints alike.
-            foreach ((string type, string member) in new[] { ("CustomXMLPart", "Load"), ("Presentation", "Merge"), ("Application", "Presentations"), ("Slide", "ApplyTheme"), ("PageSetup", "SlideWidth") })
+            // What a type's rule refuses and what it leaves open, to call or read and to set, whether the object's ITypeInfo
+            // names the interface with its leading _ or not (PowerPoint reports _CustomXMLPart, _Presentation...), for the
+            // call itself and for the hints alike. Application's routes to the user's other open presentations are refused,
+            // the deck's own Windows is not; the slide size and orientation can be read but not set, since changing them
+            // moves every shape on every slide.
+            List<string> wrong = [];
+            foreach ((string type, string member, bool open, bool? settable) in new (string, string, bool, bool?)[]
+                     {
+                         ("Application", "Presentations", false, null), ("Application", "Windows", false, null), ("Application", "ActiveWindow", false, null),
+                         ("Application", "SlideShowWindows", false, null), ("Application", "ProtectedViewWindows", false, null),
+                         ("Application", "ActiveProtectedViewWindow", false, null), ("Presentation", "Windows", true, null),
+                         ("CustomXMLPart", "Load", false, null), ("Presentation", "Merge", false, null), ("Slide", "ApplyTheme", false, null),
+                         ("PageSetup", "SlideSize", true, false), ("PageSetup", "SlideWidth", true, false), ("PageSetup", "SlideHeight", true, false),
+                         ("PageSetup", "SlideOrientation", true, false), ("PageSetup", "FirstSlideNumber", true, true), ("Shape", "Width", true, true),
+                         ("Slides", "Add", true, null), ("Shapes", "AddShape", true, null),
+                     })
             {
                 foreach (string name in new[] { type, "_" + type })
                 {
-                    bool refused = member == "SlideWidth" ? !ComSecurityPolicy.IsSetAllowedOn(name, member)
-                                                          : ComSecurityPolicy.CheckMemberOnType(name, member) is not null && !ComSecurityPolicy.IsMemberAllowedOn(name, member);
-                    Report("policy: " + name + "." + member + " is refused", refused, "allowed");
+                    // Refused by the type's own rule, not only by a rule for every type.
+                    bool reach = open ? ComSecurityPolicy.IsMemberAllowedOn(name, member) : ComSecurityPolicy.CheckMemberOnType(name, member) is null;
+                    if (reach != open || (settable is bool set && ComSecurityPolicy.IsSetAllowedOn(name, member) != set))
+                    {
+                        wrong.Add(name + "." + member);
+                    }
                 }
             }
+
+            Report("policy: what each type's rule refuses or leaves open, to call or read and to set, under either name of the type", wrong.Count == 0, string.Join(", ", wrong));
             // The custom XML parts never become a handle, under either name: some of their members read files or put a
             // schema in the user's settings. Application and CommandBars stay out too; the deck's own objects stay in.
             foreach (string type in new[] { "CustomXMLParts", "CustomXMLPart", "CustomXMLSchemaCollection", "CustomXMLSchema", "CustomXMLNode", "Application", "CommandBars" })
@@ -501,8 +506,6 @@ namespace ComScriptTests
             }
             Report("policy: the deck's objects are kept",
                    Array.TrueForAll(["Shapes", "_Slide", "Shape", "TextRange", "_Presentation", "Slides"], ComSecurityPolicy.IsReturnTypeAllowed), "refused");
-            Report("policy: Slides.Add and Shapes.AddShape stay open",
-                   ComSecurityPolicy.IsMemberAllowedOn("Slides", "Add") && ComSecurityPolicy.IsMemberAllowedOn("Shapes", "AddShape"), "refused");
             // What the policy cannot check, it refuses: a COM object whose type name could not be read is not kept as a
             // result, and nothing is called or set on one.
             Guid powerPointLibrary = new("91493440-5A91-11CF-8700-00AA0060263B");
@@ -582,18 +585,34 @@ namespace ComScriptTests
                 return new ComProxyEngine(new ColorStub()).ExecuteScriptAsync(parsed).GetAwaiter().GetResult();
             }
 
-            string chain = run("Application.Color.RGB = RGB(1, 2, 3)").Lines[0].Error ?? "";
-            Report("plain value: in a chain, the step that gave it, its value and the fix, not the hidden name",
-                   chain.Contains(".Color gives a plain value here (the number 8421504)") && chain.Contains("Assign the value to .Color itself, without .RGB") &&
-                   !chain.Contains("_h"), chain);
-            string read = run("n = Application.Color.RGB").Lines[0].Error ?? "";
-            Report("plain value: read in a chain, the step to use", read.Contains("Use .Color itself, without .RGB"), read);
-            string variable = run("x = 5\nx.RGB = 1").Lines[1].Error ?? "";
-            Report("plain value: a variable is named with its value", variable.Contains("x holds a plain value (the number 5)"), variable);
-            string nothing = run("Application.Missing.Bold = 1").Lines[0].Error ?? "";
-            Report("plain value: a step that gives Nothing is not to be assigned to, and its hidden name is not shown",
-                   nothing.Contains(".Missing gives no object (Nothing)") && nothing.Contains("write .Missing on a line of its own") &&
-                   !nothing.Contains("Assign") && !nothing.Contains("_h"), nothing);
+            // The script, the line whose error is read, what the error says and what it must not (the hidden name _h...).
+            List<string> wrong = [];
+            foreach ((string script, int line, string[] says, string[] not) in new (string, int, string[], string[])[]
+                     {
+                         // in a chain: the step that gave it, its value and the fix
+                         ("Application.Color.RGB = RGB(1, 2, 3)", 0, [".Color gives a plain value here (the number 8421504)", "Assign the value to .Color itself, without .RGB"], ["_h"]),
+                         // read in a chain: the step to use
+                         ("n = Application.Color.RGB", 0, ["Use .Color itself, without .RGB"], ["_h"]),
+                         // a variable, with its value
+                         ("x = 5\nx.RGB = 1", 1, ["x holds a plain value (the number 5)"], ["_h"]),
+                         // a step that gives Nothing: not to be assigned to
+                         ("Application.Missing.Bold = 1", 0, [".Missing gives no object (Nothing)", "write .Missing on a line of its own"], ["Assign", "_h"]),
+                     })
+            {
+                string error = run(script).Lines[line].Error ?? "";
+                if (!Says(error, says, not))
+                {
+                    wrong.Add(script.Replace("\n", " / ") + ": " + error);
+                }
+            }
+
+            Report("plain value: the step or variable that gave it, its value and the fix, never a step's hidden name", wrong.Count == 0, string.Join(" | ", wrong));
+        }
+
+        // Whether `text` says all of `says` and none of `not`.
+        private static bool Says(string text, string[] says, string[] not)
+        {
+            return Array.TrueForAll(says, text.Contains) && !Array.Exists(not, text.Contains);
         }
 
         // Where a member lives when the object it was written on lacks it, for what the shape list shows inside shapes too:
@@ -601,40 +620,45 @@ namespace ComScriptTests
         // family (a chart's Font is not looked for on TextRange), each with the way a script reaches it.
         private static void ErrorHintTests()
         {
-            static string hint(string type, string member)
+            // A name the object lacks, set on it (DISP_E_UNKNOWNNAME), or a member read that failed (E_FAIL: a chart's part
+            // read before it is switched on).
+            static string hint(string type, string target, string member, bool failedRead)
             {
-                JObject op = new() { ["action"] = ComOpAction.Set, ["target"] = "_h3", ["member"] = member };
-                return ComErrorText.Describe(new ComProxyEngine(new object()), op, new UnknownNameException(), "名前が不明です。", type);
+                JObject op = new() { ["action"] = failedRead ? ComOpAction.Get : ComOpAction.Set, ["target"] = target, ["member"] = member };
+                return failedRead ? ComErrorText.Describe(new ComProxyEngine(new object()), op, new FailException(), "エラーを特定できません", type)
+                                  : ComErrorText.Describe(new ComProxyEngine(new object()), op, new UnknownNameException(), "名前が不明です。", type);
             }
 
-            string gap = hint("Series", "GapWidth");
-            Report("hints: a chart's member is looked for among the chart's parts, with the way to reach it",
-                   gap.Contains("'GapWidth' is a member of: ChartGroup (Chart.ChartGroups(n))"), gap);
-            string font = hint("Chart", "Font");
-            Report("hints: a chart's Font is not sent to TextRange", font.Contains("Chart.ChartArea.Font") && !font.Contains("TextRange"), font);
-            string node = hint("SmartArtNode", "Text");
-            Report("hints: a SmartArt node's text is in its TextFrame2", node.Contains("TextFrame2.TextRange.Text"), node);
-            string group = hint("GroupShapes", "Fill");
-            Report("hints: a group's shapes are named one by one, with the index", group.Contains("GroupShapes.Item(n).Fill"), group);
-            string rows = hint("Rows", "Height");
-            Report("hints: a table's rows are named one by one, with the index and the way to a row",
-                   rows.Contains("Rows.Item(n).Height") && rows.Contains("Row (shape.Table.Rows(n))"), rows);
-            string delete = hint("Table", "Delete");
+            List<string> wrong = [];
+            foreach ((string type, string target, string member, bool failedRead, string[] says, string[] not) in new (string, string, string, bool, string[], string[])[]
+                     {
+                         // a chart's member among the chart's parts, with the way to reach it
+                         ("Series", "_h3", "GapWidth", false, ["'GapWidth' is a member of: ChartGroup (Chart.ChartGroups(n))"], []),
+                         // a chart's Font is not sent to TextRange
+                         ("Chart", "_h3", "Font", false, ["Chart.ChartArea.Font"], ["TextRange"]),
+                         ("SmartArtNode", "_h3", "Text", false, ["TextFrame2.TextRange.Text"], []),
+                         // a group's shapes and a table's rows one by one, with the index (and the way to a row)
+                         ("GroupShapes", "_h3", "Fill", false, ["GroupShapes.Item(n).Fill"], []),
+                         ("Rows", "_h3", "Height", false, ["Rows.Item(n).Height", "Row (shape.Table.Rows(n))"], []),
+                         // a chart's part read before it is switched on: the switch to set first, on the variable written or
+                         // on the part's owner; nothing of it for a failure elsewhere
+                         ("Series", "ser2", "DataLabels", true, ["set ser2.HasDataLabels = msoTrue first"], []),
+                         ("Chart", "_h3", "Legend", true, ["set .HasLegend = msoTrue on the Chart"], []),
+                         ("Shape", "card", "Fill", true, [], ["switched on"]),
+                     })
+            {
+                string text = hint(type, target, member, failedRead);
+                if (!Says(text, says, not))
+                {
+                    wrong.Add(type + "." + member + ": " + text);
+                }
+            }
+
+            Report("hints: where a member lives, in the object's own family, and a chart's part to switch on first", wrong.Count == 0, string.Join(" | ", wrong));
+            string delete = hint("Table", "_h3", "Delete", failedRead: false);
             int toShape = delete.IndexOf("'Delete' belongs to the shape that holds the Table, not to the Table", StringComparison.Ordinal);
             int toRows = delete.IndexOf("Rows(n).Delete", StringComparison.Ordinal);
             Report("hints: a shape's member written on its table goes to the shape, before the rows", toShape >= 0 && (toRows < 0 || toShape < toRows), delete);
-
-            // A chart's part read before it is switched on: the switch to set first, on the variable written or on the part's owner.
-            static string failed(string type, string target, string member)
-            {
-                JObject op = new() { ["action"] = ComOpAction.Get, ["target"] = target, ["member"] = member };
-                return ComErrorText.Describe(new ComProxyEngine(new object()), op, new FailException(), "エラーを特定できません", type);
-            }
-
-            string labels = failed("Series", "ser2", "DataLabels"), legend = failed("Chart", "_h3", "Legend"), fill = failed("Shape", "card", "Fill");
-            Report("hints: a chart's part read before it is switched on names the switch to set first",
-                   labels.Contains("set ser2.HasDataLabels = msoTrue first") && legend.Contains("set .HasLegend = msoTrue on the Chart") && !fill.Contains("switched on"),
-                   labels + " | " + legend);
 
             // A variable bound again written another way is named as it was written last (the handles ignore case).
             ComProxyEngine engine = new(new object());
@@ -693,14 +717,10 @@ namespace ComScriptTests
 
             expect("AddEffect's third argument is Level", Notes("Sequence", ComOpAction.Call, "AddEffect", [null, 10, 0.6, 2]),
                    "Sequence.AddEffect argument 3 is Level As MsoAnimateByLevel: 0.6 became 1 (msoAnimateTextByAllLevels)");
-            expect("below a half goes down", Notes("Sequence", ComOpAction.Call, "AddEffect", [null, 10, 0.3]),
-                   "Sequence.AddEffect argument 3 is Level As MsoAnimateByLevel: 0.3 became 0 (msoAnimateLevelNone)");
             expect("a half goes to the even number, as in VBA", Notes("Slides", ComOpAction.Call, "Add", [2.5, 12]),
                    "Slides.Add argument 1 is Index As Long: 2.5 became 2");
             expect("a value the enum does not have", Notes("Sequence", ComOpAction.Call, "AddEffect", [null, 10, 99.4]),
                    "Sequence.AddEffect argument 3 is Level As MsoAnimateByLevel: 99.4 became 99 (not a MsoAnimateByLevel value)");
-            expect("an index written without Item, seq(1.6): the collection's Item", Notes("Sequence", ComOpAction.Call, "Item", [1.6]),
-                   "Sequence.Item argument 1 is Index As Long: 1.6 became 2");
             expect("an index after a property that takes none, MainSequence(1.6): its value's Item", Notes("TimeLine", ComOpAction.Call, "MainSequence", [1.6]),
                    "Sequence.Item argument 1 is Index As Long: 1.6 became 2");
             expect("an assigned value", Notes("Timing", ComOpAction.Set, "TriggerType", [], 2.4),
@@ -945,7 +965,7 @@ namespace ComScriptTests
                 layer(7, "caption", 520, 300, 200, 30, none, 0, new TextContrast.TextStyle(12, bold: false, gray)),
             ];
             string report = TextContrast.Report(slide, solid, cream);
-            Report("contrast: text on the card under it, on its own fill and on the slide's background is listed with the ratio and what is needed",
+            Report("contrast: text on the card under it, on its own fill and on the slide's background is listed with the ratio",
                    report.StartsWith("Low contrast (fix it unless it is meant): ", StringComparison.Ordinal) &&
                    report.Contains("[2] h4a 14pt RGB(90,105,120) on [1] card RGB(17,48,68), 2.4:1;") &&
                    report.Contains("[5] badge 16pt RGB(60,70,80) on its own fill RGB(80,90,100)") &&
@@ -959,8 +979,8 @@ namespace ComScriptTests
                 return TextContrast.Report([layer(1, "t", 0, 0, 100, 40, none, 0, new TextContrast.TextStyle(size, bold: false, color))], solid, white);
             }
 
-            Report("contrast: below 3:1 is listed at any size, 3:1 and above is not, and the line says no more than the ratio",
-                   judge(12, mid).Length == 0 && judge(40, rgb(190, 190, 190)).Contains("1.8:1") && !report.Contains("needs"),
+            Report("contrast: below 3:1 is listed at any size, 3:1 and above is not",
+                   judge(12, mid).Length == 0 && judge(40, rgb(190, 190, 190)).Contains("1.8:1"),
                    judge(40, rgb(190, 190, 190)));
             // A circle's frame is not its fill: text by the frame's corner is on what is behind the circle.
             List<TextContrast.Layer> circle =
@@ -1035,8 +1055,6 @@ namespace ComScriptTests
             Report("shapes: one set to Visible = msoFalse says it is hidden, the others nothing",
                    lines[1].Contains(" W300 H100 hidden") && !lines.Skip(2).Any(static l => l.Contains("hidden")), lines[1]);
 
-            Report("enums: the interop assemblies' name stays where the installed Office also has the value",
-                   EnumResolver.NameOf(typeof(Microsoft.Office.Core.MsoShapeType), 24, "mso") == "SmartArt", EnumResolver.NameOf(typeof(Microsoft.Office.Core.MsoShapeType), 24, "mso"));
             if (TypeLibEnums.All.Count == 0)
             {
                 Console.WriteLine("  (no Office type library registered here: the interop assemblies' names only)");

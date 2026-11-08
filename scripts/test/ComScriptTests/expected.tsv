@@ -11,6 +11,7 @@ p Mod q	Integer	1
 -p Mod q	Integer	-1
 r Mod q	Long	0
 p Mod -3	Integer	1
+-h / 2 + p Mod q - q ^ 2	Double	-4.25
 2 ^ 3 ^ 2	Double	64
 q ^ -1	Double	0.5
 q ^ 0.5	Double	1.4142135623731

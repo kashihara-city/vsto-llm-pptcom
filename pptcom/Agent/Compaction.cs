@@ -12,8 +12,8 @@ namespace Pptcom.Agent
     // pay that each time. First the model writes notes on the request with all of it in view (compaction-prompt.txt,
     // sent after the conversation as it is: only that message and the turn's results are new to the server). Then the
     // older reasoning, pptcom scripts, docread texts and shape lists leave, and the notes go last. The last KeepRecent
-    // turns stay whole; so do the tool results and the newest rendering of each slide. Without notes only the scripts and
-    // the document texts leave: the reasoning would then be all that tells what the model was doing.
+    // turns stay whole; so do the tool results and the newest rendering of each slide. Without notes nothing leaves and
+    // the request stops (ThisAddIn.CompactAsync): what would leave is all that tells what the model was doing.
     internal static class Compaction
     {
         public const int KeepRecent = 2;

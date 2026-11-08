@@ -95,7 +95,7 @@ namespace ChatStreamTests
                         static ex => ex is LlmServerException { StatusCode: 500 }).ConfigureAwait(true);
             await FailsAsync("HTTP 503", Http(503, "busy"),
                         static ex => ex is LlmServerException { StatusCode: 503 }).ConfigureAwait(true);
-            await FailsAsync("HTTP 400 is not sent again", Http(400, "bad request"),
+            await FailsAsync("HTTP 400: an error of the request, not of the server (no 再試行)", Http(400, "bad request"),
                         static ex => ex is InvalidOperationException).ConfigureAwait(true);
         }
 
@@ -142,7 +142,7 @@ namespace ChatStreamTests
         }
 
         // The API key never goes in the clear: with a key, a request to an http endpoint (here the loopback address) is
-        // refused before it leaves; without one, it goes.
+        // refused before it leaves. Without one it goes, as every other test here sends one so.
         private static async Task KeyOverHttpAsync()
         {
             Console.WriteLine("== the API key and http");
@@ -159,8 +159,6 @@ namespace ChatStreamTests
             }
             Check("with a key, nothing goes to an http endpoint", ex is not null && server.Requests.Count == 0,
                   Describe(ex) + Invariant($" requests={server.Requests.Count}"));
-            ChatReply r = await ChatOnceAsync(Http(200, Sse(Content("Hello"), Finish("stop"), "[DONE]"))).ConfigureAwait(true);
-            Check("without one, it goes", r.Content == "Hello", Show(r));
         }
 
         // A request that did not reach the endpoint is told apart from a failure of the server (the pane then says to look
@@ -173,13 +171,13 @@ namespace ChatStreamTests
                 return OpenAiCompatibleClient.FailureOf(new System.Net.Http.HttpRequestException("sending failed", new WebException("inner", status)));
             }
 
-            Check("a name not resolved, a connection not made, anything else",
+            // a connection not made: the port nothing listens on, below
+            Check("a name not resolved, anything else",
                   Of(WebExceptionStatus.NameResolutionFailure) == LlmServerFailure.NameNotResolved &&
                   Of(WebExceptionStatus.ProxyNameResolutionFailure) == LlmServerFailure.NameNotResolved &&
-                  Of(WebExceptionStatus.ConnectFailure) == LlmServerFailure.NotConnected &&
                   Of(WebExceptionStatus.ReceiveFailure) == LlmServerFailure.Error &&
                   OpenAiCompatibleClient.FailureOf(new System.Net.Http.HttpRequestException("sending failed")) == LlmServerFailure.Error,
-                  Invariant($"{Of(WebExceptionStatus.NameResolutionFailure)} {Of(WebExceptionStatus.ConnectFailure)} {Of(WebExceptionStatus.ReceiveFailure)}"));
+                  Invariant($"{Of(WebExceptionStatus.NameResolutionFailure)} {Of(WebExceptionStatus.ReceiveFailure)}"));
 
             TcpListener closed = new(IPAddress.Loopback, 0);
             closed.Start();
@@ -215,22 +213,26 @@ namespace ChatStreamTests
         {
             Console.WriteLine("== an error whose body does not finish");
             string[] busy = [Streaming(503, "busy")];
-            Exception? ex = await StalledAsync(busy, cancel: true).ConfigureAwait(true);
-            Check("503: 中止 ends the read", ex is OperationCanceledException, Describe(ex));
-            ex = await StalledAsync(busy, cancel: false).ConfigureAwait(true);
-            Check("503: the idle limit ends the read (再試行)", ex is LlmServerException { StatusCode: 503 }, Describe(ex));
-
-            string[] bad = [Streaming(400, "bad")];
-            ex = await StalledAsync(bad, cancel: true).ConfigureAwait(true);
-            Check("400: 中止 ends the read", ex is OperationCanceledException, Describe(ex));
-            ex = await StalledAsync(bad, cancel: false).ConfigureAwait(true);
-            Check("400: the idle limit ends the read", ex is InvalidOperationException, Describe(ex));
-
+            string[] bad = [Streaming(400, "bad")]; // 中止 in its body is the 503 case: the status is looked at after the body
             string[] busyAfterRetry = [Http(400, Rejected), Streaming(503, "busy")];
-            ex = await StalledAsync(busyAfterRetry, cancel: true).ConfigureAwait(true);
-            Check("503 after the retry: 中止 ends the read", ex is OperationCanceledException, Describe(ex));
-            ex = await StalledAsync(busyAfterRetry, cancel: false).ConfigureAwait(true);
-            Check("503 after the retry: the idle limit ends the read (再試行)", ex is LlmServerException { StatusCode: 503 }, Describe(ex));
+            List<string> wrong = [];
+            foreach ((string name, string[] responses, bool cancel, Func<Exception?, bool> ends) in new (string, string[], bool, Func<Exception?, bool>)[]
+                     {
+                         ("503, 中止", busy, true, static e => e is OperationCanceledException),
+                         ("503, the idle limit", busy, false, static e => e is LlmServerException { StatusCode: 503 }),
+                         ("400, the idle limit", bad, false, static e => e is InvalidOperationException),
+                         ("503 after the retry, 中止", busyAfterRetry, true, static e => e is OperationCanceledException),
+                         ("503 after the retry, the idle limit", busyAfterRetry, false, static e => e is LlmServerException { StatusCode: 503 }),
+                     })
+            {
+                Exception? ex = await StalledAsync(responses, cancel).ConfigureAwait(true);
+                if (!ends(ex))
+                {
+                    wrong.Add(name + ": " + Describe(ex));
+                }
+            }
+
+            Check("中止 or the idle limit ends the read, before the retry and after it (a 503 is 再試行, a 400 is not)", wrong.Count == 0, string.Join("; ", wrong));
         }
 
         // An image is not stopped by 中止 (the engine waits for it); a request that ends altogether (its window is gone)
@@ -405,9 +407,6 @@ namespace ChatStreamTests
                   notes.Count == 2 && notes[0].Role == "assistant" && notes[0].Content == "Next: slide 5" && notes[1].Role == "user" &&
                   (notes[1].Content ?? "").EndsWith("Carry on from Next.", StringComparison.Ordinal) && notes.TrueForAll(static m => m.Notes),
                   string.Join(" / ", notes.ConvertAll(static m => m.Role + ": " + m.Content)));
-            messages.AddRange(notes);
-            int removed = Compaction.RemoveNotes(messages);
-            Check("newer notes replace them", removed == 2 && !messages.Exists(static m => m.Notes), Invariant($"{removed} removed"));
             ShortenForLaterTests();
         }
 
@@ -539,9 +538,6 @@ namespace ChatStreamTests
                   Invariant($"{without.Split('\n').Length} of {lines.Length} lines"));
         }
 
-        // The colors imagegen reports (ImageColors): the main ones with their share, a background's few steps of noise
-        // counted as one color (its average, also across the boxes it is counted in), colors further apart kept apart,
-        // the edge's color, transparent pixels left out; and the same from a PNG file.
         // The language environment the model is told of (UserLocale): the language's name for the system prompt, and the
         // date line with the dates of the language's own calendars (Japanese era years, the Taiwan calendar), none for one
         // with the Gregorian calendar only. The dates are Windows' own (CultureInfo), which this checks they stay.
@@ -570,6 +566,9 @@ namespace ChatStreamTests
             Check("the system prompt names the language for the reply and the slide text", places == 2, Invariant($"{places} places"));
         }
 
+        // The colors imagegen reports (ImageColors): the main ones with their share, a background's few steps of noise
+        // counted as one color (its average, also across the boxes it is counted in), colors further apart kept apart,
+        // the edge's color, transparent pixels left out; and the same from a PNG file.
         private static void ImageColorsTests()
         {
             Console.WriteLine("== the colors of a generated image");

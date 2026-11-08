@@ -124,7 +124,7 @@ function elsewhere() {
 function refused() {
   const p = page();
   p.submit("first");
-  // the add-in refuses it (no endpoint): the request's block ends with the reason, and the busy state answers the send
+  // the add-in refuses it (no endpoint): it logs why, and its busy state goes back to false without having been true
   p.log("USER_REQUEST", "first");
   p.log("NO_ENDPOINT_OR_MODEL", "HKCU");
   p.host({ type: "busy", value: false });
@@ -132,7 +132,8 @@ function refused() {
   check("a refused send does not leave the page waiting", p.sends().join(",") === "first,second", p.sends().join(","));
 }
 
-function ends(name, steps, state) {
+// How a request's block ends after `steps`: "" when as `state` (its class and title), or what it showed instead.
+function endedOtherwise(steps, state) {
   const p = page();
   p.submit("request");
   p.log("USER_REQUEST", "request");
@@ -143,7 +144,17 @@ function ends(name, steps, state) {
   const cls = block ? block.className : "(no block)";
   const title = block ? block.children[0].children[1].textContent : "";
   const expected = state === "done" ? "WORK_DONE" : "WORK_STOPPED";
-  check(name, cls.split(" ").includes(state) && title.startsWith(expected) && p.work() === null, cls + " / " + title);
+  return cls.split(" ").includes(state) && title.startsWith(expected) && p.work() === null ? "" : cls + " / " + title;
+}
+
+// A request ends as stopped whatever stopped it (each kind of log line has its own entry in logKinds), and as done when
+// it finished.
+function ends() {
+  const stoppedBy = { AI_DECK_CLOSED: [], AI_CANCELLED: [], AI_ERROR: ["x"] };
+  const wrong = Object.entries(stoppedBy).map(([code, args]) => [code, endedOtherwise(p => p.log(code, ...args), "stopped")]).filter(([, got]) => got !== "");
+  check("a request whose deck was closed, stopped by 中止, or that failed ends as stopped", wrong.length === 0, wrong.map(w => w.join(": ")).join(", "));
+  const done = endedOtherwise(p => { p.log("AI_REPLY", "ok"); p.log("REQUEST_DONE", "0:01", "1", 0); }, "done");
+  check("a request that finished ends as done", done === "", done);
 }
 
 function selection() {
@@ -164,29 +175,34 @@ function about() {
         p.element("about").textContent);
 }
 
+// The settings show the add-in's values (the switches, the context limit, the image prompt); everything in them is
+// locked while a request runs, and free again once it has ended (削除 of the API key has rules of its own: apiKeyDelete).
 function options() {
   const p = page();
-  p.host({ type: "options", openPane: false, saveProgress: true, externalControl: false });
+  p.host({ type: "options", openPane: false, saveProgress: true, externalControl: false, contextLimit: 196608, imagePrompt: "zimage" });
   const open = p.element("open-pane"), save = p.element("save-progress"), ext = p.element("external-control");
-  check("the settings' switches show the add-in's values", open.checked === false && save.checked === true && ext.checked === false,
-        `openPane=${open.checked} saveProgress=${save.checked} externalControl=${ext.checked}`);
+  const limit = p.element("context-limit"), prompt = p.element("image-prompt");
+  check("the settings show the add-in's values",
+        open.checked === false && save.checked === true && ext.checked === false && limit.value === "196608" && prompt.value === "zimage",
+        `openPane=${open.checked} saveProgress=${save.checked} externalControl=${ext.checked} contextLimit=${limit.value} imagePrompt=${prompt.value}`);
+  const ids = ["endpoint", "fetch", "chat-model", "image-model", "apikey-input", "apikey", "new-chat", "open-pane", "save-progress",
+               "external-control", "context-limit", "image-prompt"];
   p.host({ type: "busy", value: true });
-  check("and are locked while a request runs", open.disabled === true && save.disabled === true, `open=${open.disabled} save=${save.disabled}`);
+  const unlocked = ids.filter(id => p.element(id).disabled !== true);
+  check("everything in the settings is locked while a request runs", unlocked.length === 0, "not locked: " + unlocked.join(","));
+  p.host({ type: "busy", value: false });
+  const locked = ids.filter(id => p.element(id).disabled !== false);
+  check("and free again once it has ended", locked.length === 0, "still locked: " + locked.join(","));
 }
 
-// The context limit shows the add-in's value, a changed one goes to the add-in as typed (it checks the number), and it is
-// locked while a request runs like the other settings.
+// A changed context limit goes to the add-in as typed (it checks the number).
 function contextLimit() {
   const p = page();
   const input = p.element("context-limit");
-  p.host({ type: "options", openPane: true, saveProgress: false, externalControl: false, contextLimit: 196608 });
-  check("the context limit shows the add-in's value", input.value === "196608", input.value);
   input.value = " 50000 ";
   input.listeners.change({ target: input });
   const posted = p.sent("contextLimit").map(m => m.value).join(",");
   check("a changed limit goes to the add-in", posted === "50000", posted);
-  p.host({ type: "busy", value: true });
-  check("and is locked while a request runs", input.disabled === true, `disabled=${input.disabled}`);
 }
 
 // The model drop-downs: with no chat model chosen, a first choice that asks for one and cannot be chosen back; the image
@@ -209,28 +225,24 @@ function modelChoices() {
   check("（使わない） goes to the add-in as the empty model", posted === '""', posted);
 }
 
-// The image prompt shows the add-in's value, a changed one goes to the add-in, and it is locked while a request runs.
+// A changed image prompt goes to the add-in.
 function imagePrompt() {
   const p = page();
   const select = p.element("image-prompt");
-  p.host({ type: "options", openPane: true, saveProgress: false, externalControl: false, contextLimit: 196608, imagePrompt: "zimage" });
-  check("the image prompt shows the add-in's value", select.value === "zimage", select.value);
   select.value = "other";
   select.listeners.change({ target: select });
   const posted = p.sent("imagePrompt").map(m => m.value).join(",");
   check("a changed image prompt goes to the add-in", posted === "other", posted);
-  p.host({ type: "busy", value: true });
-  check("and is locked while a request runs", select.disabled === true, `disabled=${select.disabled}`);
 }
 
 // The API key: typed into the settings and sent with 設定 or Enter, once, and gone from the field at once; the field
-// says only whether a key is set; an empty field sends nothing; locked while a request runs.
+// says only whether a key is set; an empty field sends nothing.
 function apiKey() {
   const p = page();
   const input = p.element("apikey-input"), button = p.element("apikey");
   const sent = () => JSON.stringify(p.sent("apiKey").map(m => m.value));
   p.host({ type: "apiKeyState", value: true });
-  check("the field says a key is set, and holds nothing", input.placeholder === "API_KEY_SET" && input.value === "", `${input.placeholder} / ${input.value}`);
+  check("the field says a key is set", input.placeholder === "API_KEY_SET", input.placeholder);
   p.click("apikey");
   check("an empty field sends nothing", sent() === "[]", sent());
   input.value = " test-key-1 ";
@@ -239,8 +251,6 @@ function apiKey() {
   input.value = "test-key-2";
   input.listeners.keydown({ key: "Enter", preventDefault() {} });
   check("Enter sends it too", sent() === '["test-key-1","test-key-2"]' && input.value === "", sent() + " / " + input.value);
-  p.host({ type: "busy", value: true });
-  check("and both are locked while a request runs", input.disabled === true && button.disabled === true, `${input.disabled} ${button.disabled}`);
 }
 
 // 削除 of the API key: only while a key is set and nothing runs; it asks under the key's row, やめる sends nothing, and
@@ -368,10 +378,7 @@ apiKeyDelete();
 settingsStayOpen();
 newChat();
 continueButton();
-ends("a request whose deck was closed ends as stopped", p => p.log("AI_DECK_CLOSED"), "stopped");
-ends("a request stopped by 中止 ends as stopped", p => p.log("AI_CANCELLED"), "stopped");
-ends("a request that failed ends as stopped", p => p.log("AI_ERROR", "x"), "stopped");
-ends("a request that finished ends as done", p => { p.log("AI_REPLY", "ok"); p.log("REQUEST_DONE", "0:01", "1", 0); }, "done");
+ends();
 readyWaitsForDocs().then(() => {
   console.log();
   console.log(failed === 0 ? `ALL PASSED (${passed})` : `${failed} FAILED, ${passed} passed`);

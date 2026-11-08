@@ -2,7 +2,8 @@
 # Variables: p = 7, q = 2, r = -7.5, h = 2.5, z = 0, s = "10", t = "ab", u = True
 # make_expected.vbs evaluates each line with VBScript and writes expected.tsv; ComScriptTests
 # evaluates it twice with pptcom - with the variables (run time, engine) and with their values
-# written in (folded by the parser) - and compares both with VBScript.
+# written in (folded by the parser) - and compares both with VBScript; an expression without a
+# variable once, as both ways are the same.
 # Not here: -q ^ 2. VBScript gives 4, but VBA puts ^ above unary minus (-4); Program.cs checks it
 # against VBA instead. Checked in PowerPoint's VBA on 2026-10-14: every other line gives the same
 # value (or an error) in VBA as in VBScript; only the error numbers differ (7 / 0: VBA 6, VBScript 11).
@@ -19,6 +20,7 @@ p Mod q
 -p Mod q
 r Mod q
 p Mod -3
+-h / 2 + p Mod q - q ^ 2
 2 ^ 3 ^ 2
 q ^ -1
 q ^ 0.5

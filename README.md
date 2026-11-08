@@ -226,7 +226,7 @@ C#のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.N
 
 本物のPowerPointやLLMを使うので、CIでは流しません。
 
-- `scripts/test/ComScriptRunner`: PowerPointを外から動かし、アドインと同じ解析・実行・検査でpptcomスクリプトを流す
+- `scripts/test/ComScriptRunner`: PowerPointを外から動かし、アドインと同じ解析・実行・検査でpptcomスクリプトを流す（CIでは、ビルドの警告を確かめるために組むだけ）
 - `scripts/test/drive_addin.ps1`: 本物のアドインを外から操作する（依頼、新しい会話、中止、添付、続ける）。作業ウィンドウの設定で「他のプログラムからの操作を許可する」をオンにしてから使う
 - 記録の集計と実験: `usage_report.py`（COMの呼び出しの集計）、`used_members.py`（モデルが使ったCOMのメンバー）、`extract_corpus.py`（過去のスクリプトを集め、パーサの変更の前後で比べる）
 

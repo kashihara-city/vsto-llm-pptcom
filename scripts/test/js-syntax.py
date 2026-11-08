@@ -1,4 +1,4 @@
-"""Check that the task pane's own JavaScript parses (pptcom/UI/web/*.js; the vendor/ copies are not ours).
+"""Check that the task pane's own JavaScript parses (pptcom/UI/web/*.js).
 
 Node's --check reads a file without running it. index.html loads some files as classic scripts; every other one
 is a module (a <script type="module">, a module worker or an import). A module is checked as a copy named .mjs,

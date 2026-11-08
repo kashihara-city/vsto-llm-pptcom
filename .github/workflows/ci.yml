@@ -69,7 +69,7 @@ jobs:
       - name: Check the task pane's JavaScript
         shell: pwsh
         run: |
-          # The page's own scripts parse (node --check); the vendor/ copies are not checked.
+          # The page's own scripts (pptcom/UI/web/*.js) parse (node --check).
           python -X utf8 scripts/test/js-syntax.py
           if ($LASTEXITCODE -ne 0) { throw "a script of the task pane does not parse" }
 
@@ -77,7 +77,7 @@ jobs:
         shell: pwsh
         run: |
           # The task pane's docs.js, in a stand-in for the browser: every file is announced before it is read, and
-          # ends with attach or attachFailed whatever fails, while the next ones go on.
+          # ends with attach or attachFailed whatever fails, while the next ones go on; pictures and pasting.
           node scripts/test/docs-queue.cjs
           if ($LASTEXITCODE -ne 0) { throw "attachment tests failed" }
 
@@ -85,7 +85,8 @@ jobs:
         shell: pwsh
         run: |
           # The task pane's taskpane.js, in a stand-in for the browser: one request at a time (also before the
-          # add-in's busy state arrives), how a request's end shows, and 続ける after the turn limit.
+          # add-in's busy state arrives), how a request's end shows, 続ける after the turn limit, the settings (switches,
+          # context limit, models, image prompt, the API key), the selection line and 新しい会話.
           node scripts/test/taskpane.cjs
           if ($LASTEXITCODE -ne 0) { throw "task pane tests failed" }
 
