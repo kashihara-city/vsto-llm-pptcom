@@ -44,6 +44,13 @@
     <Compile Include="..\..\..\pptcom\Agent\LlmServerException.cs" />
     <Compile Include="..\..\..\pptcom\Agent\LlmServerFailure.cs" />
     <Compile Include="..\..\..\pptcom\Agent\UserLocale.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\IRequestTools.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\IRequestView.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\RequestRunner.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\RequestSettings.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\RequestState.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\ToolResult.cs" />
+    <Compile Include="..\..\..\pptcom\UI\PaneText.cs" />
     <Compile Include="..\..\..\pptcom\Documents\PendingDocuments.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\Guard.cs" />
     <Compile Include="..\..\..\pptcom\Polyfills\RequiredMemberAttribute.cs" />

@@ -211,7 +211,7 @@ C#のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.N
 | 実行するもの | 調べること |
 |---|---|
 | `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcomスクリプトの解析と実行（式の値はVBScriptとVBAの値と照らす）。断る文とメンバー、依頼のプレゼンテーションの固定、グラフのデータで使えるもの。モデルへの報告（エラーの案内、引数の丸め、図形一覧の中身とアニメーション、背景に対して見えにくい文字、角丸の角からはみ出す四角い図形） |
-| `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMとの通信（応答の読み取り、失敗の見分け、中止と待ち時間、APIキーの扱い）。モデルに渡すもの（ツールとシステムプロンプト、会話の短縮、表示言語と日付、画像の色） |
+| `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMとの通信（応答の読み取り、失敗の見分け、中止と待ち時間、APIキーの扱い）。依頼のターン（作業ウィンドウとPowerPointは偽物で、ツールの実行、ターンの上限、再試行と中止、文脈の上限での会話の短縮）。モデルに渡すもの（ツールとシステムプロンプト、会話の短縮、表示言語と日付、画像の色）。添付の受け付け |
 | `node scripts/test/docs-queue.cjs` | 作業ウィンドウの添付（`docs.js`）。どこで失敗しても後のファイルが続くこと、画像と貼り付けの扱い |
 | `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼の送り方と終わり方、「続ける」、設定欄、APIキーの入力と削除 |
 | `python -X utf8 scripts/test/js-syntax.py` | 作業ウィンドウのJavaScriptが構文として読めること |

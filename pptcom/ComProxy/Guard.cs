@@ -20,6 +20,22 @@ namespace Pptcom.ComProxy
                      ThreadAbortException);
         }
 
+        // "message -> inner message -> ...": a failed connection says why only in its inner exceptions.
+        public static string MessagesOf(Exception ex)
+        {
+            string text = ex.Message;
+            for (Exception inner = ex.InnerException; inner is not null; inner = inner.InnerException)
+            {
+                // an outer message that already ends with its inner one (LlmServerException) says it once
+                if (!text.EndsWith(inner.Message, StringComparison.Ordinal))
+                {
+                    text += " -> " + inner.Message;
+                }
+            }
+
+            return text;
+        }
+
         // A best-effort read of the deck, for a property a shape may not have (an effect without a direction, a chart
         // without a title): its value, or `fallback` when reading it fails.
         public static T Try<T>(Func<T> read, T fallback)

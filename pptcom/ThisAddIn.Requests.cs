@@ -15,7 +15,8 @@ using static System.FormattableString;
 
 namespace Pptcom
 {
-    // The add-in, by area (ThisAddIn.cs): a request, from its send to its end: the context it goes with, its turns, shortening, its run folder.
+    // The add-in, by area (ThisAddIn.cs): a request, from its send to its end: the context it goes with, its turns (handed to
+    // RequestRunner), what it leaves for the next requests, its run folder.
     public partial class ThisAddIn
     {
         // What goes between the time line and the request in the user message: the attached documents and
@@ -172,7 +173,7 @@ namespace Pptcom
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
-                string detail = MessagesOf(ex);
+                string detail = Guard.MessagesOf(ex);
                 pane.Control.Log("AI_ERROR", detail);
                 LogToFile("!!! " + detail);
             }
@@ -225,8 +226,8 @@ namespace Pptcom
                 await RunAgentAsync(userMessage, run).ConfigureAwait(true);
                 // max_turns: the model was still calling tools when the turn limit stopped it. max_tokens: a reply
                 // reached the output limit before it said anything to do (see RunAgentAsync).
-                run.Outcome = run.DeckClosed ? "deck_closed" : run.HitTurnLimit ? "max_turns" : run.HitTokenLimit ? "max_tokens" :
-                              run.ContextFull ? "context_full" : run.CompactionFailed ? "compaction_failed" : "completed";
+                run.Outcome = run.State.DeckClosed ? "deck_closed" : run.State.HitTurnLimit ? "max_turns" : run.State.HitTokenLimit ? "max_tokens" :
+                              run.State.ContextFull ? "context_full" : run.State.CompactionFailed ? "compaction_failed" : "completed";
             }
             catch (OperationCanceledException)
             {
@@ -236,7 +237,7 @@ namespace Pptcom
             catch (Exception ex)
             {
                 run.Outcome = "error: " + ex.Message;
-                run.ErrorDetail = MessagesOf(ex);
+                run.ErrorDetail = Guard.MessagesOf(ex);
                 throw;
             }
             finally
@@ -290,22 +291,12 @@ namespace Pptcom
         private sealed class RunRecord
         {
             public required string Request;
+            public readonly RequestState State = new(); // what its turns came to (RequestRunner)
             public bool Continues;             // 続ける: it carries on the request that stopped at the turn limit
             public required WindowPane Pane;   // where it was sent from: its messages go there
             public DateTime Started;
             public string Outcome = "unknown";
-            public int Turns;
             public int ContextLimit;           // AddinSettings.ContextLimit when it started
-            public int Compactions;            // how many times its conversation was shortened with notes (CompactAsync)
-            public int CompactedAfter;         // the turn after which it was last shortened; 0: not yet
-            public int ReasoningChars;
-            public int ScriptLines;
-            public int ServerErrors;
-            public bool HitTurnLimit;
-            public bool HitTokenLimit;
-            public bool DeckClosed;
-            public bool ContextFull;           // stopped: still near the context limit right after being shortened
-            public bool CompactionFailed;      // stopped: its conversation passed the context limit and could not be shortened
             public string? ErrorDetail;        // the error it ended with, as the pane showed it (AI_ERROR)
             public bool WindowGone;            // its window was closed while it ran (StopForGoneWindow)
             // The endpoint and models it was sent with (a model list may arrive meanwhile and change the settings).
@@ -313,7 +304,6 @@ namespace Pptcom
             public required string Model;
             public required string ImageModel;
             public required string ImagePrompt;
-            public string? FinalReply;
             public Conversation? Conversation; // null until the request has one (it may fail before)
             public ComProxyEngine? Engine;
             public int MissingSetBefore;    // the engine lives across requests; count this request's only
@@ -322,9 +312,7 @@ namespace Pptcom
             public ChatMessage? OwnMessage;  // this request's user message in Messages (not its index: notes before it may leave)
             public string? HandEdits;        // what the user had changed by hand before it (ContextBeforeRequest)
             public string? Selection;        // one line on what the user had selected when sending it (DeckReader.DescribeSelection)
-            public readonly List<string> ToolLines = []; // "[2] pptcom -> OK: ..." as the pane shows them
             public DeckDefaults? DeckDefaults;
-            public readonly List<string> Renders = [];
             public readonly System.Text.StringBuilder Log = new();
         }
 
@@ -389,7 +377,7 @@ namespace Pptcom
             JObject summary = RunSummary(run);
             if (!_saveProgress)
             {
-                foreach (string f in run.Renders)
+                foreach (string f in run.State.Renders)
                 {
                     TryDelete(f);
                 }
@@ -479,7 +467,7 @@ namespace Pptcom
                 }
             }
 
-            foreach (string f in run.Renders)
+            foreach (string f in run.State.Renders)
             {
                 temp.Add(new KeyValuePair<string, string>("renders", f));
             }
@@ -523,22 +511,22 @@ namespace Pptcom
                 ["started"] = run.Started.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture),
                 ["total_sec"] = Math.Round((DateTime.Now - run.Started).TotalSeconds, 1, MidpointRounding.AwayFromZero),
                 ["outcome"] = run.Outcome,
-                ["turns"] = run.Turns,
-                ["reasoning_chars_total"] = run.ReasoningChars,
-                ["script_lines"] = run.ScriptLines,
-                ["server_errors"] = run.ServerErrors,
+                ["turns"] = run.State.Turns,
+                ["reasoning_chars_total"] = run.State.ReasoningChars,
+                ["script_lines"] = run.State.ScriptLines,
+                ["server_errors"] = run.State.ServerErrors,
                 // Statements that put an object into a variable without Set (accepted, only counted).
                 ["missing_set"] = run.Engine is not null ? run.Engine.MissingSetStatements.Count - run.MissingSetBefore : 0,
                 ["missing_set_examples"] = run.Engine is not null ? new JArray(run.Engine.MissingSetStatements.Skip(run.MissingSetBefore).Take(5)) : [],
                 ["earlier_messages"] = run.EarlierMessages,
                 ["continues"] = run.Continues, // 続ける: carried on the request before it, which stopped at the turn limit
                 ["context_limit"] = run.ContextLimit,
-                ["compactions"] = run.Compactions,
+                ["compactions"] = run.State.Compactions,
                 ["hand_edits"] = run.HandEdits,
                 ["documents"] = run.Conversation is not null ? new JArray(run.Conversation.Documents.Select(static d => d.Describe())) : [],
                 // what the task pane showed: each tool call's first result line, and the model's reply
-                ["tools"] = new JArray(run.ToolLines),
-                ["reply"] = run.FinalReply,
+                ["tools"] = new JArray(run.State.ToolLines),
+                ["reply"] = run.State.FinalReply,
                 ["model"] = run.Model,
                 ["image_model"] = run.ImageModel,
                 ["image_prompt"] = run.ImagePrompt,
@@ -592,20 +580,20 @@ namespace Pptcom
         // Completed by the task pane's 再試行 button; cancelled by 中止 (the request's token).
         private TaskCompletionSource<bool>? _retryWait; // set while a request waits for 再試行
 
-        private async Task WaitForRetryAsync(RunRecord run, CancellationToken ct)
+        private async Task WaitForRetryAsync(WindowPane pane, CancellationToken ct)
         {
             TaskCompletionSource<bool> wait = new();
             _retryWait = wait;
             using (ct.Register(() => wait.TrySetCanceled(ct)))
             {
-                run.Pane.Control.ShowRetry(show: true);
+                pane.Control.ShowRetry(show: true);
                 try
                 {
                     await wait.Task.ConfigureAwait(true);
                 }
                 finally
                 {
-                    run.Pane.Control.ShowRetry(show: false);
+                    pane.Control.ShowRetry(show: false);
                     _retryWait = null;
                 }
             }
@@ -663,78 +651,51 @@ namespace Pptcom
             run.Conversation = conversation;
             run.Engine = engine;
             run.MissingSetBefore = engine.MissingSetStatements.Count;
-            List<string> knownIds = conversation.KnownIds;
             List<ChatMessage> messages = StartMessages(userMessage, run, conversation);
-            DateTime requestStart = DateTime.Now;
-            int totalReasoningChars = 0;
-            int totalLines = 0;
-
-            for (int turn = 1; turn <= MaxTurns; turn++)
+            // the tools offered stay the same through the request: its documents do not change meanwhile (DocumentsLocked)
+            RequestSettings settings = new()
             {
-                CancellationToken ct = _cancel.Token;
-                ChatReply reply = await ChatTurnAsync(messages, conversation, run, turn, ct).ConfigureAwait(true);
-                totalReasoningChars += reply.Reasoning.Length;
-                run.Turns = turn;
-                run.ReasoningChars = totalReasoningChars;
-                run.ScriptLines = totalLines;
-                messages.Add(reply.AsMessage());
-                LogTurn(run, turn, reply);
-                if (reply.ToolCalls.Count == 0)
-                {
-                    // finish_reason "length": the reply reached max_tokens before it was done (a thinking model can
-                    // spend it all on reasoning). It is no answer, and sending it again would end the same way.
-                    bool cut = reply.FinishReason == "length";
-                    string text = reply.Content.Trim();
-                    run.FinalReply = text;
-                    if (text.Length > 0)
-                    {
-                        run.Pane.Control.Log("AI_REPLY", text);
-                    }
-                    else if (!cut)
-                    {
-                        run.Pane.Control.Log("AI_DONE");
-                    }
+                Llm = conversation.Llm,
+                Tools = ToolsFor(conversation),
+                ContextLimit = run.ContextLimit,
+                MaxTurns = MaxTurns,
+                CompactionPrompt = CompactionPrompt,
+            };
+            RequestRunner runner = new(settings, run.State, new PaneView(this, run.Pane), new DeckTools(run, engine, conversation.KnownIds), LogToFile);
+            await runner.RunAsync(messages, _cancel.Token).ConfigureAwait(true);
+        }
 
-                    if (cut)
-                    {
-                        run.HitTokenLimit = true;
-                        run.Pane.Control.Log("AI_REPLY_CUT", conversation.Llm.MaxTokens);
-                    }
-
-                    break;
-                }
-
-                // The user may close the deck while the model thinks: its scripts would then fail, and the
-                // model would go on trying until the turn limit.
-                if (WasClosed(engine.Presentation))
-                {
-                    run.DeckClosed = true;
-                    run.Pane.Control.Log("AI_DECK_CLOSED");
-                    LogToFile("!!! the presentation this request works on was closed");
-                    return;
-                }
-
-                // run.ScriptLines kept current: a cancelled request's summary says whether anything ran.
-                await RunToolCallsAsync(engine, knownIds, reply, turn, run, messages, r =>
-                {
-                    totalLines += r;
-                    run.ScriptLines = totalLines;
-                }, ct).ConfigureAwait(true);
-
-                if (turn == MaxTurns)
-                {
-                    run.HitTurnLimit = true;
-                    run.Pane.Control.Log("AI_TURN_LIMIT", MaxTurns);
-                }
-                else if (!await KeepsRoomAsync(run, messages, conversation, turn, reply.PromptTokens, ct).ConfigureAwait(true))
-                {
-                    break;
-                }
+        // The request's task pane, as RequestRunner tells the user what happens.
+        private sealed class PaneView(ThisAddIn addin, WindowPane pane) : IRequestView
+        {
+            public void Log(string code, params object[] args)
+            {
+                pane.Control.Log(code, args);
             }
 
-            run.ScriptLines = totalLines;
-            TimeSpan elapsed = DateTime.Now - requestStart;
-            run.Pane.Control.Log("REQUEST_DONE", elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture), Chars(totalReasoningChars), totalLines);
+            public void SetStatus(string code, params object[] args)
+            {
+                pane.Control.SetStatus(code, args);
+            }
+
+            public async Task WaitForRetryAsync(CancellationToken ct)
+            {
+                await addin.WaitForRetryAsync(pane, ct).ConfigureAwait(true);
+            }
+        }
+
+        // What RequestRunner does in PowerPoint: the conversation's engine and the deck it works on.
+        private sealed class DeckTools(RunRecord run, ComProxyEngine engine, List<string> knownIds) : IRequestTools
+        {
+            public bool DeckClosed()
+            {
+                return WasClosed(engine.Presentation);
+            }
+
+            public async Task<ToolResult> RunAsync(ToolCall call)
+            {
+                return await RunToolAsync(run, engine, knownIds, call).ConfigureAwait(true);
+            }
         }
 
         // The presentation was closed: its object then answers every call with an error (0x80048010). It is not
@@ -756,189 +717,6 @@ namespace Pptcom
             {
                 return true;
             }
-        }
-
-        // The model's reply for this turn. A failure on the server side (5xx, a dropped connection) is not resent by
-        // itself: the run waits with its state intact (conversation, variables, generated images) until the user
-        // presses 再試行 (resend this turn as is) or 中止 (WaitForRetryAsync throws OperationCanceledException).
-        private async Task<ChatReply> ChatTurnAsync(List<ChatMessage> messages, Conversation conversation, RunRecord run, int turn, CancellationToken ct)
-        {
-            while (true)
-            {
-                try
-                {
-                    return await conversation.Llm.ChatAsync(messages, ToolsFor(conversation), p =>
-                        run.Pane.Control.SetStatus("STATUS_TURN", turn, Chars(p.ReasoningChars), Chars(p.ContentChars + p.ToolArgChars),
-                                               p.Elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture)),
-                        ct).ConfigureAwait(true);
-                }
-                catch (LlmServerException ex)
-                {
-                    ShowServerFailure(run, ex, conversation.Llm, turn, Invariant($"at turn {turn}"));
-                    await WaitForRetryAsync(run, ct).ConfigureAwait(true); // throws OperationCanceledException on 中止
-                    LogToFile(Invariant($"(retry requested by the user, turn {turn})"));
-                }
-            }
-        }
-
-        // A failure on the server side, or on the way to it, as the pane and the session log tell it; the run then waits
-        // for 再試行. The log has every inner exception: the outer ones only say that sending failed. A request that did
-        // not reach the endpoint is told apart, as the network is to be looked at, not the server.
-        private static void ShowServerFailure(RunRecord run, LlmServerException ex, OpenAiCompatibleClient llm, int turn, string when)
-        {
-            run.ServerErrors++;
-            LogToFile("!!! server error " + when + ": " + MessagesOf(ex));
-            bool unreachable = ex.Failure is LlmServerFailure.NameNotResolved or LlmServerFailure.NotConnected;
-            run.Pane.Control.Log(unreachable ? "AI_SERVER_UNREACHABLE" : "AI_SERVER_ERROR", ServerFailureText(ex, llm));
-            run.Pane.Control.SetStatus(unreachable ? "STATUS_SERVER_UNREACHABLE" : "STATUS_SERVER_ERROR", turn);
-        }
-
-        private static PaneText ServerFailureText(LlmServerException ex, OpenAiCompatibleClient llm)
-        {
-            if (ex.StatusCode is not null)
-            {
-                return PaneText.Of("HTTP_STATUS", ex.StatusCode.Value);
-            }
-
-            string host = Uri.TryCreate(llm.BaseUrl, UriKind.Absolute, out Uri? uri) ? uri.Authority : llm.BaseUrl;
-            return ex.Failure switch
-            {
-                LlmServerFailure.NameNotResolved => PaneText.Of("NAME_NOT_RESOLVED", host),
-                LlmServerFailure.NotConnected => PaneText.Of("NOT_CONNECTED", host),
-                LlmServerFailure.Stalled => PaneText.Of("STREAM_STALLED", (int)llm.StreamIdleLimit.TotalMinutes),
-                LlmServerFailure.Incomplete => PaneText.Of("STREAM_INCOMPLETE"),
-                _ => PaneText.Of("CONNECTION_DROPPED"),
-            };
-        }
-
-        private static void LogTurn(RunRecord run, int turn, ChatReply reply)
-        {
-            LogToFile(Invariant($"--- turn {turn} ({reply.Elapsed.TotalSeconds:F0} s, reasoning {reply.Reasoning.Length} chars, finish {reply.FinishReason}") +
-                      Invariant($", first token {Secs(reply.FirstToken)} s, first output {Secs(reply.FirstOutput)} s, prompt {reply.PromptTokens} tok") +
-                      Invariant($", completion {reply.CompletionTokens} tok)") +
-                      "\nreasoning:\n" + reply.Reasoning + "\ncontent:\n" + reply.Content);
-            LogTurnSize(run, turn, reply);
-        }
-
-        // After a turn whose prompt took `promptTokens`: false when the request stops for want of room. A turn right after a
-        // shortening that still takes 90% of the context limit stops it (ContextFull): shortening again would leave little
-        // out. One past the limit has the conversation shortened (CompactAsync) - not again before the turns kept whole
-        // have gone by, as there would be nothing new to leave out - and stops it when that fails (CompactionFailed).
-        // Either way the next request goes with the shortened copy of this one, its notes and how it ended in it.
-        private async Task<bool> KeepsRoomAsync(RunRecord run, List<ChatMessage> messages, Conversation conversation, int turn, int promptTokens,
-                                                CancellationToken ct)
-        {
-            if (run.CompactedAfter > 0 && turn == run.CompactedAfter + 1 && promptTokens > run.ContextLimit / 10 * 9)
-            {
-                run.ContextFull = true;
-                run.Pane.Control.Log("AI_CONTEXT_FULL");
-                LogToFile(Invariant($"!!! prompt {promptTokens} tok right after the conversation was shortened, over 90% of the context limit {run.ContextLimit}: the request stops"));
-                return false;
-            }
-
-            if (promptTokens <= run.ContextLimit || turn - run.CompactedAfter <= Compaction.KeepRecent)
-            {
-                return true;
-            }
-
-            if (await CompactAsync(run, messages, conversation, turn, promptTokens, ct).ConfigureAwait(true))
-            {
-                return true;
-            }
-
-            run.CompactionFailed = true;
-            run.Pane.Control.Log("AI_COMPACTION_FAILED");
-            LogToFile(Invariant($"!!! prompt {promptTokens} tok over the context limit {run.ContextLimit} and no notes to shorten the conversation with: the request stops"));
-            return false;
-        }
-
-        // The turn's prompt passed the context limit: the conversation is shortened all at once (Agent\Compaction.cs).
-        // The model writes notes on the request first, with all of it in view; then the notes of an earlier shortening
-        // and the older reasoning, scripts, document texts and shape lists leave, and the notes go last as the model's
-        // own words. False when there are no notes: nothing is left out then (the request stops).
-        private async Task<bool> CompactAsync(RunRecord run, List<ChatMessage> messages, Conversation conversation, int turn, int promptTokens, CancellationToken ct)
-        {
-            run.CompactedAfter = turn;
-            string? notes = await WriteNotesAsync(run, messages, conversation, turn, ct).ConfigureAwait(true);
-            if (notes is null)
-            {
-                return false;
-            }
-
-            int oldNotes = Compaction.RemoveNotes(messages);
-            int reasoning = Compaction.ElideOldReasoning(messages, Compaction.KeepRecent);
-            int scripts = Compaction.ElideOldScripts(messages, Compaction.KeepRecent);
-            int docReads = Compaction.ElideOldDocReads(messages, Compaction.KeepRecent);
-            int lists = Compaction.ElideOldShapeLists(messages, Compaction.KeepRecent);
-            messages.AddRange(Compaction.NotesMessages(notes));
-            run.Compactions++;
-            run.Pane.Control.Log("CONVERSATION_COMPACTED", Tokens(promptTokens), Tokens(run.ContextLimit));
-            LogToFile(Invariant($"(prompt {promptTokens} tok > context limit {run.ContextLimit}: left out the reasoning of {reasoning} turns, {scripts} pptcom scripts, ") +
-                      Invariant($"{docReads} docread texts, {lists} shape lists and {oldNotes / 2} earlier notes; the notes go last)"));
-            return true;
-        }
-
-        // The model's notes on the request (Agent\compaction-prompt.txt), or null when there are none. Asked for after
-        // the conversation as it is, with the same tools, which it may not call: the server has all of it but that last
-        // message and the turn's results in its prefix cache, so the notes cost little more than writing them. A failure
-        // on the server's side waits for 再試行 as a turn does (中止 ends the request); any other gives no notes.
-        private async Task<string?> WriteNotesAsync(RunRecord run, List<ChatMessage> messages, Conversation conversation, int turn, CancellationToken ct)
-        {
-            List<ChatMessage> asking = [.. messages, new ChatMessage("user", CompactionPrompt)];
-            ChatReply reply;
-            while (true)
-            {
-                run.Pane.Control.SetStatus("STATUS_COMPACTING", turn);
-                try
-                {
-                    reply = await conversation.Llm.ChatWithoutToolsAsync(asking, ToolsFor(conversation), p =>
-                        run.Pane.Control.SetStatus("STATUS_COMPACTING_PROGRESS", turn, Chars(p.ReasoningChars), Chars(p.ContentChars),
-                                                   p.Elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture)),
-                        ct).ConfigureAwait(true);
-                    break;
-                }
-                catch (LlmServerException ex)
-                {
-                    ShowServerFailure(run, ex, conversation.Llm, turn, Invariant($"while writing the notes after turn {turn}"));
-                    await WaitForRetryAsync(run, ct).ConfigureAwait(true); // throws OperationCanceledException on 中止
-                    LogToFile(Invariant($"(retry requested by the user, the notes after turn {turn})"));
-                }
-                catch (Exception ex) when (Guard.IsRecoverable(ex) && ex is not OperationCanceledException)
-                {
-                    LogToFile(Invariant($"!!! the notes after turn {turn} could not be written: ") + MessagesOf(ex));
-                    return null;
-                }
-            }
-            LogToFile(Invariant($"--- notes after turn {turn} ({reply.Elapsed.TotalSeconds:F0} s, reasoning {reply.Reasoning.Length} chars, finish {reply.FinishReason}") +
-                      Invariant($", first token {Secs(reply.FirstToken)} s, prompt {reply.PromptTokens} tok, completion {reply.CompletionTokens} tok)") +
-                      "\nreasoning:\n" + reply.Reasoning + "\ncontent:\n" + reply.Content);
-            if (reply.Content.Trim().Length == 0 && reply.Reasoning.Trim().Length > 0)
-            {
-                LogToFile("(the notes came as the reasoning, with an empty reply: the reasoning is taken as the notes)");
-            }
-
-            return Compaction.NotesOf(reply);
-        }
-
-        // One line per turn in the pane: how big the request was and what came back, e.g.
-        // "ターン3: 入力 5,632 tok / 出力 9,410 tok = 推論 26.6k字 + 本文 3.1k字 / 91秒" in Japanese.
-        // Token counts come from the server's usage; "-" when it did not report them.
-        private static void LogTurnSize(RunRecord run, int turn, ChatReply reply)
-        {
-            int written = reply.Content.Length + reply.ToolCalls.Sum(static c => (c.Arguments ?? "").Length);
-            run.Pane.Control.Log("TURN_SIZE", turn, Tokens(reply.PromptTokens), Tokens(reply.CompletionTokens),
-                             Chars(reply.Reasoning.Length), Chars(written), reply.Elapsed.TotalSeconds.ToString("F0", CultureInfo.InvariantCulture));
-        }
-
-        private static PaneText Tokens(int tokens)
-        {
-            return tokens > 0 ? PaneText.Of("TOKENS", tokens.ToString("N0", CultureInfo.InvariantCulture)) : PaneText.Of("TOKENS_UNKNOWN");
-        }
-
-        // 940 -> "940字", 26600 -> "26.6k字" in Japanese.
-        private static PaneText Chars(int chars)
-        {
-            return chars >= 1000 ? PaneText.Of("CHARS_THOUSANDS", (chars / 1000.0).ToString("F1", CultureInfo.InvariantCulture)) : PaneText.Of("CHARS", chars);
         }
 
         // "スライド 2・5 が手で変更されています。スライドが 1 枚削除されています" in Japanese.

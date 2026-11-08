@@ -48,6 +48,7 @@ namespace ChatStreamTests
             await ImagesAsync().ConfigureAwait(true);
             await ToolChoiceAsync().ConfigureAwait(true);
             await ModelListAsync().ConfigureAwait(true);
+            await RequestRunnerAsync().ConfigureAwait(true);
             CompactionTests();
             OfferedTests();
             ImageColorsTests();
@@ -604,6 +605,219 @@ namespace ChatStreamTests
             Check("a refused file's attachFailed is let go once; the latest failures are kept, oldest first",
                   letGo && p.Failed.Count == PendingDocuments<object>.MaxFailures && p.Failed[0] == "f2.pdf: malformed (x)" && !p.Reading.Any(),
                   string.Join(" | ", p.Failed.Take(2)));
+        }
+
+        // A request's turns (RequestRunner) against a fake server, with the task pane and PowerPoint as fakes (FakeView,
+        // FakeTools): how it ends - a reply, the turn limit, a closed deck, a reply cut at max_tokens -, its tool calls run
+        // and answered with their renderings (the newest of a slide only), 再試行 and 中止 after a failure on the server's
+        // side, and the context limit: the conversation shortened with notes, or the request stopped without them or with
+        // no room left right after.
+        private static async Task RequestRunnerAsync()
+        {
+            Console.WriteLine("== a request's turns");
+            Run done = await RunRequestAsync([Reply("done")]).ConfigureAwait(true);
+            Check("a reply without tool calls ends the request",
+                  done.State.Turns == 1 && done.State.FinalReply == "done" && done.Shows("TURN_SIZE,AI_REPLY,REQUEST_DONE") && done.Error is null, done.Describe());
+
+            Run tool = await RunRequestAsync([CallsTool("pptcom"), Reply("ok")]).ConfigureAwait(true);
+            Check("a tool call is run and answered, then the reply",
+                  string.Join(",", tool.Tools.Calls) == "pptcom" && tool.State.ScriptLines == 3 && tool.State.ToolLines.SequenceEqual(["[1] pptcom -> ran pptcom"], StringComparer.Ordinal) &&
+                  tool.Messages.Exists(static m => m.Role == "tool" && m.Content == "ran pptcom") && tool.Shows("TOOL_RESULT,TURN_SIZE,AI_REPLY,REQUEST_DONE"),
+                  tool.Describe());
+
+            Run limit = await RunRequestAsync([CallsTool("pptcom"), CallsTool("pptcom")], maxTurns: 2, tools: new FakeTools(renders: true)).ConfigureAwait(true);
+            List<SlideImage> images = [.. limit.Messages.Where(static m => m.Images is not null).SelectMany(static m => m.Images)];
+            Check("the turn limit stops a model still calling tools; a slide's rendering is sent, its older one left out",
+                  limit.State.HitTurnLimit && limit.State.Turns == 2 && limit.Shows("AI_TURN_LIMIT,REQUEST_DONE") && limit.State.Renders.Count == 2 &&
+                  images.Count == 2 && images[0].Png is null && images[1].Png is not null && images[1].Inventory == "the shape list",
+                  limit.Describe());
+
+            Run closed = await RunRequestAsync([CallsTool("pptcom")], tools: new FakeTools(closed: true)).ConfigureAwait(true);
+            Run cut = await RunRequestAsync([Http(200, Sse(Finish("length"), "[DONE]"))]).ConfigureAwait(true);
+            Check("a deck closed meanwhile stops the request before its tools run; a reply cut at max_tokens is no answer",
+                  closed.State.DeckClosed && closed.Tools.Calls.Count == 0 && closed.Shows("AI_DECK_CLOSED") && !closed.Shows("REQUEST_DONE") &&
+                  cut.State.HitTokenLimit && cut.Shows("AI_REPLY_CUT,REQUEST_DONE") && !cut.Shows("AI_DONE"),
+                  closed.Describe() + " | " + cut.Describe());
+
+            Run retried = await RunRequestAsync([Http(503, "busy"), Reply("ok")]).ConfigureAwait(true);
+            Run stopped = await RunRequestAsync([Http(503, "busy")], view: new FakeView(cancelRetry: true)).ConfigureAwait(true);
+            Check("a failure on the server's side waits for 再試行 and sends the turn again; 中止 meanwhile ends the request",
+                  retried.View.Retries == 1 && retried.State.ServerErrors == 1 && retried.Shows("AI_SERVER_ERROR,TURN_SIZE,AI_REPLY") &&
+                  stopped.Error is OperationCanceledException && stopped.Shows("AI_SERVER_ERROR") && !stopped.Shows("REQUEST_DONE"),
+                  retried.Describe() + " | " + stopped.Describe());
+
+            TcpListener port = new(IPAddress.Loopback, 0);
+            port.Start();
+            string nowhere = Invariant($"http://127.0.0.1:{((IPEndPoint)port.LocalEndpoint).Port}");
+            port.Stop();
+            Run unreachable = await RunRequestAsync([], view: new FakeView(cancelRetry: true), url: nowhere).ConfigureAwait(true);
+            Check("an endpoint not reached is told apart from a failure of the server", unreachable.Shows("AI_SERVER_UNREACHABLE"), unreachable.Describe());
+
+            // a prompt past the limit (1000) at the third turn, the first two being kept whole (Compaction.KeepRecent)
+            string[] growing = [CallsTool("pptcom", promptTokens: 500), CallsTool("pptcom", promptTokens: 600), CallsTool("pptcom", promptTokens: 2000)];
+            Run shortened = await RunRequestAsync([.. growing, Reply("the notes"), Reply("done", promptTokens: 400)], contextLimit: 1000).ConfigureAwait(true);
+            Check("past the context limit the conversation is shortened with the model's notes, and the request goes on",
+                  shortened.State.Compactions == 1 && shortened.State.CompactedAfter == 3 && shortened.Shows("CONVERSATION_COMPACTED,TURN_SIZE,AI_REPLY,REQUEST_DONE") &&
+                  shortened.Messages.Exists(static m => m.Notes && (m.Content ?? "").Contains("the notes")) && shortened.State.FinalReply == "done",
+                  shortened.Describe());
+
+            Run noNotes = await RunRequestAsync([.. growing, Reply("")], contextLimit: 1000).ConfigureAwait(true);
+            Run full = await RunRequestAsync([.. growing, Reply("the notes"), CallsTool("pptcom", promptTokens: 950)], contextLimit: 1000).ConfigureAwait(true);
+            Check("without notes the request stops; still past 90% of the limit right after being shortened, too",
+                  noNotes.State.CompactionFailed && noNotes.Shows("AI_COMPACTION_FAILED,REQUEST_DONE") && noNotes.State.Turns == 3 &&
+                  full.State.ContextFull && full.Shows("CONVERSATION_COMPACTED") && full.Shows("AI_CONTEXT_FULL,REQUEST_DONE") && full.State.Turns == 4,
+                  noNotes.Describe() + " | " + full.Describe());
+        }
+
+        // One request run by RequestRunner: what it came to, what the fakes saw, its conversation, and what it threw.
+        private sealed class Run(RequestState state, FakeView view, FakeTools tools, List<ChatMessage> messages, Exception? error)
+        {
+            public RequestState State { get; } = state;
+
+            public FakeView View { get; } = view;
+
+            public FakeTools Tools { get; } = tools;
+
+            public List<ChatMessage> Messages { get; } = messages;
+
+            public Exception? Error { get; } = error;
+
+            // Whether the pane was told these codes in this order (others may come between).
+            public bool Shows(string codes)
+            {
+                int at = 0;
+                foreach (string code in codes.Split(','))
+                {
+                    at = View.Codes.IndexOf(code, at);
+                    if (at < 0)
+                    {
+                        return false;
+                    }
+
+                    at++;
+                }
+
+                return true;
+            }
+
+            public string Describe()
+            {
+                return string.Join(",", View.Codes) + (Error is not null ? " / " + Error.GetType().Name + ": " + Error.Message : "");
+            }
+        }
+
+        private static async Task<Run> RunRequestAsync(string[] responses, int maxTurns = 20, int contextLimit = 100000, FakeView? view = null, FakeTools? tools = null,
+                                                       string? url = null)
+        {
+            using FakeServer server = new(responses, stall: false);
+            RequestSettings settings = new()
+            {
+                Llm = new OpenAiCompatibleClient(url ?? server.Url, "", "test-model"),
+                Tools = [],
+                ContextLimit = contextLimit,
+                MaxTurns = maxTurns,
+                CompactionPrompt = "Write notes on the request.",
+            };
+            RequestState state = new();
+            view ??= new FakeView(cancelRetry: false);
+            tools ??= new FakeTools();
+            List<ChatMessage> messages = [new ChatMessage("system", "You make slides."), new ChatMessage("user", "Make a slide.")];
+            Exception? error = null;
+            // A request that asks for more than the responses given waits for one that never comes: stopped, it fails.
+            using CancellationTokenSource tooLong = new(TimeSpan.FromSeconds(20));
+            try
+            {
+                await new RequestRunner(settings, state, view, tools, static _ => { }).RunAsync(messages, tooLong.Token).ConfigureAwait(true);
+            }
+            catch (Exception e) when (Guard.IsRecoverable(e))
+            {
+                error = e;
+            }
+
+            return new Run(state, view, tools, messages, error);
+        }
+
+        // The task pane as a request sees it: the codes it is told, in order; 再試行 pressed at once, or 中止 (`cancelRetry`).
+        private sealed class FakeView(bool cancelRetry) : IRequestView
+        {
+            public List<string> Codes { get; } = [];
+
+            public int Retries { get; private set; }
+
+            public void Log(string code, params object[] args)
+            {
+                Codes.Add(code);
+            }
+
+            public void SetStatus(string code, params object[] args)
+            {
+            }
+
+            public async Task WaitForRetryAsync(CancellationToken ct)
+            {
+                Retries++;
+                await Task.Yield();
+                if (cancelRetry)
+                {
+                    throw new OperationCanceledException("中止 pressed");
+                }
+            }
+        }
+
+        // PowerPoint as a request sees it: each tool call answered "ran <name>", 3 statements applied, with a rendering of
+        // slide 1 and its shape list (`renders`); or the deck closed (`closed`).
+        private sealed class FakeTools(bool closed = false, bool renders = false) : IRequestTools
+        {
+            private static readonly string Png = WritePng();
+
+            public List<string> Calls { get; } = [];
+
+            public bool DeckClosed()
+            {
+                return closed;
+            }
+
+            public Task<ToolResult> RunAsync(ToolCall call)
+            {
+                Calls.Add(call.Name);
+                ToolResult result = new("ran " + call.Name)
+                {
+                    LinesApplied = 3,
+                };
+                if (renders)
+                {
+                    result.Renders.Add(new KeyValuePair<string, string>("slide 1", Png));
+                    result.Inventories["slide 1"] = "the shape list";
+                }
+
+                return Task.FromResult(result);
+            }
+
+            private static string WritePng()
+            {
+                string path = Path.Combine(Path.GetTempPath(), "pptcom_runner_test.png");
+                File.WriteAllBytes(path, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+                return path;
+            }
+        }
+
+        // A streamed reply with text (and, when given, the prompt's size as the server reports it).
+        private static string Reply(string text, int promptTokens = 0)
+        {
+            return Http(200, Sse([.. Usage(promptTokens), Content(text), Finish("stop"), "[DONE]"]));
+        }
+
+        // A streamed reply that calls one tool.
+        private static string CallsTool(string name, int promptTokens = 0)
+        {
+            JObject call = new() { ["index"] = 0, ["id"] = "call_" + name, ["function"] = new JObject { ["name"] = name, ["arguments"] = "{\"script\":\"x = 1\"}" } };
+            string delta = new JObject { ["choices"] = new JArray(new JObject { ["delta"] = new JObject { ["tool_calls"] = new JArray(call) } }) }.ToString(Newtonsoft.Json.Formatting.None);
+            return Http(200, Sse([.. Usage(promptTokens), delta, Finish("tool_calls"), "[DONE]"]));
+        }
+
+        private static string[] Usage(int promptTokens)
+        {
+            return promptTokens > 0 ? [Invariant($"{{\"choices\":[],\"usage\":{{\"prompt_tokens\":{promptTokens},\"completion_tokens\":5}}}}")] : [];
         }
 
         // The colors imagegen reports (ImageColors): the main ones with their share, a background's few steps of noise

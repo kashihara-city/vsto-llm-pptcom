@@ -324,11 +324,11 @@ namespace Pptcom
                 ShowModels();
                 if (endpoint != _settings.Endpoint)
                 {
-                    Tell(asker, PaneText.Of("MODELS_FAILED_KEPT", endpoint, MessagesOf(ex), _settings.Endpoint));
+                    Tell(asker, PaneText.Of("MODELS_FAILED_KEPT", endpoint, Guard.MessagesOf(ex), _settings.Endpoint));
                 }
                 else
                 {
-                    Tell(asker, PaneText.Of("MODELS_FAILED", endpoint, MessagesOf(ex)));
+                    Tell(asker, PaneText.Of("MODELS_FAILED", endpoint, Guard.MessagesOf(ex)));
                 }
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
@@ -365,21 +365,6 @@ namespace Pptcom
             }
         }
 
-        // "message -> inner message -> ...": a failed connection says why only in its inner exceptions.
-        private static string MessagesOf(Exception ex)
-        {
-            string text = ex.Message;
-            for (Exception inner = ex.InnerException; inner is not null; inner = inner.InnerException)
-            {
-                // an outer message that already ends with its inner one (LlmServerException) says it once
-                if (!text.EndsWith(inner.Message, StringComparison.Ordinal))
-                {
-                    text += " -> " + inner.Message;
-                }
-            }
-
-            return text;
-        }
 
         // The endpoint answered with its models: it becomes the active one (saved), and the drop-downs show them.
         private void UseModelList(string endpoint, WindowPane? asker, List<ModelInfo> models)
@@ -449,8 +434,8 @@ namespace Pptcom
             _settings.Save();
             ShowOptions(except: null);
             Tell(asker, max is int m
-                ? PaneText.Of("CONTEXT_LIMIT_FROM_MODEL", Tokens(_settings.ContextLimit), model, Tokens(m))
-                : PaneText.Of("CONTEXT_LIMIT_DEFAULT", Tokens(_settings.ContextLimit), model));
+                ? PaneText.Of("CONTEXT_LIMIT_FROM_MODEL", RequestRunner.Tokens(_settings.ContextLimit), model, RequestRunner.Tokens(m))
+                : PaneText.Of("CONTEXT_LIMIT_DEFAULT", RequestRunner.Tokens(_settings.ContextLimit), model));
         }
 
         // A limit typed in the settings: a whole number of tokens in AddinSettings' range, or the pane shows the one in use again.
@@ -460,7 +445,7 @@ namespace Pptcom
                 limit < AddinSettings.MinContextLimit || limit > AddinSettings.MaxContextLimit)
             {
                 pane.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit, _settings.ImagePrompt);
-                pane.Control.Log("CONTEXT_LIMIT_INVALID", Tokens(AddinSettings.MinContextLimit), Tokens(AddinSettings.MaxContextLimit));
+                pane.Control.Log("CONTEXT_LIMIT_INVALID", RequestRunner.Tokens(AddinSettings.MinContextLimit), RequestRunner.Tokens(AddinSettings.MaxContextLimit));
                 return;
             }
 
@@ -473,7 +458,7 @@ namespace Pptcom
             _settings.ContextLimitSaved = true;
             _settings.Save();
             ShowOptions(except: pane);
-            pane.Control.Log("CONTEXT_LIMIT_SET", Tokens(limit));
+            pane.Control.Log("CONTEXT_LIMIT_SET", RequestRunner.Tokens(limit));
         }
 
         // An empty model is （使わない）: the requests from then on get no imagegen tool.
