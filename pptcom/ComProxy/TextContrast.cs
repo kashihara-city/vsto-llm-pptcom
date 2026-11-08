@@ -182,9 +182,7 @@ namespace Pptcom.ComProxy
                 return null;
             }
 
-            string held = DeckReader.VariablesOf(variables, slide, shape);
-            DeckReader.ShapeBox frame = new(index, held.Length > 2 ? held.Substring(2).Split(',')[0].Trim() : "",
-                                            (double)shape.Left, (double)shape.Top, (double)shape.Width, (double)shape.Height);
+            DeckReader.ShapeBox frame = DeckReader.FrameOf(slide, shape, index, variables);
             bool drawn = DrawnInside.Contains(type) ||
                          Guard.Try(() => (int)shape.HasChart != 0 || (int)shape.HasTable != 0 || (int)shape.HasSmartArt != 0, fallback: false);
             if (drawn)

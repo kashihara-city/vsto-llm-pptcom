@@ -58,6 +58,7 @@
     <Compile Include="..\..\..\pptcom\ComProxy\DeckReader.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\ShapeContents.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\TextContrast.cs" />
+    <Compile Include="..\..\..\pptcom\ComProxy\CornerBands.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\TypeLibEnums.cs" />
     <Compile Include="..\..\..\pptcom\AddinSettings.cs" />
     <Compile Include="..\..\..\pptcom\CredentialStore.cs" />

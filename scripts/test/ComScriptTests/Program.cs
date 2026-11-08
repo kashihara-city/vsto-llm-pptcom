@@ -58,6 +58,7 @@ namespace ComScriptTests
             ContentTests();
             ShapeNameTests();
             ContrastTests();
+            CornerBandTests();
             SelectionTests();
             RenderSizeTests();
             OverlapTests();
@@ -917,6 +918,33 @@ namespace ComScriptTests
                    judge(40, rgb(190, 190, 190)));
             Report("contrast: nothing is said when the slide's background cannot be judged (a picture, a gradient)",
                    TextContrast.Report([layer(1, "t", 0, 0, 100, 40, none, 0, new TextContrast.TextStyle(12, bold: false, mid))], unknown, 0).Length == 0, "");
+        }
+
+        // Square shapes standing out of a rounded rectangle's corners (CornerBands): a band across the top edge or along the
+        // bottom inside the frame, a stripe down the left side; not a band set in from the corners, not a background the card
+        // lies in, not over square corners.
+        private static void CornerBandTests()
+        {
+            DeckReader.ShapeBox card = new(7, "card", 40, 100, 300, 200);
+            CornerBands.Card rounded = new(card, 0.16667 * 200);
+            static DeckReader.ShapeBox band(int index, string name, double left, double top, double width, double height)
+            {
+                return new DeckReader.ShapeBox(index, name, left, top, width, height);
+            }
+
+            DeckReader.ShapeBox across = band(10, "top", 40, 96, 300, 10), inset = band(11, "inset", 80, 100, 220, 8), bottom = band(12, "foot", 40, 290, 300, 10),
+                                stripe = band(13, "side", 40, 100, 8, 200), background = band(1, "bg", 0, 0, 960, 540);
+            string report = CornerBands.Report([rounded], [across, inset, bottom, stripe, background]);
+            Report("corners: a band across the top, along the bottom or down the side stands out of the rounded corners it reaches",
+                   report.StartsWith("Past rounded corners (fix it unless it is meant): ", StringComparison.Ordinal) &&
+                   report.Contains("[10] top past the rounded top-left, top-right corners of [7] card") &&
+                   report.Contains("[12] foot past the rounded bottom-left, bottom-right corners of [7] card") &&
+                   report.Contains("[13] side past the rounded top-left, bottom-left corners of [7] card"),
+                   report);
+            Report("corners: a band set in from the corners, and a background the card lies in, are not listed",
+                   !report.Contains("inset") && !report.Contains("bg"), report);
+            Report("corners: nothing over square corners",
+                   CornerBands.Report([new CornerBands.Card(card, 0)], [across, bottom, stripe]).Length == 0, "");
         }
 
         private static void ShapeNameTests()

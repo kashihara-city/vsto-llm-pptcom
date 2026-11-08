@@ -241,8 +241,8 @@ namespace Pptcom.ComProxy
         //   Slide 3 (960x540 pt, 14 shapes):
         //   [13] = d2 RoundedRectangle L340 T412 W280 H100 fill RGB(255,255,255) line RGB(223,226,229) 1pt "品種は500以上" & vbCr & "..." | font 16pt RGB(40,40,40)
         //   Partly overlapping (fix it unless it is meant): [4] title and [6] badge, 120 x 6 pt
-        // then text whose color is too close to what is behind it (TextContrast), and then the slide's animations and
-        // transition, when it has any (DeckAnimations).
+        // then square shapes standing out of a rounded rectangle's corners (CornerBands), text whose color is too close to
+        // what is behind it (TextContrast), and then the slide's animations and transition, when it has any (DeckAnimations).
         // Names PowerPoint made up ("Rounded Rectangle 15") are left out, as the type says the same;
         // names a script gave are kept ('card1'). The text is complete, as a VBA literal.
         // Under a table, a chart, a SmartArt graphic or a group, what is in it (ShapeContents), up to `limits`
@@ -264,9 +264,7 @@ namespace Pptcom.ComProxy
                     dynamic shape = slide.Shapes(i);
                     if ((int)shape.Type != 9) // msoLine: a line crossing a box is how lines are drawn
                     {
-                        string held = VariablesOf(variables, slide, shape);
-                        ShapeBox frame = new(i, held.Length > 2 ? held.Substring(2).Split(',')[0].Trim() : "",
-                                             (double)shape.Left, (double)shape.Top, (double)shape.Width, (double)shape.Height);
+                        ShapeBox frame = FrameOf(slide, shape, i, variables);
                         bool frameShows = FrameShows(shape);
                         ShapeBox? text = TextBounds(shape);
                         ShapeBox? shown = Shown(frame, frameShows, text, (double)pres.PageSetup.SlideWidth, (double)pres.PageSetup.SlideHeight);
@@ -281,6 +279,7 @@ namespace Pptcom.ComProxy
                 }
             }
             sb.Append(Overlaps(boxes));
+            sb.Append(Guard.Try(() => CornerBands.Describe((object)slide, variables), ""));
             sb.Append(Guard.Try(() => TextContrast.Describe((object)slide, variables), ""));
             sb.Append(DeckAnimations.Describe((object)slide, slideIndex, variables));
             return sb.ToString();
@@ -360,6 +359,14 @@ namespace Pptcom.ComProxy
 
             dynamic range = shape.TextFrame.TextRange;
             return new ShapeBox(0, "", (double)range.BoundLeft, (double)range.BoundTop, (double)range.BoundWidth, (double)range.BoundHeight);
+        }
+
+        // A shape's frame, named by the first variable that holds it ("card1"), as the lines after the shape list name it.
+        internal static ShapeBox FrameOf(dynamic slide, dynamic shape, int index, IDictionary<string, List<string>>? variables)
+        {
+            string held = VariablesOf(variables, slide, shape);
+            return new ShapeBox(index, held.Length > 2 ? held.Substring(2).Split(',')[0].Trim() : "",
+                                (double)shape.Left, (double)shape.Top, (double)shape.Width, (double)shape.Height);
         }
 
         internal sealed class ShapeBox(int index, string variable, double left, double top, double width, double height)
@@ -790,7 +797,7 @@ namespace Pptcom.ComProxy
         }
 
         // "= d2 " when the script holds this shape in a variable (or several: "= card, c1 ").
-        internal static string VariablesOf(IDictionary<string, List<string>>? variables, dynamic slide, dynamic shape)
+        private static string VariablesOf(IDictionary<string, List<string>>? variables, dynamic slide, dynamic shape)
         {
             if (variables is null)
             {

@@ -229,6 +229,7 @@
     <Compile Include="ComProxy\DeckReader.cs" />
     <Compile Include="ComProxy\ShapeContents.cs" />
     <Compile Include="ComProxy\TextContrast.cs" />
+    <Compile Include="ComProxy\CornerBands.cs" />
     <Compile Include="ComProxy\TypeLibEnums.cs" />
     <Compile Include="ComProxy\DeckDefaults.cs" />
     <Compile Include="ComProxy\ComOpResult.cs" />
