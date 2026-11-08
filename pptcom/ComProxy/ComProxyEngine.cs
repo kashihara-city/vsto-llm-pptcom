@@ -866,12 +866,17 @@ namespace Pptcom.ComProxy
 
         // A chart's data a script opened, for the engine to close (ChartDataWorkbooks): its workbook, when the script
         // reaches it (ChartData.Workbook opens it), and every object of it the script may keep in a variable (CloseChartData);
-        // and the chart whose data it reached (Chart.ChartData), refreshed before that data is closed.
+        // and the chart whose data it reached (Chart.ChartData), refreshed before that data is closed, also when a later
+        // call opens it through a variable holding the ChartData (ChartData.Workbook).
         private void NoteChartData(object target, string? member, object? resultValue)
         {
             if (resultValue is not null && string.Equals(member, "ChartData", StringComparison.OrdinalIgnoreCase))
             {
-                _chartData.AddChart(target);
+                _chartData.Reached(target, resultValue);
+            }
+            else if (string.Equals(member, "Workbook", StringComparison.OrdinalIgnoreCase))
+            {
+                _chartData.Opening(target);
             }
 
             if (resultValue is null || !ComSecurityPolicy.IsChartDataObject(resultValue))

@@ -19,6 +19,10 @@ namespace Pptcom.ComProxy
     {
         private readonly List<object> _open = [];
         private readonly List<object> _charts = [];
+        // Each ChartData a script reached, with its chart, for as long as the engine lives: a variable keeps a ChartData
+        // into later calls (Set savedData = c.Chart.ChartData), and the data it opens there (savedData.Workbook) is that
+        // chart's, to be refreshed as well (Opening).
+        private readonly List<KeyValuePair<object, object>> _chartOfData = [];
         private DateTime _lastWrite = DateTime.MinValue;
 
         // How long after a write the chart is given before its data is closed. A chart showed the value within half of
@@ -52,8 +56,28 @@ namespace Pptcom.ComProxy
             _open.Add(workbook);
         }
 
-        // A chart whose data a script reached (Chart.ChartData), to be refreshed before its data is closed.
-        public void AddChart(object chart)
+        // A chart's data a script reached (Chart.ChartData): the chart is refreshed before its data is closed, in this call
+        // and in a later one that opens the data through a variable holding the ChartData.
+        public void Reached(object chart, object chartData)
+        {
+            AddChart(chart);
+            if (!_chartOfData.Exists(p => ReferenceEquals(p.Key, chartData)))
+            {
+                _chartOfData.Add(new KeyValuePair<object, object>(chartData, chart));
+            }
+        }
+
+        // ChartData.Workbook read, which opens the data: the chart of that ChartData, reached in this call or an earlier one.
+        public void Opening(object chartData)
+        {
+            int i = _chartOfData.FindIndex(p => ReferenceEquals(p.Key, chartData));
+            if (i >= 0)
+            {
+                AddChart(_chartOfData[i].Value);
+            }
+        }
+
+        private void AddChart(object chart)
         {
             if (!_charts.Exists(c => ReferenceEquals(c, chart)))
             {
