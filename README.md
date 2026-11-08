@@ -113,7 +113,7 @@ HKEY_CURRENT_USER\Software\
 | `chat_model` | REG_SZ | `Qwen3-VL-32B-Instruct` | 接続先のモデル一覧（`/v1/models`）に出る名前。スライドの描画を画像で渡すので、画像を読めるモデル |
 | `context_limit` | REG_DWORD | `100000` | トークン数（8000〜10000000）。無いときや範囲外なら、モデルの最大入力の75%（分からなければ100,000）になる |
 | `image_model` | REG_SZ | `z-image-turbo` | 接続先のモデル一覧に出る、画像生成（`/v1/images/generations`）のモデル。空なら画像を作らない |
-| `image_prompt` | REG_SZ | `zimage` | 画像生成プロンプト。今は`zimage`（Z-Image用）だけ。無いときや知らない値はこれになる |
+| `image_prompt` | REG_SZ | `zimage` | 画像生成プロンプト。無いときや知らない値は`zimage`になる |
 | `open_pane` | REG_DWORD | `1` | 1でスライドを開いたらAIアシスタントを表示する。無ければ1 |
 | `save_progress` | REG_DWORD | `0` | 1で途中経過を保存する。無ければ0 |
 | `external_control` | REG_DWORD | `0` | 1で他のプログラムからの操作を許可する。無ければ0 |
@@ -162,7 +162,7 @@ PowerPoint
    ├─ 結合したライブラリ         Newtonsoft.Json、WebView2 SDK（Core、WinForms）
    ├─ 埋め込みのファイル（Agent/）
    │   ├─ system-prompt.txt / tools.json   モデルへの指示とツールの定義（AgentFileが読む）
-   │   ├─ image-prompts/zimage.json        画像生成プロンプト（Z-Image用）。
+   │   ├─ image-prompts/*.json             画像生成プロンプト（モデル別）
    │   └─ compaction-prompt.txt            会話を短くする前に、モデルに経過のメモを書かせる指示
    └─ 埋め込みのファイル（UI/web/）
        ├─ 画面          index.html / taskpane.js / taskpane.css

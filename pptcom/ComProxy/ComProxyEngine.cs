@@ -130,6 +130,11 @@ namespace Pptcom.ComProxy
         // small JSON object - {type, member, action, ok, blocked, error}. The host appends it to
         // a JSONL file; scripts/test/usage_report.py aggregates. Null = no recording.
         public Action<JObject>? UsageSink { get; set; }
+
+        // The image sizes the image model takes, those its image prompt offers (Agent\image-prompts\<name>.json): an image
+        // of any other is refused before the model is asked. Null: any "WxH" (the runner).
+        public IReadOnlyCollection<string>? ImageSizes { get; set; }
+
         private string? _lastTargetType;
 
         public static readonly string UsageLogPath = Path.Combine(
@@ -977,7 +982,8 @@ namespace Pptcom.ComProxy
             string size = (string?)op["size"] ?? "1024x1024";
             if (!IsAllowedImageSize(size))
             {
-                throw new InvalidOperationException("image size must be WxH with each side 512, 768 or 1024 (e.g. 1024x768): " + size);
+                throw new InvalidOperationException((ImageSizes is not null ? "image size must be one of " + string.Join(", ", ImageSizes) : "image size must be WxH in pixels") +
+                                                    ": " + size);
             }
 
             byte[] bytes = await _imageGenerator(prompt, size).ConfigureAwait(true);
@@ -1536,24 +1542,16 @@ namespace Pptcom.ComProxy
             throw first;
         }
 
-        // The Z-Image Turbo server used in development accepts 512 / 768 / 1024 per side (measured 2026-09-29).
-        private static bool IsAllowedImageSize(string size)
+        // A size the image model takes: one of ImageSizes when they are given, else any "WxH" of whole pixels.
+        private bool IsAllowedImageSize(string size)
         {
+            if (ImageSizes is not null)
+            {
+                return ImageSizes.Contains(size, StringComparer.Ordinal);
+            }
+
             string[] parts = size.Split('x');
-            if (parts.Length != 2)
-            {
-                return false;
-            }
-
-            foreach (string p in parts)
-            {
-                if (p != "512" && p != "768" && p != "1024")
-                {
-                    return false;
-                }
-            }
-
-            return true;
+            return parts.Length == 2 && Array.TrueForAll(parts, static p => int.TryParse(p, NumberStyles.None, CultureInfo.InvariantCulture, out int n) && n > 0);
         }
 
         // When COM rejects the arguments (wrong count, wrong type, a required one missing), PowerPoint

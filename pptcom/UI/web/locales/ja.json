@@ -23,6 +23,7 @@
   "SETTINGS_IMAGE_PROMPT": "プロンプト",
   "SETTINGS_IMAGE_PROMPT_HINT": "画像生成プロンプト: 画像生成用モデルに合わせて、AIが画像を頼むときの指示の書き方と、選べる大きさを切り替えます",
   "IMAGE_PROMPT_ZIMAGE": "Z-Image用",
+  "IMAGE_PROMPT_MOSS": "MOSS-Image用",
   "SETTINGS_API_KEY": "APIキー",
   "SETTINGS_API_KEY_BUTTON": "設定",
   "SETTINGS_API_KEY_DELETE": "削除",

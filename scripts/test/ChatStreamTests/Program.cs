@@ -525,6 +525,22 @@ namespace ChatStreamTests
             Check("imagegen gets the image prompt's rules and sizes",
                   description.EndsWith((string?)zimage["rules"] ?? "?", StringComparison.Ordinal) && description.IndexOf('%') < 0 &&
                   JToken.DeepEquals(image["parameters"]?["properties"]?["size"], zimage["size"]), description);
+            // Every image prompt the settings offer (AddinSettings.ImagePrompts) is a file of rules and sizes, the sizes
+            // including the default the add-in asks for without one (1024x1024).
+            List<string> wrong = [];
+            foreach (string file in Directory.GetFiles(Path.Combine(agent, "image-prompts"), "*.json"))
+            {
+                JObject imagePrompt = JObject.Parse(File.ReadAllText(file));
+                JToken? offered = AgentTools.Tools(template, withDocuments: false, imagePrompt: imagePrompt)[0]["function"];
+                bool fine = ((string?)imagePrompt["rules"] ?? "").Length > 0 && (imagePrompt["size"]?["enum"] as JArray)?.Any(static s => (string?)s == "1024x1024") == true &&
+                            ((string?)offered?["description"] ?? "%").IndexOf('%') < 0;
+                if (!fine)
+                {
+                    wrong.Add(Path.GetFileName(file));
+                }
+            }
+
+            Check("every image prompt has its rules and sizes, 1024x1024 among them", wrong.Count == 0, string.Join(", ", wrong));
             Check("the files themselves stay as they were", ((string?)template[0]["function"]?["description"] ?? "").Contains("%IMAGE_PROMPT_RULES%"),
                   (string?)template[0]["function"]?["description"] ?? "");
             Check("the same settings give the same text (the server's prefix cache)",

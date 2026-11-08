@@ -648,6 +648,8 @@ namespace Pptcom
             conversation.ImagePrompt = _settings.ImagePrompt;
             conversation.Llm = _llm;
             ComProxyEngine engine = conversation.Engine;
+            // the sizes this image prompt offers are those its model takes
+            engine.ImageSizes = ImagePromptFiles[conversation.ImagePrompt]["size"]?["enum"] is JArray sizes ? sizes.Select(static s => (string?)s ?? "").ToList() : null;
             run.Conversation = conversation;
             run.Engine = engine;
             run.MissingSetBefore = engine.MissingSetStatements.Count;

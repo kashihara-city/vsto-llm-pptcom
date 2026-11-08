@@ -23,6 +23,7 @@
   "SETTINGS_IMAGE_PROMPT": "Prompt",
   "SETTINGS_IMAGE_PROMPT_HINT": "Image prompt: Matches the image model: how the AI writes its image requests, and the sizes it can ask for",
   "IMAGE_PROMPT_ZIMAGE": "For Z-Image",
+  "IMAGE_PROMPT_MOSS": "For MOSS-Image",
   "SETTINGS_API_KEY": "API key",
   "SETTINGS_API_KEY_BUTTON": "Set",
   "SETTINGS_API_KEY_DELETE": "Delete",

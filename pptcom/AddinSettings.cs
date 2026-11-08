@@ -28,7 +28,7 @@ namespace Pptcom
         // image model wants prompts of its own. One of ImagePrompts, which the page's drop-down lists too (index.html);
         // any other value is read as the first.
         public string ImagePrompt = ImagePrompts[0];
-        public static readonly string[] ImagePrompts = ["zimage"];
+        public static readonly string[] ImagePrompts = ["zimage", "moss"];
 
         public const string RegistryPath = @"Software\KashiharaCity\pptcom";
         public const string CredentialTarget = "KashiharaCity/pptcom:api_key";

@@ -64,6 +64,7 @@ namespace ComScriptTests
             ContrastTests();
             CornerBandTests();
             SlideShapeTests();
+            ImageSizeTests();
             SelectionTests();
             RenderSizeTests();
             OverlapTests();
@@ -1042,6 +1043,36 @@ namespace ComScriptTests
                    CornerBands.Report([rounded], [across], [sheetInFront]).Length == 0 && CornerBands.Report([rounded], [across], [sheetBehind]).Contains("[10] top past") &&
                    CornerBands.Report([rounded], [across], [strip]).Contains("[10] top past the rounded top-left, top-right corners"),
                    CornerBands.Report([rounded], [across], [strip]));
+        }
+
+        // An image's size is checked against the sizes its image prompt offers (ComProxyEngine.ImageSizes) before the image
+        // model is asked; without them, any WxH in pixels goes.
+        private static void ImageSizeTests()
+        {
+            static bool made(IReadOnlyCollection<string>? sizes, string size)
+            {
+                int asked = 0;
+                ComProxyEngine engine = new(new object(), (prompt, s) =>
+                {
+                    asked++;
+                    return System.Threading.Tasks.Task.FromResult(new byte[] { 1 });
+                })
+                {
+                    ImageSizes = sizes,
+                };
+                ComScriptParser.ParseResult parsed = ComScriptParser.Parse("img = Image(\"a cat\", \"" + size + "\")", priorKnownIds: null, 2000, allowImage: true);
+                bool success = engine.ExecuteAsync(parsed.OpsJson).GetAwaiter().GetResult().Success;
+                foreach (string file in engine.GeneratedFiles)
+                {
+                    File.Delete(file);
+                }
+
+                return success && asked == 1;
+            }
+
+            string[] moss = ["1360x768", "1184x880", "1024x1024"];
+            Report("images: a size the image prompt offers is made, another refused before the model is asked; without sizes, any WxH",
+                   made(moss, "1184x880") && !made(moss, "1024x768") && made(sizes: null, "1184x880") && !made(sizes: null, "large"), "");
         }
 
         // The lines after the shape list judge one read of the slide's shapes (SlideShapes), each by its own rules: a hidden

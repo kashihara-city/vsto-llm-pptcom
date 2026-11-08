@@ -313,10 +313,20 @@ namespace Pptcom
             return text;
         }
 
+        // The image's width:height, as a common ratio when it is within 1% of one (1360x768: 16:9, not 85:48), so that the
+        // model can size the picture from it; otherwise the exact one.
         private static string AspectText(string size)
         {
             string[] p = size.Split('x');
             int w = int.Parse(p[0], CultureInfo.InvariantCulture), h = int.Parse(p[1], CultureInfo.InvariantCulture);
+            foreach ((int cw, int ch) in new[] { (1, 1), (16, 9), (9, 16), (4, 3), (3, 4), (3, 2), (2, 3), (2, 1), (1, 2) })
+            {
+                if (Math.Abs(((double)w / h / ((double)cw / ch)) - 1) < 0.01)
+                {
+                    return Invariant($"{cw}:{ch}");
+                }
+            }
+
             int a = w, b = h;
             while (b != 0)
             {

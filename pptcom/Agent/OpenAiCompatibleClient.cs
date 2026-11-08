@@ -542,7 +542,8 @@ namespace Pptcom.Agent
         // ThisAddIn.StopForGoneWindow): it ends the wait for the headers and for the body; the server may still make the image.
         public async Task<byte[]> GenerateImageAsync(string imageModel, string prompt, string size = "1024x1024", CancellationToken cancellationToken = default)
         {
-            // The Z-Image Turbo server accepts only 512 / 768 / 1024 per side (anything else returned HTTP 422).
+            // The sizes a model accepts are those its image prompt offers (Agent\image-prompts\<name>.json): the Z-Image
+            // Turbo server takes only 512 / 768 / 1024 per side (anything else returned HTTP 422).
             JObject payload = new()
             {
                 ["model"] = imageModel,

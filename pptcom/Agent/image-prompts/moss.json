@@ -1,0 +1,14 @@
+{
+ "rules": "Prompt rules: (1) Write one concrete English paragraph (60-150 words): subject and exact count, composition/viewpoint, style/medium (flat vector illustration, line icon, photo...), color palette (name the deck's colors), lighting, background. (2) Text in an image: write the exact words in double quotes with their place, size and color, e.g. a white bold label reading \"申請\" centered in each navy box. Japanese and English render exactly when short (titles, labels, a few words); a long sentence may come out with a wrong character, so check every character in the result. Put in the image only text that belongs to the picture (labels of an illustrated diagram, a poster's title); text the user may want to edit goes on the slide. (3) The model adds lettering by itself to signs, buildings, screens, documents and blank areas. When the image is to have no text, end the prompt with 'No text, no letters, no signs' and leave such things out or describe them as blank; if lettering still appears, regenerate once. (4) Do not ask for empty space or room for text: it draws a blank panel with a hard edge. Place the subject on a plain background in the deck's background color and leave the text to the slide. (5) Icons are fine: one icon per image, or a set of up to 6 in a grid, flat vector with a stated stroke weight and colors on a plain background. For icons on several slides, repeat the same style sentence word for word so that they match. (6) For charts, timelines and diagrams whose wording or numbers the user may change, draw shapes, arrows and tables in pptcom; use imagegen for the pictures in them. (7) No metaphors, no emotional words, no meta tags such as 8K or masterpiece. (8) Regenerate an image at most once, and only for a wrong subject, wrong text or unwanted lettering.",
+ "size": {
+  "type": "string",
+  "enum": [
+   "1360x768",
+   "1184x880",
+   "1024x1024",
+   "880x1184",
+   "768x1360"
+  ],
+  "description": "Pixel size. 1360x768 wide 16:9 (hero, banner, background, illustrated diagram); 1184x880 4:3; 1024x1024 square (icons, side images); 880x1184 or 768x1360 tall. Default 1024x1024."
+ }
+}

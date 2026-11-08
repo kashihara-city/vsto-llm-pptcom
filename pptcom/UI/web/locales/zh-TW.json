@@ -23,6 +23,7 @@
   "SETTINGS_IMAGE_PROMPT": "提示詞",
   "SETTINGS_IMAGE_PROMPT_HINT": "圖片生成提示詞：配合圖片生成用模型，切換 AI 要求圖片時的提示寫法與可選的尺寸",
   "IMAGE_PROMPT_ZIMAGE": "Z-Image 用",
+  "IMAGE_PROMPT_MOSS": "MOSS-Image 用",
   "SETTINGS_API_KEY": "API 金鑰",
   "SETTINGS_API_KEY_BUTTON": "設定",
   "SETTINGS_API_KEY_DELETE": "刪除",
