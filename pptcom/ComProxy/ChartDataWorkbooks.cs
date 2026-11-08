@@ -29,6 +29,10 @@ namespace Pptcom.ComProxy
         private readonly List<KeyValuePair<object, object>> _chartOfData = [];
         // Each chart whose data is open, with its workbook, for WaitBeforeClose to compare them.
         private readonly List<KeyValuePair<object, object>> _openData = [];
+        // Workbooks a ChartData.Workbook read opened rather than found open (AddChart2 opens its chart's data): in these
+        // PowerPoint cannot take a series name written into its cell - after it the chart's data does not open any
+        // more (ChartData.Workbook stays Nothing, Activate fails) - so such a write is refused (SeriesNameAt).
+        private readonly List<object> _reopened = [];
         private DateTime _lastWrite = DateTime.MinValue;
         private bool _written;
 
@@ -114,6 +118,11 @@ namespace Pptcom.ComProxy
         // and its workbook (null when the read failed).
         public void Opening(object chartData, object? workbook)
         {
+            if (workbook is not null && !_open.Exists(w => ReferenceEquals(w, workbook)) && !_reopened.Exists(w => ReferenceEquals(w, workbook)))
+            {
+                _reopened.Add(workbook);
+            }
+
             int i = _chartOfData.FindIndex(p => ReferenceEquals(p.Key, chartData));
             if (i >= 0)
             {
@@ -167,7 +176,117 @@ namespace Pptcom.ComProxy
             _open.Clear();
             _charts.Clear();
             _openData.Clear();
+            _reopened.Clear();
             _written = false;
+        }
+
+        // The series whose name cell a write into `range` (cells of a chart's data) would change, and that cell, when the
+        // data was opened again (_reopened) - such a write breaks the chart's data; null otherwise (data AddChart2
+        // opened, cells no series name is in, or what cannot be read).
+        public (int Series, string Cell)? SeriesNameAt(object range)
+        {
+            if (_reopened.Count == 0)
+            {
+                return null;
+            }
+
+            dynamic cells = range;
+            object? book = Guard.Try<object?>(() => cells.Worksheet.Parent, fallback: null);
+            if (book is null || !_reopened.Exists(w => ReferenceEquals(w, book)))
+            {
+                return null;
+            }
+
+            string sheet = Guard.Try(() => (string)cells.Worksheet.Name, "");
+            List<CellArea>? written = Areas(Guard.Try(() => (string)cells.Address, ""));
+            if (written is null)
+            {
+                return null;
+            }
+
+            foreach (KeyValuePair<object, object> data in _openData)
+            {
+                if (ReferenceEquals(data.Value, book) &&
+                    Guard.Try<(int, string)?>(() => NameCellIn(data.Key, sheet, written), fallback: null) is (int series, string cell))
+                {
+                    return (series, cell);
+                }
+            }
+
+            return null;
+        }
+
+        // The first series of the chart whose name cell (in its formula) is on `sheet` within `written`.
+        private static (int, string)? NameCellIn(dynamic chart, string sheet, List<CellArea> written)
+        {
+            dynamic collection = chart.SeriesCollection();
+            int count = (int)collection.Count;
+            for (int i = 1; i <= count; i++)
+            {
+                CellRange? name = ParseSeries((string)collection.Item(i).Formula)?.Name;
+                if (name is not null && string.Equals(name.Sheet, sheet, StringComparison.OrdinalIgnoreCase) &&
+                    Areas(name.Address) is { } named && named.Exists(n => written.Exists(w => w.Overlaps(n))))
+                {
+                    return (i, name.Address.Replace("$", ""));
+                }
+            }
+
+            return null;
+        }
+
+        // A rectangle of cells, rows and columns from 1 (a whole column or row reaching to int.MaxValue).
+        internal sealed class CellArea(int top, int left, int bottom, int right)
+        {
+            public int Top { get; } = top;
+
+            public int Left { get; } = left;
+
+            public int Bottom { get; } = bottom;
+
+            public int Right { get; } = right;
+
+            public bool Overlaps(CellArea other)
+            {
+                return Top <= other.Bottom && other.Top <= Bottom && Left <= other.Right && other.Left <= Right;
+            }
+        }
+
+        // "$B$1", "A1:C3", "$A:$A" (a column), "$1:$1" (a row), "$A$1,$C$1" (areas): each area of a Range.Address; null
+        // when one is not read.
+        internal static List<CellArea>? Areas(string? address)
+        {
+            List<CellArea> areas = [];
+            foreach (string part in (address ?? "").Replace("$", "").Split(','))
+            {
+                string[] ends = part.Trim().Split(':');
+                if (ends.Length is 0 or > 2 || Corner(ends[0]) is not (int r1, int c1) || Corner(ends[ends.Length - 1]) is not (int r2, int c2))
+                {
+                    return null;
+                }
+
+                // a column alone (A) runs over every row, a row alone (1) over every column
+                areas.Add(new CellArea(r1 == 0 ? 1 : r1, c1 == 0 ? 1 : c1, r2 == 0 ? int.MaxValue : r2, c2 == 0 ? int.MaxValue : c2));
+            }
+
+            return areas.Count > 0 ? areas : null;
+        }
+
+        // "B12" -> (12, 2), "B" -> (0, 2), "12" -> (12, 0); null for anything else.
+        private static (int Row, int Column)? Corner(string text)
+        {
+            int i = 0, column = 0, row = 0;
+            for (; i < text.Length && char.IsLetter(text[i]) && text[i] < 128; i++)
+            {
+                column = (column * 26) + char.ToUpperInvariant(text[i]) - 'A' + 1;
+            }
+
+            int digits = i;
+            for (; i < text.Length && text[i] is >= '0' and <= '9'; i++)
+            {
+                row = (row * 10) + (text[i] - '0');
+            }
+
+            return i == text.Length && text.Length > 0 && (column > 0 || i > digits) ? (row, column) : null;
         }
 
         // ---- whether a chart shows what its data holds ----

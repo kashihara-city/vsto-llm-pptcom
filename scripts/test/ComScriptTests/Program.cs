@@ -584,6 +584,19 @@ namespace ComScriptTests
                    ChartDataWorkbooks.CompareName("貸出冊数", "貸出冊数") == same && ChartDataWorkbooks.CompareName("貸出冊数", "系列 1") == different &&
                    ChartDataWorkbooks.CompareName(cell: null, "系列 1") == unknown,
                    "");
+
+            // the cells a write covers against a series name cell (a write there is refused in data opened again)
+            static bool covers(string written, string name)
+            {
+                return ChartDataWorkbooks.Areas(written) is { } w && ChartDataWorkbooks.Areas(name) is { } n && w.Exists(a => n.Exists(a.Overlaps));
+            }
+
+            Report("chart data: Range addresses read as areas - cells, ranges, whole columns and rows, several areas - and what covers a name cell",
+                   covers("$B$1", "$B$1") && covers("$A$1:$C$1", "$B$1") && covers("$B:$B", "$B$1") && covers("$1:$1", "$C$1") &&
+                   covers("$A$5,$B$1", "$B$1") && covers("b1", "$B$1") && covers("$AA$10", "AA10") &&
+                   !covers("$B$2:$B$5", "$B$1") && !covers("$A$1", "$B$1") && !covers("$C:$C", "$B$1") &&
+                   ChartDataWorkbooks.Areas("") is null && ChartDataWorkbooks.Areas("A1B") is null && ChartDataWorkbooks.Areas("Sheet1!A1") is null,
+                   "");
         }
 
         // A chart's data is an Excel workbook, and through it all of Excel: of the Excel type library only the cells of a

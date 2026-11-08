@@ -1077,9 +1077,16 @@ namespace Pptcom.ComProxy
                     // GetProperty|InvokeMethod together (the VB late-binding convention): a
                     // bare `x.Member` in VBA is either a property get or a parameterless method
                     // call (e.g. `Set p = Application.Presentations.Add`), and models write both.
-                    return targetObj.GetType().InvokeMember(
+                    bool clearing = IsChartDataClearing(targetObj, member);
+                    object? got = targetObj.GetType().InvokeMember(
                         RequireMember(member, "get"), BindingFlags.GetProperty | BindingFlags.InvokeMethod | BindingFlags.Public | BindingFlags.Instance,
                         binder: null, targetObj, args: null, ComCulture);
+                    if (clearing)
+                    {
+                        _chartData.Wrote();
+                    }
+
+                    return got;
 
                 case ComOpAction.Set:
                     string property = RequireMember(member, "set");
@@ -1089,6 +1096,11 @@ namespace Pptcom.ComProxy
                     if (valueBlock is not null)
                     {
                         throw new InvalidOperationException("value refused by policy: " + valueBlock);
+                    }
+
+                    if (intoChartData)
+                    {
+                        RefuseSeriesNameWrite(targetObj);
                     }
 
                     // For an indexed property put (`Adjustments(1) = 0.1`) COM wants the index
@@ -1134,8 +1146,9 @@ namespace Pptcom.ComProxy
                         return AddChart(targetObj, method, callArgs);
                     }
 
+                    bool clears = IsChartDataClearing(targetObj, method);
                     object? called = InvokeCallOrIndex(targetObj, method, callArgs);
-                    if (string.Equals(method, "ClearContents", StringComparison.OrdinalIgnoreCase) && ComSecurityPolicy.IsChartDataObject(targetObj))
+                    if (clears)
                     {
                         _chartData.Wrote();
                     }
@@ -1227,6 +1240,31 @@ namespace Pptcom.ComProxy
             }
 
             return shape;
+        }
+
+        // ClearContents on cells of a chart's data, called or written without parentheses (a get): a write, refused like
+        // one on a series name cell (RefuseSeriesNameWrite) before it is made.
+        private bool IsChartDataClearing(object targetObj, string? member)
+        {
+            if (!string.Equals(member, "ClearContents", StringComparison.OrdinalIgnoreCase) || !ComSecurityPolicy.IsChartDataObject(targetObj))
+            {
+                return false;
+            }
+
+            RefuseSeriesNameWrite(targetObj);
+            return true;
+        }
+
+        // A write into a series name cell of a chart's data opened again (ChartDataWorkbooks.SeriesNameAt): after it,
+        // PowerPoint does not open the chart's data again, so it is refused, with the way that works.
+        private void RefuseSeriesNameWrite(object cells)
+        {
+            if (_chartData.SeriesNameAt(cells) is (int series, string cell))
+            {
+                throw new InvalidOperationException(Invariant($"{cell} holds the name of series {series}: written after the chart's data was opened again, ") +
+                                                    "PowerPoint can no longer open that data (only the pptcom call that made the chart can write series names into the cells). " +
+                                                    Invariant($"Rename the series through the chart instead: .Chart.SeriesCollection({series}).Name = \"...\" (the cell keeps the old name)"));
+            }
         }
 
         // Shapes.AddChart2 or Shapes.AddChart.
