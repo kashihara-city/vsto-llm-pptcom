@@ -69,7 +69,7 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <!-- The task pane is HTML in a WebView2 (UI\web\). Uses the WebView2 Runtime installed
          on the PC; this package is the SDK (Core and WinForms DLLs, and the native WebView2Loader). -->
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
   </ItemGroup>
 
   <ItemGroup>
