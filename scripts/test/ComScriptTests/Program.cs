@@ -55,6 +55,7 @@ namespace ComScriptTests
             DeckTests();
             TypeRuleTests();
             ChartDataPolicyTests();
+            ChartSettleTests();
             PlainValueTests();
             ErrorHintTests();
             RoundingTests();
@@ -528,6 +529,48 @@ namespace ComScriptTests
             Report("policy: nothing is called or set on an object whose type could not be read",
                    ComSecurityPolicy.CheckMemberOnType(typeName: null, "Count") is not null && ComSecurityPolicy.CheckSetOnType(typeName: null, "Left") is not null &&
                    ComSecurityPolicy.CheckMemberOnType("Shapes", "Count") is null && ComSecurityPolicy.CheckSetOnType("Shape", "Left") is null, "allowed");
+        }
+
+        // A chart's data is closed once the chart shows what its data holds (ChartDataWorkbooks.ShowsData): the cells a
+        // series formula names, and whether the chart's values and categories are the same as those cells.
+        private static void ChartSettleTests()
+        {
+            static string cells(ChartDataWorkbooks.CellRange? r)
+            {
+                return r is null ? "-" : r.Sheet + "|" + r.Address;
+            }
+
+            static string parsed(string formula)
+            {
+                ChartDataWorkbooks.SeriesCells? c = ChartDataWorkbooks.ParseSeries(formula);
+                return c is null ? "null" : cells(c.Name) + " " + cells(c.Categories) + " " + cells(c.Values);
+            }
+
+            string plain = parsed("=SERIES(Sheet1!$B$1,Sheet1!$A$2:$A$5,Sheet1!$B$2:$B$5,1)");
+            string quoted = parsed("=SERIES('売上 表'!$B$1,'売上 表'!$A$2:$A$3,'It''s, here'!$B$2:$B$3,1)");
+            string literal = parsed("=SERIES(\"Sales, 2024\",{\"a\",\"b\"},Sheet1!$B$2:$B$3,1)");
+            string union = parsed("=SERIES(,(Sheet1!$A$2,Sheet1!$A$4),Sheet1!$B$2:$B$3,2)");
+            Report("chart data: a series formula names the cells of its name, categories and values; literals and unions none",
+                   plain == "Sheet1|$B$1 Sheet1|$A$2:$A$5 Sheet1|$B$2:$B$5" && quoted == "売上 表|$B$1 売上 表|$A$2:$A$3 It's, here|$B$2:$B$3" &&
+                   literal == "- - Sheet1|$B$2:$B$3" && union == "- - Sheet1|$B$2:$B$3" && parsed("=SUM(A1)") == "null" && ChartDataWorkbooks.ParseSeries(formula: null) is null,
+                   string.Join(" / ", plain, quoted, literal, union));
+
+            Array column = Array.CreateInstance(typeof(object), [3, 1], [1, 1]);
+            column.SetValue(39.0, 1, 1);
+            column.SetValue(value: null, 2, 1);
+            column.SetValue("n/a", 3, 1);
+            Array row = Array.CreateInstance(typeof(object), [1, 2], [1, 1]);
+            row.SetValue("2021年度", 1, 1);
+            row.SetValue("2022年度", 1, 2);
+            List<object?> values = ChartDataWorkbooks.Flat(column), categories = ChartDataWorkbooks.Flat(row);
+            Report("chart data: the chart's values and text categories against the cells (an empty cell shows as nothing or 0)",
+                   values.Count == 3 && categories.Count == 2 && (string?)categories[1] == "2022年度" &&
+                   ChartDataWorkbooks.SameNumbers(values, [39.0, 0.0, 7.0]) && ChartDataWorkbooks.SameNumbers(values, [39.0, null, null]) &&
+                   !ChartDataWorkbooks.SameNumbers(values, [38.0, 0.0, 7.0]) && !ChartDataWorkbooks.SameNumbers(values, [39.0, 5.0, 7.0]) &&
+                   !ChartDataWorkbooks.SameNumbers(values, [39.0, 0.0]) &&
+                   ChartDataWorkbooks.SameTexts(categories, ["2021年度", "2022年度"]) && !ChartDataWorkbooks.SameTexts(categories, ["2021年度", "分類 2"]) &&
+                   ChartDataWorkbooks.SameTexts([5.0, "a"], ["5", "a"]) && !ChartDataWorkbooks.SameTexts(categories, ["2021年度"]),
+                   string.Join(",", values));
         }
 
         // A chart's data is an Excel workbook, and through it all of Excel: of the Excel type library only the cells of a

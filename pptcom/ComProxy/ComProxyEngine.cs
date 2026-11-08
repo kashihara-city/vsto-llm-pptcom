@@ -458,11 +458,11 @@ namespace Pptcom.ComProxy
         }
 
         // Closes the charts' data the scripts opened, once the charts have taken what was written last
-        // (ChartDataWorkbooks.Unsettled), and gives the variables that held part of it ClosedChartData.
+        // (ChartDataWorkbooks.WaitBeforeClose: looked at again after each wait, PowerPoint taking the values meanwhile),
+        // and gives the variables that held part of it ClosedChartData.
         private async Task CloseChartDataAsync()
         {
-            TimeSpan wait = _chartData.Unsettled();
-            if (wait > TimeSpan.Zero)
+            for (TimeSpan wait = _chartData.WaitBeforeClose(); wait > TimeSpan.Zero; wait = _chartData.WaitBeforeClose())
             {
                 await Task.Delay(wait, System.Threading.CancellationToken.None).ConfigureAwait(true);
             }
@@ -869,7 +869,7 @@ namespace Pptcom.ComProxy
             }
             else if (string.Equals(member, "Workbook", StringComparison.OrdinalIgnoreCase))
             {
-                _chartData.Opening(target);
+                _chartData.Opening(target, resultValue);
             }
 
             if (resultValue is null || !ComSecurityPolicy.IsChartDataObject(resultValue))
