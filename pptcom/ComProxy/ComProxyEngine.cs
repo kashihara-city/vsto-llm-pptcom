@@ -1068,6 +1068,8 @@ namespace Pptcom.ComProxy
 
                 case ComOpAction.Item:
                     object?[] itemArgs = ResolveArgs(op["args"] as JArray);
+                    // seq(1.6) rounds as seq.Item(1.6) does, and says so as that does
+                    NoteRounding(targetObj, ComOpAction.Call, "Item", itemArgs, setValue: null);
                     return InvokeIndexer(targetObj, itemArgs);
 
                 default:
@@ -1229,6 +1231,13 @@ namespace Pptcom.ComProxy
             }
             MethodInfo? method = AllMembers(iface).OfType<MethodInfo>().FirstOrDefault(m => !m.IsSpecialName && m.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
             ParameterInfo[]? ps = method?.GetParameters() ?? property?.GetIndexParameters();
+            if (method is null && property is not null && ps is { Length: 0 } && args.Count > 0)
+            {
+                // MainSequence(1.6): a property that takes no argument, so PowerPoint gives the argument to its value's
+                // default member - MainSequence.Item(1.6) - which rounds it as that does
+                return RoundedArguments(property.PropertyType.Name, ComOpAction.Call, "Item", args, setValue: null);
+            }
+
             if (ps is not null)
             {
                 AddRounded(found, where, ps, args);

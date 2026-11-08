@@ -27,7 +27,7 @@ namespace Pptcom.ComProxy
         internal const int WithPrevious = 2, AfterPrevious = 3;
 
         // One effect as read from PowerPoint: what moves and how it is set (the values a script writes), and how long it
-        // runs (Duration, times its repeats, twice when it plays back).
+        // runs (Length; infinite for one that repeats until stopped).
         internal sealed class Row
         {
             public int Trigger;
@@ -120,12 +120,19 @@ namespace Pptcom.ComProxy
                     sb.Append("  ").Append(PartTitle(lastPart, clickedShape)).Append(":\n");
                 }
                 sb.Append("    ").Append(Invariant($"#{i + 1}").PadRight(numberWidth)).Append(' ').Append(listed[i].Shape.PadRight(shapeWidth)).Append("  ")
-                  .Append(listed[i].Effect.PadRight(effectWidth)).Append(Invariant($"  {times[i].Start:0.00}-{times[i].End:0.00}  ")).Append(listed[i].How).Append('\n');
+                  .Append(listed[i].Effect.PadRight(effectWidth)).Append("  ").Append(Time(times[i].Start)).Append('-').Append(Time(times[i].End)).Append("  ").Append(listed[i].How).Append('\n');
             }
             if (rows.Count > MaxListed)
             {
                 sb.Append(Invariant($"    ... and {rows.Count - MaxListed} more\n"));
             }
+        }
+
+        // "1.35", or "?" for a time that never comes: the end of an effect that repeats until stopped, and the times of
+        // what waits for it.
+        private static string Time(double seconds)
+        {
+            return double.IsInfinity(seconds) ? "?" : seconds.ToString("0.00", CultureInfo.InvariantCulture);
         }
 
         private static string PartTitle(int part, string? clickedShape)
@@ -142,7 +149,9 @@ namespace Pptcom.ComProxy
             int trigger = (int)timing.TriggerType;
             double delay = Num((object)timing.TriggerDelayTime), duration = Num((object)timing.Duration);
             double repeat = Guard.Try(() => Num((object)timing.RepeatCount), 1.0);
+            double repeatFor = Guard.Try(() => Num((object)timing.RepeatDuration), 0.0);
             bool back = Guard.Try(() => (int)timing.AutoReverse != 0, fallback: false);
+            (int units, string unit) = Guard.Try<(int, string)>(() => TextUnits((object)effect), (1, ""));
             bool exit = Guard.Try(() => (int)effect.Exit != 0, fallback: false);
             int type = (int)effect.EffectType;
             int paragraph = Guard.Try(() => (int)effect.Paragraph, 0);
@@ -150,12 +159,62 @@ namespace Pptcom.ComProxy
             string what = (EnumResolver.NameOf(typeof(Microsoft.Office.Interop.PowerPoint.MsoAnimEffect), type, "msoAnimEffect") ?? Invariant($"effect {type}")) +
                           (exit ? " (exit)" : "") + Guard.Try(() => Side((int)effect.EffectParameters.Direction, exit), "") +
                           (paragraph > 0 ? Invariant($", paragraph {paragraph}") : "");
+            bool endless = repeat < 0; // RepeatCount gives int.MinValue for "until the next click" and "until the end of the slide"
             string how = (trigger == WithPrevious ? "with previous" : trigger == AfterPrevious ? "after previous" : "on click") +
                          ", delay " + N(delay) + ", " + N(duration) + " s" +
-                         (repeat >= 1000 ? ", repeats until stopped" : repeat > 1 ? ", repeated " + N(repeat) + " times" : "") +
+                         (unit.Length > 0 ? Invariant($", by {unit}, {units} {unit}s ") + N(0.1 * duration) + " s apart" : "") +
+                         (endless ? ", repeats until the next click or the end of the slide" : repeat > 1 ? ", repeated " + N(repeat) + " times" : "") +
+                         (repeatFor > 0 ? ", repeat duration " + N(repeatFor) + " s" : "") +
                          (back ? ", then plays back" : "");
-            double runs = repeat > 1 && repeat < 1000 ? repeat : 1;
-            return new Row { Trigger = trigger, Delay = delay, Length = duration * runs * (back ? 2 : 1), Shape = shape, Effect = what, How = how };
+            double length = endless ? double.PositiveInfinity : Length(duration, repeat > 1 ? repeat : 1, back, units);
+            return new Row { Trigger = trigger, Delay = delay, Length = length, Shape = shape, Effect = what, How = how };
+        }
+
+        // How long an effect plays, as PowerPoint times the effect after it: its duration, times its repeats, twice when it
+        // plays back; by character or by word, each letter or word starts a tenth of the duration after the one before
+        // (PowerPoint's own step, which a script can neither read nor set). RepeatDuration is left out: PowerPoint starts the
+        // next effect after the repeats whatever it says.
+        internal static double Length(double duration, double runs, bool back, int units)
+        {
+            return (duration * runs * (back ? 2 : 1)) + (0.1 * duration * Math.Max(0, units - 1));
+        }
+
+        // The letters (not spaces or line breaks) or the words a by-character or by-word effect animates one after another,
+        // in its shape's text or its paragraph; (1, "") for any other effect.
+        private static (int Units, string Unit) TextUnits(dynamic effect)
+        {
+            int kind = (int)effect.EffectInformation.TextUnitEffect;
+            if (kind != (int)Microsoft.Office.Interop.PowerPoint.MsoAnimTextUnitEffect.msoAnimTextUnitEffectByCharacter &&
+                kind != (int)Microsoft.Office.Interop.PowerPoint.MsoAnimTextUnitEffect.msoAnimTextUnitEffectByWord)
+            {
+                return (1, "");
+            }
+
+            dynamic range = effect.Shape.TextFrame.TextRange;
+            int paragraph = Guard.Try(() => (int)effect.Paragraph, 0);
+            if (paragraph > 0)
+            {
+                range = range.Paragraphs(paragraph);
+            }
+
+            return kind == (int)Microsoft.Office.Interop.PowerPoint.MsoAnimTextUnitEffect.msoAnimTextUnitEffectByCharacter
+                ? (Letters((string)range.Text), "letter")
+                : ((int)range.Words().Count, "word");
+        }
+
+        // The letters of a text as a by-character effect counts them: no spaces or line breaks; a character outside the
+        // Basic Multilingual Plane once.
+        internal static int Letters(string text)
+        {
+            int count = 0;
+            foreach (char c in text)
+            {
+                if (!char.IsWhiteSpace(c) && !char.IsLowSurrogate(c))
+                {
+                    count++;
+                }
+            }
+            return count;
         }
 
         // The side a shape comes from (or goes to, for an exit): msoAnimDirectionUp is the top, Down the bottom - the side,

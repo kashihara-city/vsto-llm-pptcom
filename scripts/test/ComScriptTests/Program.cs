@@ -699,6 +699,10 @@ namespace ComScriptTests
                    "Slides.Add argument 1 is Index As Long: 2.5 became 2");
             expect("a value the enum does not have", Notes("Sequence", ComOpAction.Call, "AddEffect", [null, 10, 99.4]),
                    "Sequence.AddEffect argument 3 is Level As MsoAnimateByLevel: 99.4 became 99 (not a MsoAnimateByLevel value)");
+            expect("an index written without Item, seq(1.6): the collection's Item", Notes("Sequence", ComOpAction.Call, "Item", [1.6]),
+                   "Sequence.Item argument 1 is Index As Long: 1.6 became 2");
+            expect("an index after a property that takes none, MainSequence(1.6): its value's Item", Notes("TimeLine", ComOpAction.Call, "MainSequence", [1.6]),
+                   "Sequence.Item argument 1 is Index As Long: 1.6 became 2");
             expect("an assigned value", Notes("Timing", ComOpAction.Set, "TriggerType", [], 2.4),
                    "Timing.TriggerType is MsoAnimTriggerType: 2.4 became 2 (msoAnimTriggerWithPrevious)");
             expect("nothing for whole numbers, or where a Single goes", Notes("Shapes", ComOpAction.Call, "AddTextbox", [1, 10.5, 20.25, 100.0, 50]) +
@@ -773,6 +777,36 @@ namespace ComScriptTests
                               " #3 [3] foot Fade (exit) 0.00-0.50 on click, delay 0, 0.5 s\n" +
                               "Slide transition: Fade, 0.7 s\n";
             Report("animations: the list, by part, with the shape list's numbers and variables", text == expected, "\n" + text);
+
+            // An effect that repeats until stopped never ends, and what waits for it never starts; a click starts anew.
+            got = times((with, 0, double.PositiveInfinity), (with, 0.2, 0.5), (after, 0, 0.5), (click, 0, 0.5));
+            Report("animations: after one that repeats until stopped, the times are not known until the next click",
+                   got == "0:0.00-Infinity 0:0.20-0.70 0:Infinity-Infinity 1:0.00-0.50", got);
+            Report("animations: by letter or word, each a tenth of the duration after the one before; spaces and line breaks are no letters",
+                   Math.Abs(DeckAnimations.Length(2, 1, back: false, 10) - 3.8) < 1e-9 && Math.Abs(DeckAnimations.Length(2, 1, back: false, 3) - 2.4) < 1e-9 &&
+                   Math.Abs(DeckAnimations.Length(2, 2, back: true, 1) - 8) < 1e-9 && DeckAnimations.Letters("AB CD\rEF") == 6 && DeckAnimations.Letters("市立図書館の報告") == 8,
+                   Invariant($"{DeckAnimations.Length(2, 1, back: false, 10)} / {DeckAnimations.Letters("AB CD\rEF")}"));
+
+            AnimSlide units = new();
+            AnimShape title = new() { Id = 3, TextFrame = new AnimTextFrame { TextRange = new AnimTextRange { Text = "AB CD EF" } } };
+            units.Shapes.List.AddRange([title, new AnimShape { Id = 4 }]);
+            units.TimeLine.MainSequence.List.AddRange([
+                new AnimEffect { Shape = title, EffectType = (int)Microsoft.Office.Interop.PowerPoint.MsoAnimEffect.msoAnimEffectFly, EffectInformation = new AnimInformation { TextUnitEffect = 1 },
+                                 Timing = new AnimTiming { TriggerType = with, Duration = 2f, }, },
+                new AnimEffect { Shape = units.Shapes.List[1], EffectType = (int)Microsoft.Office.Interop.PowerPoint.MsoAnimEffect.msoAnimEffectFade,
+                                 Timing = new AnimTiming { TriggerType = after, Duration = 0.5f, RepeatDuration = 8f, }, },
+                new AnimEffect { Shape = units.Shapes.List[1], EffectType = (int)Microsoft.Office.Interop.PowerPoint.MsoAnimEffect.msoAnimEffectFade,
+                                 Timing = new AnimTiming { TriggerType = click, Duration = 0.5f, RepeatCount = int.MinValue, }, },
+                new AnimEffect { Shape = title, EffectType = (int)Microsoft.Office.Interop.PowerPoint.MsoAnimEffect.msoAnimEffectFade,
+                                 Timing = new AnimTiming { TriggerType = after, Duration = 0.5f, }, },
+            ]);
+            text = System.Text.RegularExpressions.Regex.Replace(DeckAnimations.Describe(units, 1, variables: null), " {2,}", " ", System.Text.RegularExpressions.RegexOptions.None, Guard.RegexTimeout);
+            Report("animations: by letter, a repeat duration, and repeats until stopped, as PowerPoint times them",
+                   text.Contains(" #1 [1] Fly 0.00-3.00 with previous, delay 0, 2 s, by letter, 6 letters 0.2 s apart\n") &&
+                   text.Contains(" #2 [2] Fade 3.00-3.50 after previous, delay 0, 0.5 s, repeat duration 8 s\n") &&
+                   text.Contains(" #3 [2] Fade 0.00-? on click, delay 0, 0.5 s, repeats until the next click or the end of the slide\n") &&
+                   text.Contains(" #4 [1] Fade ?-? after previous, delay 0, 0.5 s\n"),
+                   "\n" + text);
         }
 
         // slide.Shapes(i), .SlideID, .TimeLine and .SlideShowTransition, as late binding reaches PowerPoint's Slide.
@@ -805,6 +839,23 @@ namespace ComScriptTests
         {
             public int Id;
             public string Name = "";
+            public AnimTextFrame TextFrame = new();
+        }
+
+        internal sealed class AnimTextFrame
+        {
+            public AnimTextRange TextRange = new();
+        }
+
+        internal sealed class AnimTextRange
+        {
+            public string Text = "";
+        }
+
+        // TextUnitEffect: 1 by character, 2 by word, 0 otherwise (MsoAnimTextUnitEffect).
+        internal sealed class AnimInformation
+        {
+            public int TextUnitEffect;
         }
 
         internal sealed class AnimTimeLine
@@ -838,6 +889,7 @@ namespace ComScriptTests
             public int Paragraph { get; }
             public AnimTiming Timing = new();
             public object EffectParameters = new();
+            public AnimInformation EffectInformation = new();
         }
 
         internal sealed class AnimParameters
@@ -848,7 +900,7 @@ namespace ComScriptTests
         internal sealed class AnimTiming
         {
             public int TriggerType;
-            public float TriggerDelayTime, Duration, RepeatCount = 1;
+            public float TriggerDelayTime, Duration, RepeatCount = 1, RepeatDuration;
             public int AutoReverse { get; }
         }
 
@@ -860,13 +912,6 @@ namespace ComScriptTests
             public float AdvanceTime { get; }
         }
 
-        // Under a table, a chart, a SmartArt graphic and a group, the shape list shows what is in it (ShapeContents), with
-        // the way a script reaches it, cut at the Limits with a count of the rest. Late-bound on stand-ins for the shapes;
-        // they have no Fill or Line, which the list leaves out when it cannot read them.
-        // A shape's kind by name in the shape list, from the enums: an AutoShape's form, a placeholder's role, any other
-        // MsoShapeType; a number only where no name is known. What the installed Office added to the enums since the
-        // interop assemblies (the Morph transitions) is named and resolves where its type library is registered; a
-        // machine without Office (CI) has the interop assemblies' names only, and keeps them where both have a value.
         // Text too close in color to what is behind it (TextContrast): on a card under it, on its own fill, on the slide's
         // background, below 3:1 (WCAG 2's ratio) at any size; nothing said of text on a picture.
         private static void ContrastTests()
@@ -947,6 +992,10 @@ namespace ComScriptTests
                    CornerBands.Report([new CornerBands.Card(card, 0)], [across, bottom, stripe]).Length == 0, "");
         }
 
+        // A shape's kind by name in the shape list, from the enums: an AutoShape's form, a placeholder's role, any other
+        // MsoShapeType; a number only where no name is known. What the installed Office added to the enums since the
+        // interop assemblies (the Morph transitions) is named and resolves where its type library is registered; a
+        // machine without Office (CI) has the interop assemblies' names only, and keeps them where both have a value.
         private static void ShapeNameTests()
         {
             ContentSlide slide = new();
@@ -976,6 +1025,9 @@ namespace ComScriptTests
                    morph);
         }
 
+        // Under a table, a chart, a SmartArt graphic and a group, the shape list shows what is in it (ShapeContents), with
+        // the way a script reaches it, cut at the Limits with a count of the rest. Late-bound on stand-ins for the shapes;
+        // they have no Fill or Line, which the list leaves out when it cannot read them.
         private static void ContentTests()
         {
             static ContentShape textShape(int id, int type, string name, string text)
