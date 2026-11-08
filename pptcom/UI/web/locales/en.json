@@ -176,6 +176,7 @@
   "DOC_FAILED_RESOURCE_LIMIT": "It is too large or too complex to read",
   "DOC_FAILED_MISSING_PART": "A part the file needs is missing",
   "DOC_FAILED_TOO_LARGE": "Files over 50 MB cannot be attached",
+  "DOC_FAILED_BUSY": "Documents cannot be attached while a request runs; attach it again once it has ended",
   "DOC_FAILED": "An error occurred while reading it",
   "DOC_FAILED_DETAIL": "An error occurred while reading it: {0}",
 

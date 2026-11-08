@@ -47,7 +47,9 @@ function page({ worker = TextWorker, readerFails = false } = {}) {
   const messages = [], classes = new Set(), elements = new Map(), onDocument = {};
   let onMessage = null;
   const element = () => ({
-    children: [], classList: { toggle() {} }, addEventListener() {}, querySelectorAll: () => [], appendChild() {},
+    children: [], listeners: {}, classList: { toggle() {} }, setAttribute() {}, querySelectorAll: () => [],
+    addEventListener(type, fn) { this.listeners[type] = fn; },
+    appendChild(child) { this.children.push(child); },
   });
   const context = vm.createContext({
     console, Uint8Array, Blob, atob, queueMicrotask,
@@ -56,7 +58,7 @@ function page({ worker = TextWorker, readerFails = false } = {}) {
       addEventListener: (type, fn) => { if (type === "message") onMessage = fn; },
     } } },
     document: {
-      body: { classList: { toggle: (k, on) => (on ? classes.add(k) : classes.delete(k)), add() {}, remove() {} } },
+      body: { classList: { toggle: (k, on) => (on ? classes.add(k) : classes.delete(k)), contains: k => classes.has(k), add() {}, remove() {} } },
       getElementById: id => { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); },
       addEventListener: (type, fn) => { onDocument[type] = fn; },
       createElement: element,
@@ -69,6 +71,10 @@ function page({ worker = TextWorker, readerFails = false } = {}) {
   return {
     messages,
     converting: () => classes.has("converting"),
+    // taskpane.js's body.sending: a request sent, its busy state not back yet
+    sending: on => (on ? classes.add("sending") : classes.delete("sending")),
+    // × on the n-th chip the add-in listed (attachments)
+    removeChip: n => elements.get("attachments").children[n].children.find(c => c.className === "chip-remove").listeners.click(),
     // a failure that escapes docs.js leaves its ticket without an end, which the checks report
     addFiles: files => {
       context.files = files;
@@ -215,6 +221,26 @@ async function textStartingLikeBmp() {
   check("a text file that starts with BM is a document, not a picture", m && m.format === "text", JSON.stringify(m));
 }
 
+// The conversation's documents stay as they are from the send on (body.sending), and while a request runs: nothing
+// dropped, picked or pasted is taken, × removes nothing. Once the busy state is back, they change again.
+async function lockedFromTheSend() {
+  const changes = lock => {
+    const p = page();
+    p.fromAddin({ type: "attachments", items: [{ id: "d1", name: "a.txt", detail: "", thumb: "" }] });
+    lock(p);
+    p.addFiles([file("b.txt")]);
+    p.paste({ files: [file("image.png")] });
+    p.removeChip(0);
+    return p;
+  };
+  const sent = changes(p => p.sending(true)), busy = changes(p => p.fromAddin({ type: "busy", value: true }));
+  check("from the send on and while a request runs, nothing is attached or removed",
+        sent.messages.length === 0 && busy.messages.length === 0, show(sent.messages) + " / " + show(busy.messages));
+  const after = changes(p => { p.sending(true); p.fromAddin({ type: "busy", value: true }); p.sending(false); p.fromAddin({ type: "busy", value: false }); });
+  check("and once the request has ended, they change again",
+        after.messages.map(m => m.type).join(",") === "attachStarted,attachStarted,detach", show(after.messages));
+}
+
 async function paste() {
   let p = page();
   let prevented = p.paste({ text: "1\r\n2\r\n", files: [file("image.png")] });
@@ -251,6 +277,7 @@ async function paste() {
   await picture();
   await textStartingLikeBmp();
   await paste();
+  await lockedFromTheSend();
   console.log();
   console.log(failed === 0 ? `ALL PASSED (${passed})` : `${failed} FAILED, ${passed} passed`);
   process.exitCode = failed === 0 ? 0 : 1;

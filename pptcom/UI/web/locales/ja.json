@@ -176,6 +176,7 @@
   "DOC_FAILED_RESOURCE_LIMIT": "大きすぎるか複雑すぎて読み取れません",
   "DOC_FAILED_MISSING_PART": "ファイルに必要な部分が欠けています",
   "DOC_FAILED_TOO_LARGE": "50MB を超えるファイルは添付できません",
+  "DOC_FAILED_BUSY": "依頼の実行中は添付できません。終わってから添付し直してください",
   "DOC_FAILED": "読み取り中にエラーが発生しました",
   "DOC_FAILED_DETAIL": "読み取り中にエラーが発生しました: {0}",
 

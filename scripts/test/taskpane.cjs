@@ -89,6 +89,7 @@ function page({ texts = () => new Promise(() => {}), readyState = "complete" } =
     log: (code, ...args) => onMessage({ data: { type: "log", code, args } }),
     work: () => run("work"),
     element: id => run("document.getElementById(" + JSON.stringify(id) + ")"),
+    bodyHas: c => run("document.body.classList.contains(" + JSON.stringify(c) + ")"),
     click: id => run("document.getElementById(" + JSON.stringify(id) + ")").listeners.click(),
     lastBlock: () => { const children = run("log.children"); return children.filter(e => e.className.startsWith("work")).pop(); },
   };
@@ -97,11 +98,14 @@ function page({ texts = () => new Promise(() => {}), readyState = "complete" } =
 function oneAtATime() {
   const p = page();
   p.submit("first");
+  const onItsWay = p.bodyHas("sending");
   p.submit("second");
-  check("a second send before the busy state arrives is not sent", p.sends().join(",") === "first", p.sends().join(","));
+  check("a second send before the busy state arrives is not sent; the page shows the first is on its way (body.sending, for docs.js)",
+        p.sends().join(",") === "first" && onItsWay, p.sends().join(",") + " sending=" + onItsWay);
   p.host({ type: "busy", value: true });
   p.submit("third");
-  check("nor while the request runs", p.sends().join(",") === "first", p.sends().join(","));
+  check("nor while the request runs (then busy, not sending)", p.sends().join(",") === "first" && !p.bodyHas("sending"),
+        p.sends().join(",") + " sending=" + p.bodyHas("sending"));
   p.host({ type: "busy", value: false });
   p.submit("fourth");
   check("the next one goes once it has ended", p.sends().join(",") === "first,fourth", p.sends().join(","));

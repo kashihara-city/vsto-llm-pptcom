@@ -11,12 +11,14 @@ namespace Pptcom.ComProxy
     // A script cannot close it (Workbook.Close is not open to scripts, ComSecurityPolicy), so the engine closes what a
     // script opened: before the next AddChart/AddChart2 and when the script ends. What was written stays in the chart -
     // provided the chart has taken it: it takes a cell's new value a moment after it is written, and a workbook closed
-    // before then loses it for good, so a close waits for SettleTime after the last write (Unsettled). Data the user has
-    // open, editing it, blocks AddChart2 as well: then the engine closes the data of every chart on the deck
-    // (CloseEveryChart) and tries once more.
+    // before then loses it for good, so a close waits for SettleTime after the last write (Unsettled). A chart on a slide
+    // the window does not show takes nothing however long it is given, until it is drawn: every chart whose data was
+    // reached is refreshed (Chart.Refresh) before its data is closed. Data the user has open, editing it, blocks
+    // AddChart2 as well: then the engine closes the data of every chart on the deck (CloseEveryChart) and tries once more.
     internal sealed class ChartDataWorkbooks
     {
         private readonly List<object> _open = [];
+        private readonly List<object> _charts = [];
         private DateTime _lastWrite = DateTime.MinValue;
 
         // How long after a write the chart is given before its data is closed. A chart showed the value within half of
@@ -50,25 +52,42 @@ namespace Pptcom.ComProxy
             _open.Add(workbook);
         }
 
+        // A chart whose data a script reached (Chart.ChartData), to be refreshed before its data is closed.
+        public void AddChart(object chart)
+        {
+            if (!_charts.Exists(c => ReferenceEquals(c, chart)))
+            {
+                _charts.Add(chart);
+            }
+        }
+
         // The workbook of the chart AddChart2 just made, whose data PowerPoint opened with it.
         public void AddDataOf(object chartShape)
         {
-            object? workbook = Guard.Try<object?>(() => ((dynamic)chartShape).Chart.ChartData.Workbook, fallback: null);
+            object? chart = Guard.Try<object?>(() => ((dynamic)chartShape).Chart, fallback: null);
+            object? workbook = chart is null ? null : Guard.Try<object?>(() => ((dynamic)chart).ChartData.Workbook, fallback: null);
             if (workbook is not null)
             {
+                AddChart(chart!);
                 Add(workbook);
             }
         }
 
-        // Closes them all (one closed already, by the user or with its deck, is passed over).
+        // Refreshes the charts and closes their data (one closed already, by the user or with its deck, is passed over).
         public void CloseAll()
         {
+            if (_open.Count > 0)
+            {
+                _charts.ForEach(Refresh);
+            }
+
             foreach (object w in _open)
             {
                 Close(w);
             }
 
             _open.Clear();
+            _charts.Clear();
         }
 
         // The data of every chart on the deck's slides, in groups and placeholders too; the number of charts. Reading a
@@ -99,6 +118,7 @@ namespace Pptcom.ComProxy
                 object? workbook = Guard.Try<object?>(() => shape.Chart.ChartData.Workbook, fallback: null);
                 if (workbook is not null)
                 {
+                    Refresh(Guard.Try<object?>(() => shape.Chart, fallback: null));
                     Close(workbook);
                 }
 
@@ -118,6 +138,19 @@ namespace Pptcom.ComProxy
             }
 
             return charts;
+        }
+
+        // What was written into a chart's data, into the chart: one on a slide not shown takes it only so (or once drawn).
+        private static void Refresh(object? chart)
+        {
+            if (chart is not null)
+            {
+                Guard.Try(() =>
+                {
+                    ((dynamic)chart).Refresh();
+                    return true;
+                }, fallback: false);
+            }
         }
 
         private static void Close(object workbook)

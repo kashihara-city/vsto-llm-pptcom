@@ -209,6 +209,7 @@ namespace Pptcom.Documents
                 "resourceLimit" => PaneText.Of("DOC_FAILED_RESOURCE_LIMIT"),
                 "missingPart" => PaneText.Of("DOC_FAILED_MISSING_PART"),
                 "tooLarge" => PaneText.Of("DOC_FAILED_TOO_LARGE"),
+                "busy" => PaneText.Of("DOC_FAILED_BUSY"), // taken while a request ran in its conversation (ThisAddIn.DocumentsLocked)
                 _ => string.IsNullOrEmpty(detail) ? PaneText.Of("DOC_FAILED") : PaneText.Of("DOC_FAILED_DETAIL", detail),
             };
         }

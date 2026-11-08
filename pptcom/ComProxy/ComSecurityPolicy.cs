@@ -8,7 +8,8 @@ namespace Pptcom.ComProxy
     // Every COM operation the LLM requests goes through here before it is invoked, and every
     // value it gets back is checked before it is allowed to become a handle the LLM can chain
     // off of. Two layers, deliberately redundant:
-    //   1. Member blocklist - specific dangerous members, regardless of which object they're on.
+    //   1. Member blocklist - specific dangerous members, regardless of which object they're on; and by type,
+    //      where a name is harmless elsewhere. Of Application, what is open instead (ApplicationMembers).
     //   2. Return-type allowlist - a get/call/item result may only be kept as a handle if it
     //      belongs to a known-Office type library. This is what stops a multi-hop chain from
     //      ever reaching something outside the Office object model, even if a single member name
@@ -211,6 +212,21 @@ namespace Pptcom.ComProxy
             "Presentations", "Windows", "ActiveWindow", "SlideShowWindows", "ProtectedViewWindows", "ActiveProtectedViewWindow",
         };
 
+        // What a script may use of Application: the request's deck (ActivePresentation), the SmartArt galleries that
+        // AddSmartArt and a SmartArt's QuickStyle and Color take their items from, and a few names to read. The rest of it
+        // belongs to PowerPoint itself, not to a deck: its settings (FileValidation, Options, SetOptionFlag...), its window,
+        // its dialogs, the user's other presentations (OtherDeckMembers). Listed as what is open, so that what a later
+        // Office adds to Application stays closed. The root Application is the only one a script can hold: one returned
+        // by any member is refused as a result (BlockedReturnTypes).
+        private static readonly HashSet<string> ApplicationMembers = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "ActivePresentation", "SmartArtLayouts", "SmartArtQuickStyles", "SmartArtColors", "Name", "Version", "Build",
+        };
+
+        private const string ApplicationRefusal =
+            " (it belongs to PowerPoint itself, not to this deck. Of Application, a script uses ActivePresentation and the SmartArt galleries: " +
+            "SmartArtLayouts, SmartArtQuickStyles, SmartArtColors)";
+
         // Opening a chart's data in an Excel window: not needed, as reading ChartData.Workbook opens it (and the engine
         // closes it, ChartDataWorkbooks); and after data opened in Excel by Activate is closed, the next Activate shows
         // PowerPoint's modal alert ("close the dialog boxes open in Excel"), which waits for a click.
@@ -239,7 +255,6 @@ namespace Pptcom.ComProxy
         private static readonly Dictionary<string, HashSet<string>> BlockedMembersByType =
             new(StringComparer.OrdinalIgnoreCase)
             {
-                { "Application", OtherDeckMembers },
                 { "ChartData", ChartDataOpeners },
                 { "Chart", ChartPresets },
                 // Creating a new deck puts the work outside the one the user has open; opening
@@ -334,14 +349,20 @@ namespace Pptcom.ComProxy
                 return member + UnreadableType;
             }
 
+            if (string.Equals(typeName.TrimStart('_'), "Application", StringComparison.OrdinalIgnoreCase))
+            {
+                return ApplicationMembers.Contains(member) ? null
+                    : OtherDeckMembers.Contains(member)
+                    ? "Application." + member + " (it reaches the user's other open presentations; this request works on ActivePresentation only. " +
+                      "To use another presentation, ask the user to save it and attach it to the task pane, then read it with docread)"
+                    : "Application." + member + ApplicationRefusal;
+            }
+
             foreach (string name in NameForms(typeName))
             {
                 if (BlockedMembersByType.TryGetValue(name, out HashSet<string> blocked) && blocked.Contains(member))
                 {
-                    return ReferenceEquals(blocked, OtherDeckMembers)
-                        ? "Application." + member + " (it reaches the user's other open presentations; this request works on ActivePresentation only. " +
-                          "To use another presentation, ask the user to save it and attach it to the task pane, then read it with docread)"
-                        : ReferenceEquals(blocked, ChartDataOpeners)
+                    return ReferenceEquals(blocked, ChartDataOpeners)
                         ? "ChartData." + member + " (not needed: reading ChartData.Workbook opens the chart's data, and pptcom closes it when the call ends)"
                         : ReferenceEquals(blocked, ChartPresets)
                         ? "Chart." + member + ChartPresetRefusal

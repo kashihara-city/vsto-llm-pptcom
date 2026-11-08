@@ -30,6 +30,10 @@ let busy = false;
 let converting = 0;
 let nextTicket = 1;
 
+// The conversation's documents stay as they are while a request runs, and from its send on (body.sending, taskpane.js):
+// the request tells the model which ones there are. The add-in refuses a change meanwhile as well.
+const locked = () => busy || document.body.classList.contains("sending");
+
 const area = $("attach-area"), chips = $("attachments"), picker = $("attach-file"), attachButton = $("attach");
 picker.accept = Accept.join(",");
 
@@ -157,7 +161,7 @@ function fromBase64(s) {
 }
 
 function addFiles(files) {
-  if (busy) return;
+  if (locked()) return;
   for (const file of files) {
     const ticket = "p" + nextTicket++;
     if (file.size > MaxBytes) {
@@ -175,7 +179,7 @@ let dragDepth = 0;
 document.addEventListener("dragenter", e => {
   if (!hasFiles(e)) return;
   e.preventDefault();
-  if (dragDepth++ === 0 && !busy) document.body.classList.add("dropping");
+  if (dragDepth++ === 0 && !locked()) document.body.classList.add("dropping");
 });
 document.addEventListener("dragleave", e => {
   if (!hasFiles(e)) return;
@@ -184,7 +188,7 @@ document.addEventListener("dragleave", e => {
 document.addEventListener("dragover", e => {
   if (!hasFiles(e)) return;
   e.preventDefault();          // also keeps WebView2 from opening the file itself
-  e.dataTransfer.dropEffect = busy ? "none" : "copy";
+  e.dataTransfer.dropEffect = locked() ? "none" : "copy";
 });
 document.addEventListener("drop", e => {
   if (!hasFiles(e)) return;
@@ -194,7 +198,7 @@ document.addEventListener("drop", e => {
   addFiles(Array.from(e.dataTransfer.files));
 });
 
-attachButton.addEventListener("click", () => { if (!busy) picker.click(); });
+attachButton.addEventListener("click", () => { if (!locked()) picker.click(); });
 picker.addEventListener("change", () => { const files = Array.from(picker.files); picker.value = ""; addFiles(files); });
 
 // ---- paste -------------------------------------------------------------------------------------------
@@ -237,7 +241,7 @@ function showAttachments(items) {
     x.title = i18n.t("DOC_REMOVE");
     x.setAttribute("aria-label", i18n.fill("DOC_REMOVE_NAMED", it.name));
     x.textContent = "×";
-    x.addEventListener("click", () => { if (!busy) host.postMessage({ type: "detach", id: it.id }); });
+    x.addEventListener("click", () => { if (!locked()) host.postMessage({ type: "detach", id: it.id }); });
     chip.appendChild(x);
     chips.appendChild(chip);
   }

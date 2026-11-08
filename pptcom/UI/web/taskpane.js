@@ -147,6 +147,13 @@ function onLog(m) {
 // A document still being read (body.converting, docs.js) would not go with the request: wait for it.
 const converting = () => document.body.classList.contains("converting");
 
+// A request is on its way (sent, its busy state not back yet): body.sending, for docs.js too, which keeps the
+// conversation's documents as they are from then on (attach, ×), as it does while busy.
+function setSending(on) {
+  sending = on;
+  document.body.classList.toggle("sending", on);
+}
+
 // One request at a time: a second send before the add-in's busy state arrives would start a second request.
 // The add-in answers every send with its busy state, a refused one too.
 function submit() {
@@ -154,7 +161,7 @@ function submit() {
   const text = input.value.trim();
   if (!text) return;
   input.value = "";
-  sending = true;
+  setSending(true);
   post({ type: "send", text });
 }
 input.addEventListener("keydown", e => {
@@ -187,7 +194,7 @@ function showContinue(on) {
   continueButton.disabled = busy;
   continueButton.addEventListener("click", () => {
     if (busy || sending || converting()) return;
-    sending = true;
+    setSending(true);
     showContinue(false);
     post({ type: "continue" });
   });
@@ -262,7 +269,7 @@ function fill(select, items, selected, none) {
 // to send or stop here.
 function setBusy(on, elsewhere) {
   busy = on;
-  sending = false;
+  setSending(false);
   cancelling = false;
   const waiting = on && !!elsewhere;
   document.body.classList.toggle("busy", on);

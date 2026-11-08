@@ -664,6 +664,9 @@ namespace Pptcom
             public readonly Dictionary<string, PendingAttachment> Converting = new(StringComparer.Ordinal);
             // The latest conversions that failed, for AddinAutomation.Documents: "name: reason".
             public readonly List<string> FailedAttachments = [];
+            // Files refused as they were taken, a request running in this conversation (DocumentsLocked): what the page
+            // sends at their end (attach or attachFailed) is let go, the user having been told already.
+            public readonly HashSet<string> Refused = new(StringComparer.Ordinal);
             // The model list fetch (RefreshModelsAsync) whose status the pane shows; 0: none.
             public int FetchShown;
             // The selection the pane shows (DeckReader.UserSelection.Key), so that it is told only of changes.
@@ -741,7 +744,13 @@ namespace Pptcom
             control.ApiKeyDeleteRequested += (s, e) => OnApiKeyDeleted(pane);
             control.DocumentStarted += (s, e) => OnDocumentStarted(pane, e.Ticket, e.Name);
             control.DocumentConverted += (s, e) => OnDocumentConverted(pane, e.Message);
-            control.DocumentFailed += (s, e) => OnDocumentFailed(pane, e.Ticket, e.Name, e.Reason, e.Detail);
+            control.DocumentFailed += (s, e) =>
+            {
+                if (!pane.Refused.Remove(e.Ticket))
+                {
+                    OnDocumentFailed(pane, e.Ticket, e.Name, e.Reason, e.Detail);
+                }
+            };
             control.DocumentRemoved += (s, e) => OnDocumentRemoved(pane, e.Text);
             control.SetEndpoint(_settings.Endpoint);
             control.SetApiKeyState(_settings.HasApiKey);
@@ -1094,8 +1103,24 @@ namespace Pptcom
         // A document of the conversation in front is still being read (for AddinAutomation.Send).
         internal bool IsReadingDocuments => ActivePane()?.IsReadingDocuments == true;
 
+        // The documents of the conversation a request runs in stay as the request found them: it told the model which
+        // ones there are (DocumentsContext), and docread reads them. The page locks its attach and its × from the send on
+        // (body.sending, then busy) and AddinAutomation.Attach refuses; this is the last guard, for that conversation
+        // only: another window's goes on.
+        private bool DocumentsLocked(WindowPane pane)
+        {
+            return IsBusy && ReferenceEquals(pane, _runPane);
+        }
+
         private void OnDocumentStarted(WindowPane pane, string ticket, string name)
         {
+            if (DocumentsLocked(pane))
+            {
+                pane.Refused.Add(ticket);
+                OnDocumentFailed(pane, ticket, name, "busy", "");
+                return;
+            }
+
             if (!pane.Converting.ContainsKey(ticket))
             {
                 pane.Converting[ticket] = new PendingAttachment { Name = name, Conversation = ConversationOf(pane) };
@@ -1105,6 +1130,11 @@ namespace Pptcom
         private void OnDocumentConverted(WindowPane pane, JObject m)
         {
             string ticket = (string?)m["ticket"] ?? "";
+            if (pane.Refused.Remove(ticket))
+            {
+                return; // the user was told as it was taken (OnDocumentStarted)
+            }
+
             // The conversation it was attached in (the one of now if the page did not say it started).
             Conversation c = pane.Converting.TryGetValue(ticket, out PendingAttachment pending) ? pending.Conversation : ConversationOf(pane);
             pane.Converting.Remove(ticket);
@@ -1113,6 +1143,12 @@ namespace Pptcom
                 string name = (string?)m["name"] ?? "";
                 pane.Control.Log("DOC_DISCARDED", name);
                 LogToFile("(document not attached, its conversation ended while it was read: " + name + ")");
+                return;
+            }
+
+            if (DocumentsLocked(pane))
+            {
+                OnDocumentFailed(pane, ticket, (string?)m["name"] ?? "", "busy", "");
                 return;
             }
 
@@ -1177,6 +1213,12 @@ namespace Pptcom
             AttachedDocument? doc = c?.Documents.Find(d => d.Id == id);
             if (c is null || doc is null)
             {
+                return;
+            }
+
+            if (DocumentsLocked(pane))
+            {
+                LogToFile("(document not removed, a request runs in its conversation: " + doc.Id + " " + doc.Name + ")");
                 return;
             }
 

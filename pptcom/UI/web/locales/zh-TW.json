@@ -176,6 +176,7 @@
   "DOC_FAILED_RESOURCE_LIMIT": "檔案太大或太複雜，無法讀取",
   "DOC_FAILED_MISSING_PART": "檔案缺少必要的部分",
   "DOC_FAILED_TOO_LARGE": "無法附加超過 50MB 的檔案",
+  "DOC_FAILED_BUSY": "執行要求時無法附加資料，請在結束後重新附加",
   "DOC_FAILED": "讀取時發生錯誤",
   "DOC_FAILED_DETAIL": "讀取時發生錯誤：{0}",
 

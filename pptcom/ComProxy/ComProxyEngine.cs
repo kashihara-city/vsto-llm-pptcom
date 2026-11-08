@@ -851,7 +851,7 @@ namespace Pptcom.ComProxy
                                                     "To use another presentation, ask the user to save it and attach it to the task pane, then read it with docread");
             }
 
-            NoteChartData(resultValue);
+            NoteChartData(targetObj, member, resultValue);
 
             object? resultSlide = TrackSlides(action, target, resultValue);
             if (id is not null && id.Length > 0 && !TryLetIntoDefault(op, id, resultValue))
@@ -865,9 +865,15 @@ namespace Pptcom.ComProxy
         }
 
         // A chart's data a script opened, for the engine to close (ChartDataWorkbooks): its workbook, when the script
-        // reaches it (ChartData.Workbook opens it), and every object of it the script may keep in a variable (CloseChartData).
-        private void NoteChartData(object? resultValue)
+        // reaches it (ChartData.Workbook opens it), and every object of it the script may keep in a variable (CloseChartData);
+        // and the chart whose data it reached (Chart.ChartData), refreshed before that data is closed.
+        private void NoteChartData(object target, string? member, object? resultValue)
         {
+            if (resultValue is not null && string.Equals(member, "ChartData", StringComparison.OrdinalIgnoreCase))
+            {
+                _chartData.AddChart(target);
+            }
+
             if (resultValue is null || !ComSecurityPolicy.IsChartDataObject(resultValue))
             {
                 return;

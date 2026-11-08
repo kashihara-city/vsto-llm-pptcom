@@ -472,14 +472,18 @@ namespace ComScriptTests
             // What a type's rule refuses and what it leaves open, to call or read and to set, whether the object's ITypeInfo
             // names the interface with its leading _ or not (PowerPoint reports _CustomXMLPart, _Presentation...), for the
             // call itself and for the hints alike. Application's routes to the user's other open presentations are refused,
-            // the deck's own Windows is not; the slide size and orientation can be read but not set, since changing them
-            // moves every shape on every slide.
+            // the deck's own Windows is not; of Application only the deck and the SmartArt galleries are open (and a few
+            // names to read), not PowerPoint's own settings, window and dialogs; the slide size and orientation can be read
+            // but not set, since changing them moves every shape on every slide.
             List<string> wrong = [];
             foreach ((string type, string member, bool open, bool? settable) in new (string, string, bool, bool?)[]
                      {
                          ("Application", "Presentations", false, null), ("Application", "Windows", false, null), ("Application", "ActiveWindow", false, null),
                          ("Application", "SlideShowWindows", false, null), ("Application", "ProtectedViewWindows", false, null),
                          ("Application", "ActiveProtectedViewWindow", false, null), ("Presentation", "Windows", true, null),
+                         ("Application", "FileValidation", false, null), ("Application", "SetOptionFlag", false, null), ("Application", "Options", false, null),
+                         ("Application", "LaunchSpelling", false, null), ("Application", "Visible", false, null), ("Application", "ActivePresentation", true, null),
+                         ("Application", "SmartArtLayouts", true, null), ("Application", "SmartArtQuickStyles", true, null), ("Application", "Version", true, null),
                          ("CustomXMLPart", "Load", false, null), ("Presentation", "Merge", false, null), ("Slide", "ApplyTheme", false, null),
                          ("PageSetup", "SlideSize", true, false), ("PageSetup", "SlideWidth", true, false), ("PageSetup", "SlideHeight", true, false),
                          ("PageSetup", "SlideOrientation", true, false), ("PageSetup", "FirstSlideNumber", true, true), ("Shape", "Width", true, true),
@@ -498,6 +502,10 @@ namespace ComScriptTests
             }
 
             Report("policy: what each type's rule refuses or leaves open, to call or read and to set, under either name of the type", wrong.Count == 0, string.Join(", ", wrong));
+            // What Application refuses says what a script uses of it; its routes to the other decks, how to read one.
+            string setting = ComSecurityPolicy.CheckMemberOnType("_Application", "FileValidation") ?? "", decks = ComSecurityPolicy.CheckMemberOnType("Application", "Presentations") ?? "";
+            Report("policy: a refusal on Application names what a script uses of it, or how to read another deck",
+                   setting.Contains("Of Application, a script uses ActivePresentation and the SmartArt galleries") && decks.Contains("docread"), setting + " | " + decks);
             // The custom XML parts never become a handle, under either name: some of their members read files or put a
             // schema in the user's settings. Application and CommandBars stay out too; the deck's own objects stay in.
             foreach (string type in new[] { "CustomXMLParts", "CustomXMLPart", "CustomXMLSchemaCollection", "CustomXMLSchema", "CustomXMLNode", "Application", "CommandBars" })
