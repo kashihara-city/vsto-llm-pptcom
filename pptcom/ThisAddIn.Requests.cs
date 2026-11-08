@@ -40,6 +40,7 @@ namespace Pptcom
                 try
                 {
                     DeckReader.Fingerprint now = DeckReader.TakeFingerprint(c.Engine.Presentation, c.Engine.ShapeVariables());
+                    run.SeenAtStart = now;
                     DeckReader.DeckChanges changes = DeckReader.Compare(c.LastSeen, now);
                     if (changes.Lines.Count > 0)
                     {
@@ -280,7 +281,9 @@ namespace Pptcom
                 }
 
                 run.Pane.Control.ShowContinue(c.Stopped is not null);
-                c.LastSeen = DeckReader.TakeFingerprint(c.Engine.Presentation, c.Engine.ShapeVariables());
+                // what the request did not change is as it was at its start (SeenAtStart): only its slides are read again
+                HashSet<int> changed = c.Engine.TakeChangedSlideIds();
+                c.LastSeen = DeckReader.TakeFingerprint(c.Engine.Presentation, c.Engine.ShapeVariables(), run.SeenAtStart, changed);
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
@@ -311,6 +314,7 @@ namespace Pptcom
             public List<ChatMessage>? Messages; // this request's conversation, as sent
             public ChatMessage? OwnMessage;  // this request's user message in Messages (not its index: notes before it may leave)
             public string? HandEdits;        // what the user had changed by hand before it (ContextBeforeRequest)
+            public DeckReader.Fingerprint? SeenAtStart; // the deck as read for those, at its start (null: not read)
             public string? Selection;        // one line on what the user had selected when sending it (DeckReader.DescribeSelection)
             public DeckDefaults? DeckDefaults;
             public readonly System.Text.StringBuilder Log = new();

@@ -286,8 +286,8 @@ namespace Pptcom
                 Conversation c = new(pane.Presentation, _llm, conversation =>
                     new ComProxyEngine(this.Application, async (prompt, size) => await conversation.Llm.GenerateImageAsync(conversation.ImageModel, prompt, size, _windowGone.Token).ConfigureAwait(true),
                                        pane.Presentation));
-                Action<JObject> usage = ComProxyEngine.FileUsageSink("addin");
-                c.Engine.UsageSink = rec => { if (_saveProgress) { usage(rec); } };
+                Action<IReadOnlyList<JObject>> usage = ComProxyEngine.FileUsageSink("addin");
+                c.Engine.UsageSink = records => { if (_saveProgress) { usage(records); } };
                 pane.Conversation = c;
             }
             return pane.Conversation;

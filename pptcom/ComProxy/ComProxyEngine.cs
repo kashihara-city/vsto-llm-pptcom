@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using static System.FormattableString;
@@ -127,9 +128,13 @@ namespace Pptcom.ComProxy
         }
 
         // Usage observation: every executed op (and every refused one) is reported here as one
-        // small JSON object - {type, member, action, ok, blocked, error}. The host appends it to
-        // a JSONL file; scripts/test/usage_report.py aggregates. Null = no recording.
-        public Action<JObject>? UsageSink { get; set; }
+        // small JSON object - {type, member, action, ok, blocked, error}, those of a call (ExecuteScriptAsync,
+        // ExecuteAsync) together when it ends. The host appends them to a JSONL file; scripts/test/usage_report.py
+        // aggregates. Null = no recording.
+        public Action<IReadOnlyList<JObject>>? UsageSink { get; set; }
+
+        // The usage records of the call running, handed to UsageSink when it ends (FlushUsage).
+        private readonly List<JObject> _usage = [];
 
         // The image sizes the image model takes, those its image prompt offers (Agent\image-prompts\<name>.json): an image
         // of any other is refused before the model is asked. Null: any "WxH" (the runner).
@@ -152,19 +157,26 @@ namespace Pptcom.ComProxy
             return Path.Combine(dir, fileName);
         }
 
-        // Standard sink: one JSON line per op, appended to UsageLogPath (shared by the add-in
+        // Standard sink: one JSON line per op, a call's appended at once to UsageLogPath (shared by the add-in
         // and ComScriptRunner, whose lines say "rig"; `src` tells them apart).
-        public static Action<JObject> FileUsageSink(string source)
+        public static Action<IReadOnlyList<JObject>> FileUsageSink(string source)
         {
-            return rec =>
+            return records =>
             {
-                rec.AddFirst(new JProperty("src", source));
-                rec.AddFirst(new JProperty("ts", DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)));
-                // Best effort: a record that cannot be written (the file locked by another PowerPoint) is dropped.
+                string ts = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
+                System.Text.StringBuilder lines = new();
+                foreach (JObject rec in records)
+                {
+                    rec.AddFirst(new JProperty("src", source));
+                    rec.AddFirst(new JProperty("ts", ts));
+                    lines.Append(rec.ToString(Newtonsoft.Json.Formatting.None)).Append('\n');
+                }
+
+                // Best effort: records that cannot be written (the file locked by another PowerPoint) are dropped.
                 try
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(UsageLogPath));
-                    File.AppendAllText(UsageLogPath, rec.ToString(Newtonsoft.Json.Formatting.None) + "\n");
+                    File.AppendAllText(UsageLogPath, lines.ToString());
                 }
                 catch (IOException)
                 {
@@ -198,7 +210,7 @@ namespace Pptcom.ComProxy
                         || (error is not null && error.Contains(GeneratedImagesOnly));
                     rec["error"] = error is not null && error.Length > 200 ? error.Substring(0, 200) : error;
                 }
-                UsageSink(rec);
+                _usage.Add(rec);
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
@@ -296,10 +308,31 @@ namespace Pptcom.ComProxy
             finally
             {
                 await CloseChartDataAsync().ConfigureAwait(true);
+                FlushUsage();
             }
 
             result.Success = true;
             return result;
+        }
+
+        // The call's usage records to UsageSink, at once.
+        private void FlushUsage()
+        {
+            if (_usage.Count == 0)
+            {
+                return;
+            }
+
+            List<JObject> records = [.. _usage];
+            _usage.Clear();
+            try
+            {
+                UsageSink?.Invoke(records);
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                // recording must never break a call
+            }
         }
 
         // Runs one op; returns null on success or the model-facing error text (with hints).
@@ -378,6 +411,7 @@ namespace Pptcom.ComProxy
             {
                 // A chart's data the script opened does not stay open in Excel after it (ChartDataWorkbooks).
                 await CloseChartDataAsync().ConfigureAwait(true);
+                FlushUsage();
             }
 
             return result;
@@ -572,6 +606,40 @@ namespace Pptcom.ComProxy
             return cause;
         }
 
+        // Each variable's shape by its ShapeKey, for the object (RCW) the variable holds: a shape stays on its slide with its
+        // Id, so this is read from PowerPoint once for all the calls that list the variables (ShapeVariables, after each
+        // pptcom call and at a request's start and end). A read that failed is not kept.
+        private readonly ConditionalWeakTable<object, string> _shapeKeys = new();
+
+        // Objects a script deleted (Delete called on them): there is no shape behind them any more, and reading one throws.
+        private readonly ConditionalWeakTable<object, object> _deletedObjects = new();
+
+        // A Delete that went through, as a call or written without parentheses (b1.Delete, parsed as a get): nothing is
+        // behind the object any more.
+        private void NoteDeleted(string action, string? member, object targetObj)
+        {
+            bool callOrGet = string.Equals(action, ComOpAction.Call, StringComparison.Ordinal) || string.Equals(action, ComOpAction.Get, StringComparison.Ordinal);
+            if (callOrGet && string.Equals(member, "Delete", StringComparison.OrdinalIgnoreCase) && !_deletedObjects.TryGetValue(targetObj, out _))
+            {
+                _deletedObjects.Add(targetObj, targetObj);
+            }
+        }
+
+        private string? ShapeKeyOf(object value, string type)
+        {
+            if (_shapeKeys.TryGetValue(value, out string known))
+            {
+                return known;
+            }
+
+            string? key = Guard.Try<string?>(() =>
+            {
+                dynamic shape = type == "Table" ? ((dynamic)value).Parent : value;
+                return ShapeKey((int)shape.Parent.SlideID, (int)shape.Id);
+            }, fallback: null);
+            return key is null ? null : _shapeKeys.GetValue(value, _ => key);
+        }
+
         // The script's variables that hold a shape (or a table, by its shape), keyed by ShapeKey -
         // so the slide inventories can say which variable is which shape, and the model need not
         // guess Shapes(n). Read-only COM calls on objects the script already holds; shapes deleted
@@ -592,21 +660,23 @@ namespace Pptcom.ComProxy
                     continue;
                 }
 
-                try
+                if (_deletedObjects.TryGetValue(kv.Value, out _))
                 {
-                    dynamic shape = type == "Table" ? ((dynamic)kv.Value).Parent : kv.Value;
-                    string key = ShapeKey((int)shape.Parent.SlideID, (int)shape.Id);
-                    if (!map.TryGetValue(key, out List<string> names))
-                    {
-                        map[key] = names = [];
-                    }
+                    continue;
+                }
 
-                    names.Add(type == "Table" ? kv.Key + " (its Table)" : kv.Key);
-                }
-                catch (Exception ex) when (Guard.IsRecoverable(ex))
+                string? key = ShapeKeyOf(kv.Value, type);
+                if (key is null)
                 {
-                    // deleted since
+                    continue; // deleted since
                 }
+
+                if (!map.TryGetValue(key, out List<string> names))
+                {
+                    map[key] = names = [];
+                }
+
+                names.Add(type == "Table" ? kv.Key + " (its Table)" : kv.Key);
             }
             foreach (List<string> names in map.Values)
             {
@@ -827,6 +897,7 @@ namespace Pptcom.ComProxy
             object? resultValue = IsApplicationActivePresentation(op, action, member, targetObj)
                 ? Presentation ?? throw new InvalidOperationException("No presentation is open.")
                 : Invoke(op, action, member, targetObj);
+            NoteDeleted(action, member, targetObj);
             if (resultValue is not null && !ComSecurityPolicy.IsReturnValueAllowed(resultValue))
             {
                 // an Office type the policy keeps out (Application, the custom XML parts...) by its name; anything else by its .NET type
@@ -1419,11 +1490,20 @@ namespace Pptcom.ComProxy
         private readonly Dictionary<string, object?> _handleSlide = new(StringComparer.OrdinalIgnoreCase); // null: not on a slide
         private readonly List<object> _touchedSlides = [];
 
+        // The slides changed since the last TakeChangedSlideIds: those of all of a request's calls, where _touchedSlides
+        // has one call's. The deck is read again at a request's end only on these (DeckReader.TakeFingerprint).
+        private readonly List<object> _changedSlides = [];
+
         private void MarkTouched(object? slide)
         {
             if (slide is null)
             {
                 return;
+            }
+
+            if (!_changedSlides.Exists(s => ReferenceEquals(s, slide)))
+            {
+                _changedSlides.Add(slide);
             }
 
             foreach (object s in _touchedSlides)
@@ -1435,6 +1515,26 @@ namespace Pptcom.ComProxy
             }
 
             _touchedSlides.Add(slide);
+        }
+
+        // The SlideIDs of the slides changed since the last call (one deleted since is left out), forgetting them.
+        public HashSet<int> TakeChangedSlideIds()
+        {
+            HashSet<int> ids = [];
+            foreach (object s in _changedSlides)
+            {
+                try
+                {
+                    ids.Add((int)((dynamic)s).SlideID);
+                }
+                catch (Exception ex) when (Guard.IsRecoverable(ex))
+                {
+                    // slide was deleted
+                }
+            }
+
+            _changedSlides.Clear();
+            return ids;
         }
 
         // Current 1-based indexes of the slides changed since the last call (resolved now, so

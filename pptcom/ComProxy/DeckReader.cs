@@ -887,17 +887,16 @@ namespace Pptcom.ComProxy
                 return "";
             }
 
-            try
-            {
-                if (variables.TryGetValue(ComProxyEngine.ShapeKey(id, (int)shape.Id), out List<string> names) && names.Count > 0)
-                {
-                    return "= " + string.Join(", ", names) + " ";
-                }
-            }
-            catch (Exception ex) when (Guard.IsRecoverable(ex))
-            {
-            }
-            return "";
+            int? shapeId = Guard.Try<int?>(() => (int)shape.Id, fallback: null);
+            return shapeId is int known ? VariablesByKey(variables, id, known) : "";
+        }
+
+        // The same, by the shape's SlideID and Id.
+        internal static string VariablesByKey(IDictionary<string, List<string>>? variables, int slideId, int shapeId)
+        {
+            return variables is not null && variables.TryGetValue(ComProxyEngine.ShapeKey(slideId, shapeId), out List<string> names) && names.Count > 0
+                ? "= " + string.Join(", ", names) + " "
+                : "";
         }
 
         // "Rounded Rectangle 15", "TextBox 3", "正方形/長方形 4": the names PowerPoint gives new shapes.
@@ -966,7 +965,12 @@ namespace Pptcom.ComProxy
             public string Variables = ""; // "= card1 " when a script variable held it at the time
         }
 
-        public static Fingerprint TakeFingerprint(object? presentation, IDictionary<string, List<string>> variables)
+        // The deck as it is. With `earlier` (the deck as read at the request's start) and `changed` (the SlideIDs of the
+        // slides the request changed), a slide in `earlier` and not changed is taken from it rather than read again, its
+        // variables as they are now: the request did nothing to it, and what the user may have done to it meanwhile then
+        // shows at the next request's start.
+        public static Fingerprint TakeFingerprint(object? presentation, IDictionary<string, List<string>> variables, Fingerprint? earlier = null,
+                                                  ISet<int>? changed = null)
         {
             dynamic pres = Deck(presentation);
             Fingerprint fp = new();
@@ -974,9 +978,16 @@ namespace Pptcom.ComProxy
             for (int n = 1; n <= slideCount; n++)
             {
                 dynamic slide = pres.Slides(n);
+                int slideId = (int)slide.SlideID;
+                if (earlier is not null && changed is not null && !changed.Contains(slideId) && earlier.Slides.Find(e => e.Id == slideId) is { } kept)
+                {
+                    fp.Slides.Add(WithVariables(kept, variables));
+                    continue;
+                }
+
                 SlideState s = new()
                 {
-                    Id = (int)slide.SlideID,
+                    Id = slideId,
                 };
                 int shapeCount = (int)slide.Shapes.Count;
                 for (int i = 1; i <= shapeCount; i++)
@@ -989,7 +1000,7 @@ namespace Pptcom.ComProxy
                         Top = Whole(shape.Top),
                         Width = Whole(shape.Width),
                         Height = Whole(shape.Height),
-                        Variables = VariablesOf(variables, slide, shape),
+                        Variables = VariablesByKey(variables, slideId, id),
                     };
                     try
                     {
@@ -1017,6 +1028,32 @@ namespace Pptcom.ComProxy
                 fp.Slides.Add(s);
             }
             return fp;
+        }
+
+        // A slide's state as read before, with the variables that hold its shapes now.
+        private static SlideState WithVariables(SlideState kept, IDictionary<string, List<string>> variables)
+        {
+            SlideState s = new()
+            {
+                Id = kept.Id,
+            };
+            foreach (int id in kept.Order)
+            {
+                ShapeState was = kept.Shapes[id];
+                s.Shapes[id] = new ShapeState
+                {
+                    Left = was.Left,
+                    Top = was.Top,
+                    Width = was.Width,
+                    Height = was.Height,
+                    Fill = was.Fill,
+                    Text = was.Text,
+                    Variables = VariablesByKey(variables, kept.Id, id),
+                };
+                s.Order.Add(id);
+            }
+
+            return s;
         }
 
         // A position or size in whole points (half away from zero, as the shape list shows it).
