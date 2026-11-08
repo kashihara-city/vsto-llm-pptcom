@@ -170,13 +170,13 @@ namespace Pptcom.ComProxy
             return new Row { Trigger = trigger, Delay = delay, Length = length, Shape = shape, Effect = what, How = how };
         }
 
-        // How long an effect plays, as PowerPoint times the effect after it: its duration, times its repeats, twice when it
-        // plays back; by character or by word, each letter or word starts a tenth of the duration after the one before
-        // (PowerPoint's own step, which a script can neither read nor set). RepeatDuration is left out: PowerPoint starts the
-        // next effect after the repeats whatever it says.
+        // How long an effect plays, as PowerPoint times the effect after it: one run - its duration, and by character or by
+        // word, each letter or word starting a tenth of the duration after the one before (PowerPoint's own step, which a
+        // script can neither read nor set) - times its repeats, twice when it plays back. RepeatDuration is left out:
+        // PowerPoint starts the next effect after the repeats whatever it says.
         internal static double Length(double duration, double runs, bool back, int units)
         {
-            return (duration * runs * (back ? 2 : 1)) + (0.1 * duration * Math.Max(0, units - 1));
+            return (duration + (0.1 * duration * Math.Max(0, units - 1))) * runs * (back ? 2 : 1);
         }
 
         // The letters (not spaces or line breaks) or the words a by-character or by-word effect animates one after another,

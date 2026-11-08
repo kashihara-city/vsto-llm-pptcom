@@ -38,6 +38,7 @@ No animation unless the user asks for motion. When asked, add it like this:
   fx.Timing.TriggerType = msoAnimTriggerWithPrevious
   fx.Timing.TriggerDelayTime = 0.4   ' seconds, counted from the click, not from the previous effect
   fx.Timing.Duration = 0.6   ' last: setting Direction or Exit afterwards puts Duration back to 0.5
+Letters or words one after another (ConvertToTextUnitEffect) only when the user asks for it, and then give that shape no other effect: PowerPoint plays a later effect on it by letter too, all letters at once, and the shape list's times for it are wrong.
 
 No chart unless the user asks for one: it takes many steps and fails easily. When asked, make it like this, data and all in one pptcom call:
   Set ch = sld.Shapes.AddChart2(-1, xlColumnClustered, 40, 120, 600, 340)

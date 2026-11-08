@@ -784,7 +784,8 @@ namespace ComScriptTests
                    got == "0:0.00-Infinity 0:0.20-0.70 0:Infinity-Infinity 1:0.00-0.50", got);
             Report("animations: by letter or word, each a tenth of the duration after the one before; spaces and line breaks are no letters",
                    Math.Abs(DeckAnimations.Length(2, 1, back: false, 10) - 3.8) < 1e-9 && Math.Abs(DeckAnimations.Length(2, 1, back: false, 3) - 2.4) < 1e-9 &&
-                   Math.Abs(DeckAnimations.Length(2, 2, back: true, 1) - 8) < 1e-9 && DeckAnimations.Letters("AB CD\rEF") == 6 && DeckAnimations.Letters("市立図書館の報告") == 8,
+                   Math.Abs(DeckAnimations.Length(2, 2, back: true, 1) - 8) < 1e-9 && DeckAnimations.Letters("AB CD\rEF") == 6 && DeckAnimations.Letters("市立図書館の報告") == 8 &&
+                   Math.Abs(DeckAnimations.Length(2, 3, back: false, 10) - 11.4) < 1e-9 && Math.Abs(DeckAnimations.Length(2, 1, back: true, 10) - 7.6) < 1e-9,
                    Invariant($"{DeckAnimations.Length(2, 1, back: false, 10)} / {DeckAnimations.Letters("AB CD\rEF")}"));
 
             AnimSlide units = new();
@@ -961,6 +962,22 @@ namespace ComScriptTests
             Report("contrast: below 3:1 is listed at any size, 3:1 and above is not, and the line says no more than the ratio",
                    judge(12, mid).Length == 0 && judge(40, rgb(190, 190, 190)).Contains("1.8:1") && !report.Contains("needs"),
                    judge(40, rgb(190, 190, 190)));
+            // A circle's frame is not its fill: text by the frame's corner is on what is behind the circle.
+            List<TextContrast.Layer> circle =
+            [
+                new TextContrast.Layer(new DeckReader.ShapeBox(1, "oval", 100, 100, 200, 200), solid, fillColor: 0, text: null, styles: [], form: TextContrast.Form.Oval),
+                layer(2, "corner", 100, 100, 40, 20, none, 0, new TextContrast.TextStyle(12, bold: false, 0)),
+                layer(3, "inside", 180, 190, 40, 20, none, 0, new TextContrast.TextStyle(12, bold: false, 0)),
+            ];
+            List<TextContrast.Layer> star =
+            [
+                new TextContrast.Layer(new DeckReader.ShapeBox(1, "star", 100, 100, 200, 200), solid, fillColor: 0, text: null, styles: [], form: TextContrast.Form.Other),
+                layer(2, "inside", 180, 190, 40, 20, none, 0, new TextContrast.TextStyle(12, bold: false, 0)),
+            ];
+            string onCircle = TextContrast.Report(circle, solid, white);
+            Report("contrast: text by a circle's corner is on the background, text in it on the circle; on another form it is not judged",
+                   onCircle.Contains("[3] inside 12pt RGB(0,0,0) on [1] oval") && !onCircle.Contains("corner") && TextContrast.Report(star, solid, white).Length == 0,
+                   onCircle);
             Report("contrast: nothing is said when the slide's background cannot be judged (a picture, a gradient)",
                    TextContrast.Report([layer(1, "t", 0, 0, 100, 40, none, 0, new TextContrast.TextStyle(12, bold: false, mid))], unknown, 0).Length == 0, "");
         }
@@ -990,6 +1007,10 @@ namespace ComScriptTests
                    !report.Contains("inset") && !report.Contains("bg"), report);
             Report("corners: nothing over square corners",
                    CornerBands.Report([new CornerBands.Card(card, 0)], [across, bottom, stripe]).Length == 0, "");
+            DeckReader.ShapeBox sheetInFront = band(20, "sheet", 0, 0, 960, 540), sheetBehind = band(5, "sheet", 0, 0, 960, 540);
+            Report("corners: not what an opaque rectangle in front of both hides; one behind them hides nothing",
+                   CornerBands.Report([rounded], [across], [sheetInFront]).Length == 0 && CornerBands.Report([rounded], [across], [sheetBehind]).Contains("[10] top past"),
+                   CornerBands.Report([rounded], [across], [sheetBehind]));
         }
 
         // A shape's kind by name in the shape list, from the enums: an AutoShape's form, a placeholder's role, any other

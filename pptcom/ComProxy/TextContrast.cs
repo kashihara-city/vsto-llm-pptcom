@@ -37,8 +37,20 @@ namespace Pptcom.ComProxy
             public int Color { get; } = color;
         }
 
-        // A shape, back to front: where its fill is (Frame), what the fill is, and where its text is and how it looks.
-        internal sealed class Layer(DeckReader.ShapeBox frame, FillKind fill, int fillColor, DeckReader.ShapeBox? text, IReadOnlyList<TextStyle> styles)
+        // The outline of a shape's fill within its frame: the whole frame, a rounded rectangle, an ellipse, or another form
+        // whose outline is not worked out here.
+        internal enum Form
+        {
+            Box,
+            Rounded,
+            Oval,
+            Other,
+        }
+
+        // A shape, back to front: where its fill is (Frame and Form, Radius for a rounded rectangle's corners), what the
+        // fill is, and where its text is and how it looks.
+        internal sealed class Layer(DeckReader.ShapeBox frame, FillKind fill, int fillColor, DeckReader.ShapeBox? text, IReadOnlyList<TextStyle> styles,
+                                    Form form = Form.Box, double radius = 0)
         {
             public DeckReader.ShapeBox Frame { get; } = frame;
 
@@ -49,6 +61,41 @@ namespace Pptcom.ComProxy
             public DeckReader.ShapeBox? Text { get; } = text;
 
             public IReadOnlyList<TextStyle> Styles { get; } = styles;
+
+            public Form Form { get; } = form;
+
+            public double Radius { get; } = radius;
+
+            // Whether its fill is under the point: outside the frame no; in a rounded rectangle's corner or out of an
+            // ellipse no; for another form, inside the frame but not known (null).
+            public bool? Covers(double x, double y)
+            {
+                DeckReader.ShapeBox f = Frame;
+                if (x < f.Left || x > f.Right || y < f.Top || y > f.Bottom)
+                {
+                    return false;
+                }
+
+                switch (Form)
+                {
+                    case Form.Rounded:
+                        double cx = Math.Max(f.Left + Radius, Math.Min(f.Right - Radius, x)), cy = Math.Max(f.Top + Radius, Math.Min(f.Bottom - Radius, y));
+                        return ((x - cx) * (x - cx)) + ((y - cy) * (y - cy)) <= Radius * Radius;
+                    case Form.Oval:
+                        double rx = (f.Right - f.Left) / 2, ry = (f.Bottom - f.Top) / 2;
+                        if (rx <= 0 || ry <= 0)
+                        {
+                            return false;
+                        }
+
+                        double dx = (x - f.Left - rx) / rx, dy = (y - f.Top - ry) / ry;
+                        return (dx * dx) + (dy * dy) <= 1;
+                    case Form.Other:
+                        return null;
+                    default:
+                        return true;
+                }
+            }
         }
 
         // The slide's shapes and background as PowerPoint has them, and what reads poorly ("" when nothing does).
@@ -121,8 +168,9 @@ namespace Pptcom.ComProxy
             return found.Count == 0 ? "" : "Low contrast (fix it unless it is meant): " + string.Join("; ", found) + (more > 0 ? Invariant($"; and {more} more") : "") + "\n";
         }
 
-        // What is behind the text of layers[index]: its own fill, the topmost shape with a fill under the middle of its
-        // text, or the slide's background.
+        // What is behind the text of layers[index]: its own fill, the topmost shape whose fill is under the middle of its
+        // text (not its frame: the corner of a circle's frame is the background), or the slide's background. Unknown when
+        // a shape of another form has the middle of the text in its frame.
         private static (FillKind Kind, int Color, string Where) Behind(IReadOnlyList<Layer> layers, int index, FillKind backgroundKind, int backgroundColor)
         {
             Layer layer = layers[index];
@@ -136,10 +184,10 @@ namespace Pptcom.ComProxy
             for (int j = index - 1; j >= 0; j--)
             {
                 Layer under = layers[j];
-                DeckReader.ShapeBox frame = under.Frame;
-                if (under.Fill != FillKind.None && x >= frame.Left && x <= frame.Right && y >= frame.Top && y <= frame.Bottom)
+                bool? covers = under.Fill == FillKind.None ? false : under.Covers(x, y);
+                if (covers != false)
                 {
-                    return (under.Fill, under.FillColor, frame.Label);
+                    return covers == true ? (under.Fill, under.FillColor, under.Frame.Label) : (FillKind.Unknown, 0, under.Frame.Label);
                 }
             }
             return (backgroundKind, backgroundColor, "the slide background");
@@ -192,7 +240,32 @@ namespace Pptcom.ComProxy
 
             (FillKind fill, int color) = Guard.Try<(FillKind, int)>(() => FillOf((object)shape.Fill), (FillKind.Unknown, 0));
             DeckReader.ShapeBox? text = Guard.Try<DeckReader.ShapeBox?>(() => DeckReader.TextBounds(shape), fallback: null);
-            return new Layer(frame, fill, color, text, text is null ? [] : Styles((object)shape.TextFrame.TextRange));
+            (Form form, double radius) = Guard.Try<(Form, double)>(() => FormOf((object)shape, frame), (Form.Other, 0));
+            return new Layer(frame, fill, color, text, text is null ? [] : Styles((object)shape.TextFrame.TextRange), form, radius);
+        }
+
+        // The outline of an AutoShape or a text box's fill: a rectangle, a rounded rectangle (its corners' radius is its
+        // adjustment times its shorter side), an ellipse, or another form.
+        internal static (Form, double) FormOf(dynamic shape, DeckReader.ShapeBox frame)
+        {
+            int form = (int)shape.AutoShapeType;
+            if (form == (int)MsoAutoShapeType.msoShapeRectangle)
+            {
+                return (Form.Box, 0);
+            }
+
+            if (form == (int)MsoAutoShapeType.msoShapeOval)
+            {
+                return (Form.Oval, 0);
+            }
+
+            if (form != (int)MsoAutoShapeType.msoShapeRoundedRectangle)
+            {
+                return (Form.Other, 0);
+            }
+
+            double adjustment = Guard.Try(() => (double)shape.Adjustments.Item(1), fallback: 0);
+            return (Form.Rounded, Math.Max(0, Math.Min(0.5, adjustment)) * Math.Min(frame.Right - frame.Left, frame.Bottom - frame.Top));
         }
 
         // Solid with its color; None when not shown (or fully see-through); Unknown for anything else: a gradient, a

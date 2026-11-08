@@ -70,16 +70,20 @@ namespace Pptcom.Agent
             }
 
             List<ChatMessage> part = [.. messages.Skip(from + 1)];
-            HashSet<string> answered = new(part.Where(static m => m.Role == "tool").Select(static m => m.ToolCallId ?? ""), StringComparer.Ordinal);
-            List<ToolCall> pptcoms = [.. part.Where(static m => m.Role == "assistant" && m.ToolCalls is not null)
-                                             .SelectMany(static m => m.ToolCalls).Where(static c => c.Name == PptcomTool)];
-            HashSet<string> pptcomIds = new(pptcoms.Select(static c => c.Id), StringComparer.Ordinal);
-            string? kept = pptcoms.Count > 0 ? pptcoms[0].Id : null; // the one call that stands for them all
-            string ran = PptcomRan(pptcoms.Count(c => answered.Contains(c.Id)), stopped: pptcoms.Exists(c => !answered.Contains(c.Id)));
+            (List<(int Turn, ToolCall Call)> pptcoms, HashSet<(int Turn, string Id)> answered) = CallsByTurn(part);
+            HashSet<(int Turn, string Id)> pptcomCalls = [.. pptcoms.Select(static p => (p.Turn, p.Call.Id))];
+            (int Turn, string Id)? kept = pptcoms.Count > 0 ? (pptcoms[0].Turn, pptcoms[0].Call.Id) : null; // the one call that stands for them all
+            string ran = PptcomRan(pptcoms.Count(p => answered.Contains((p.Turn, p.Call.Id))), stopped: pptcoms.Exists(p => !answered.Contains((p.Turn, p.Call.Id))));
 
             List<ChatMessage> shortened = [new ChatMessage("user", request)];
+            int turn = -1;
             foreach (ChatMessage m in part)
             {
+                if (m.Role == "assistant" && m.ToolCalls is not null)
+                {
+                    turn++;
+                }
+
                 if (m.Role == "user" || (m.Notes && ending is null))
                 {
                     continue; // the renderings' carrier, the context of a continued request; notes of a request that finished
@@ -87,9 +91,10 @@ namespace Pptcom.Agent
 
                 if (m.Role == "tool")
                 {
-                    if (pptcomIds.Contains(m.ToolCallId ?? ""))
+                    (int, string) call = (turn, m.ToolCallId ?? "");
+                    if (pptcomCalls.Contains(call))
                     {
-                        if (m.ToolCallId == kept)
+                        if (call == kept)
                         {
                             shortened.Add(ChatMessage.ToolResult(m.ToolCallId ?? "", ran));
                         }
@@ -103,7 +108,8 @@ namespace Pptcom.Agent
                 ChatMessage a = new(m.Role, m.Content);
                 if (m.ToolCalls is not null)
                 {
-                    List<ToolCall> calls = [.. m.ToolCalls.Where(c => !pptcomIds.Contains(c.Id) || c.Id == kept)];
+                    int t = turn;
+                    List<ToolCall> calls = [.. m.ToolCalls.Where(c => !pptcomCalls.Contains((t, c.Id)) || (t, c.Id) == kept)];
                     if (calls.Count == 0)
                     {
                         if (!string.IsNullOrEmpty(m.Content))
@@ -118,12 +124,12 @@ namespace Pptcom.Agent
                     {
                         Id = call.Id,
                         Name = call.Name,
-                        Arguments = call.Id == kept ? PptcomCallsArguments(pptcoms.Count) : ShortenArguments(call),
+                        Arguments = (t, call.Id) == kept ? PptcomCallsArguments(pptcoms.Count) : ShortenArguments(call),
                     })];
                     shortened.Add(a);
-                    foreach (ToolCall call in calls.Where(c => !answered.Contains(c.Id)))
+                    foreach (ToolCall call in calls.Where(c => !answered.Contains((t, c.Id))))
                     {
-                        shortened.Add(ChatMessage.ToolResult(call.Id, call.Id == kept ? ran : NotRun));
+                        shortened.Add(ChatMessage.ToolResult(call.Id, (t, call.Id) == kept ? ran : NotRun));
                     }
 
                     continue;
@@ -161,6 +167,31 @@ namespace Pptcom.Agent
 
             return Invariant($"Done ({ran} pptcom call(s)). What they did is left out of this conversation and does not tell what the slides are now: ") +
                    "look at a slide with pptread before you change it." + (stopped ? " The user stopped the request before the last one ran." : "");
+        }
+
+        // The request's pptcom calls and the calls that have a result, each known by its turn (the assistant message that
+        // made it, counted from 0) and its id, and a result by the turn it follows: a server that sends no ids gets call_0,
+        // call_1 ... from StreamedReply in every turn, so an id alone would take an imagegen call of one turn for a pptcom
+        // call of another.
+        private static (List<(int Turn, ToolCall Call)> Pptcoms, HashSet<(int Turn, string Id)> Answered) CallsByTurn(List<ChatMessage> part)
+        {
+            List<(int Turn, ToolCall Call)> pptcoms = [];
+            HashSet<(int Turn, string Id)> answered = [];
+            int turn = -1;
+            foreach (ChatMessage m in part)
+            {
+                if (m.Role == "assistant" && m.ToolCalls is not null)
+                {
+                    turn++;
+                    int t = turn;
+                    pptcoms.AddRange(m.ToolCalls.Where(static c => c.Name == PptcomTool).Select(c => (t, c)));
+                }
+                else if (m.Role == "tool")
+                {
+                    answered.Add((turn, m.ToolCallId ?? ""));
+                }
+            }
+            return (pptcoms, answered);
         }
 
         private static List<ChatMessage> OrderToolResults(List<ChatMessage> list)

@@ -442,6 +442,19 @@ namespace ChatStreamTests
                   later[9].Content == "作りました。" &&
                   !later.Exists(static m => m.Content is string c && (c.Contains("Defined") || c.Contains("Changed") || c.Contains("FAILED") || c.Contains("card1"))),
                   sequence);
+
+            // A server that sends no ids: StreamedReply numbers each turn's calls from call_0, so the same id comes back.
+            List<ChatMessage> plain = [new ChatMessage("system", "s"), new ChatMessage("user", "make a deck")];
+            AddTurn(plain, "0", "pptcom", "{\"script\":\"a = 1\"}", "OK: 1 lines executed. Defined: a.", slide: 1);
+            AddTurn(plain, "0", "imagegen", "{\"name\":\"hero\",\"prompt\":\"a library\",\"size\":\"1024x768\"}", "Generated image bound to hero (1024x768 px, aspect 4:3). Use it in pptcom: ...", slide: null);
+            AddTurn(plain, "0", "pptcom", "{\"script\":\"b = 2\"}", "OK: 1 lines executed. Defined: b.", slide: 1);
+            List<ChatMessage> noIds = Compaction.ShortenForLater(plain, plain[1], "make a deck", ending: null);
+            Check("calls without ids are told apart by their turn: imagegen stays imagegen, the pptcom calls become one",
+                  noIds.Count == 5 && noIds[1].ToolCalls![0].Name == "pptcom" && noIds[1].ToolCalls![0].Arguments.Contains("2 pptcom call(s)") &&
+                  noIds[2].Content!.StartsWith("Done (2 pptcom call(s))", StringComparison.Ordinal) &&
+                  noIds[3].ToolCalls![0].Name == "imagegen" && noIds[3].ToolCalls![0].Arguments.Contains("hero") &&
+                  noIds[4].Content!.StartsWith("Generated image bound to hero", StringComparison.Ordinal),
+                  string.Join(" | ", noIds.ConvertAll(static m => m.Role + ": " + (m.Content ?? string.Join(",", (m.ToolCalls ?? []).ConvertAll(static c => c.Name + " " + c.Arguments))))));
             ContinuedTests();
         }
 
