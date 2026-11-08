@@ -354,7 +354,7 @@ namespace Pptcom.Agent
             return t is not null ? t.Value.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture) : "-";
         }
 
-        // " (script 5820 ms, renderings 410 ms, shape lists 160 ms)" after a tool call's name in the session log: what of
+        // " (script N ms, renderings N ms, shape lists N ms)" after a tool call's name in the session log: what of
         // the time from the model's reply to the slides shown again went where. "" when the call had none of them.
         internal static string TimesText(ToolResult result)
         {
