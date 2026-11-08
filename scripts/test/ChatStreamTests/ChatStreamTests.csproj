@@ -44,6 +44,7 @@
     <Compile Include="..\..\..\pptcom\Agent\LlmServerException.cs" />
     <Compile Include="..\..\..\pptcom\Agent\LlmServerFailure.cs" />
     <Compile Include="..\..\..\pptcom\Agent\UserLocale.cs" />
+    <Compile Include="..\..\..\pptcom\Documents\PendingDocuments.cs" />
     <Compile Include="..\..\..\pptcom\ComProxy\Guard.cs" />
     <Compile Include="..\..\..\pptcom\Polyfills\RequiredMemberAttribute.cs" />
     <Compile Include="..\..\..\pptcom\Polyfills\CompilerFeatureRequiredAttribute.cs" />

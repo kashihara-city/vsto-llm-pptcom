@@ -158,8 +158,21 @@
     <Compile Include="Documents\AttachedImage.cs" />
     <Compile Include="Documents\DocRead.cs" />
     <Compile Include="Documents\DocumentImages.cs" />
+    <Compile Include="Documents\PendingDocuments.cs" />
     <Compile Include="ThisAddIn.cs">
       <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="ThisAddIn.Documents.cs">
+      <DependentUpon>ThisAddIn.cs</DependentUpon>
+    </Compile>
+    <Compile Include="ThisAddIn.Requests.cs">
+      <DependentUpon>ThisAddIn.cs</DependentUpon>
+    </Compile>
+    <Compile Include="ThisAddIn.Tools.cs">
+      <DependentUpon>ThisAddIn.cs</DependentUpon>
+    </Compile>
+    <Compile Include="ThisAddIn.Windows.cs">
+      <DependentUpon>ThisAddIn.cs</DependentUpon>
     </Compile>
     <Compile Include="UI\AiTaskPaneControl.cs">
       <SubType>UserControl</SubType>
@@ -228,6 +241,8 @@
     <Compile Include="ComProxy\DeckAnimations.cs" />
     <Compile Include="ComProxy\DeckReader.cs" />
     <Compile Include="ComProxy\ShapeContents.cs" />
+    <Compile Include="ComProxy\SlideShapes.cs" />
+    <Compile Include="ComProxy\InteropTypes.cs" />
     <Compile Include="ComProxy\TextContrast.cs" />
     <Compile Include="ComProxy\CornerBands.cs" />
     <Compile Include="ComProxy\TypeLibEnums.cs" />
@@ -261,6 +276,10 @@
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <Import Project="$(VSToolsPath)\OfficeTools\Microsoft.VisualStudio.Tools.Office.targets" Condition="'$(VSToolsPath)' != ''" />
+  <!-- A VSTO build registers the add-in for this user at its output folder (RegisterOfficeAddin, HKCU ...\Addins\pptcom),
+       so that PowerPoint loads that build next. -p:RegisterAddin=false leaves the registration as it is: for the MSI's
+       Release build (scripts\build\build.ps1) and a build in another working tree. -->
+  <Import Project="NoRegistration.targets" Condition="'$(RegisterAddin)' == 'false'" />
 
   <ProjectExtensions>
     <VisualStudio>

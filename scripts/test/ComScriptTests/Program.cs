@@ -4,6 +4,7 @@ using System.Dynamic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using Microsoft.Office.Core;
 using Newtonsoft.Json.Linq;
 using Pptcom.ComProxy;
 using static System.FormattableString;
@@ -62,6 +63,7 @@ namespace ComScriptTests
             ShapeNameTests();
             ContrastTests();
             CornerBandTests();
+            SlideShapeTests();
             SelectionTests();
             RenderSizeTests();
             OverlapTests();
@@ -1040,6 +1042,86 @@ namespace ComScriptTests
                    CornerBands.Report([rounded], [across], [sheetInFront]).Length == 0 && CornerBands.Report([rounded], [across], [sheetBehind]).Contains("[10] top past") &&
                    CornerBands.Report([rounded], [across], [strip]).Contains("[10] top past the rounded top-left, top-right corners"),
                    CornerBands.Report([rounded], [across], [strip]));
+        }
+
+        // The lines after the shape list judge one read of the slide's shapes (SlideShapes), each by its own rules: a hidden
+        // shape is out of all three, a rotated one out of the corners only, and what PowerPoint did not give is taken as each
+        // took a failed read (a fill unread neither shows, nor hides, nor is known; text bounds unread leave the shape out
+        // of the overlaps; a form unread leaves it out of the corners).
+        private static void SlideShapeTests()
+        {
+            static SlideShapes.Shape shape(int index, string name, double left, double top, double width, double height, TextContrast.Form form, int fill)
+            {
+                return new SlideShapes.Shape
+                {
+                    Frame = new DeckReader.ShapeBox(index, name, left, top, width, height),
+                    Type = (int)MsoShapeType.msoAutoShape,
+                    Rotation = 0,
+                    HasTextFrame = true,
+                    FillVisible = true,
+                    FillTransparency = 0,
+                    FillType = (int)MsoFillType.msoFillSolid,
+                    FillColor = fill,
+                    LineVisible = false,
+                    Form = (form, form == TextContrast.Form.Rounded ? 30 : 0),
+                    Styles = [],
+                };
+            }
+
+            static string all(params SlideShapes.Shape[] shapes)
+            {
+                SlideShapes s = new(shapes, 960, 540, (TextContrast.FillKind.Solid, 0xFFFFFF));
+                return DeckReader.Overlaps(DeckReader.OverlapBoxes(s)) + CornerBands.Describe(s) + TextContrast.Describe(s);
+            }
+
+            static SlideShapes.Shape withText(SlideShapes.Shape s, int color)
+            {
+                s.Text = new DeckReader.ShapeBox(0, "", s.Frame.Left + 10, s.Frame.Top + 2, 100, 14);
+                s.Styles = [new TextContrast.TextStyle(14, bold: false, color)];
+                return s;
+            }
+
+            static SlideShapes.Shape card()
+            {
+                return shape(1, "card", 100, 100, 300, 200, TextContrast.Form.Rounded, 0xFFFFFF);
+            }
+
+            static SlideShapes.Shape band()
+            {
+                return withText(shape(2, "band", 100, 95, 300, 20, TextContrast.Form.Box, 0x404040), 0x303030);
+            }
+
+            string shown = all(card(), band());
+            SlideShapes.Shape hidden = band(), rotated = band();
+            hidden.Hidden = true;
+            rotated.Rotation = 5;
+            string whenHidden = all(card(), hidden), whenRotated = all(card(), rotated);
+            Report("slide shapes: a band shows in the overlaps, the corners and the contrast; hidden, in none; rotated, in all but the corners",
+                   shown.Contains("Partly overlapping") && shown.Contains("[2] band past the rounded") && shown.Contains("Low contrast") && whenHidden.Length == 0 &&
+                   whenRotated.Contains("Partly overlapping") && !whenRotated.Contains("Past rounded") && whenRotated.Contains("Low contrast"),
+                   shown + " | " + whenHidden + " | " + whenRotated);
+
+            SlideShapes.Shape noFill = band(), noBounds = band(), noForm = band();
+            noFill.FillVisible = null;
+            noFill.LineVisible = true;
+            noBounds.TextUnread = true;
+            noBounds.Text = null;
+            noForm.Form = null;
+            string fillUnread = all(card(), noFill), boundsUnread = all(card(), noBounds), formUnread = all(card(), noForm);
+            Report("slide shapes: a fill unread is not judged for contrast, text bounds unread leave the overlaps, a form unread leaves the corners",
+                   !fillUnread.Contains("Low contrast") && fillUnread.Contains("[2] band past the rounded") && !boundsUnread.Contains("Partly overlapping") &&
+                   boundsUnread.Contains("Past rounded") && !formUnread.Contains("Past rounded") && formUnread.Contains("Low contrast"),
+                   fillUnread + " | " + boundsUnread + " | " + formUnread);
+
+            // A fill all but see-through shows for none of them: no frame for the overlaps, no band for the corners, no
+            // fill for the contrast (the text is then judged on the card it lies on).
+            SlideShapes.Shape faint = band(), onCard = withText(shape(2, "label", 150, 150, 120, 30, TextContrast.Form.Box, 0x404040), 0xEEEEEE);
+            faint.FillTransparency = 0.995;
+            onCard.FillTransparency = 0.995;
+            string faintBand = all(card(), faint), faintLabel = all(card(), onCard);
+            Report("slide shapes: a fill at 99% see-through or more does not show, for the overlaps, the corners and the contrast alike",
+                   !faintBand.Contains("Past rounded") && faintLabel.Contains("Low contrast") && faintLabel.Contains("on [1] card"),
+                   faintBand + " | " + faintLabel);
         }
 
         // A shape's kind by name in the shape list, from the enums: an AutoShape's form, a placeholder's role, any other

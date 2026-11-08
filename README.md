@@ -187,6 +187,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build\new-signing.ps1   # 初�
 powershell -ExecutionPolicy Bypass -File scripts\build\build.ps1
 ```
 
+VSTOのビルドは、組んだアドインをこのユーザーのPowerPointに登録します（次にPowerPointを開くと、そのビルドが読み込まれます）。`-p:RegisterAddin=false`を付けると登録を変えません。`build.ps1`はこれを付けてReleaseを組むので、開発中のDebugの登録はそのままです。`build.ps1 -NoRestore`は、NuGetから取りに行かず、手元にあるパッケージで組みます。
+
 VSTOのビルドはClickOnceのマニフェストに署名するので、開発機ごとにテスト用の証明書が要ります。`new-signing.ps1`が自己署名の証明書と署名の設定を`temp\signing\`に作ります（Gitの管理外。消したときは作り直せば済みます）。ビルドの生成物は、どのプロジェクトも`temp\build\<プロジェクト名>\`の`bin\<構成>\`と`obj\`にでき、MSIは`release\`にできます。アドインには、ビルドしたときのコミットをgitから埋め込みます（`pptcom/CommitInfo.targets`。未コミットの変更があれば`+`が付き、gitが無ければ`unknown`）。
 
 作業ウィンドウで使うPDF.jsとanydocは、公式の配布元から取ったものを`deps/`に置き、版とハッシュを`deps/web-sources.lock.json`で固定しています。npmは使いません。

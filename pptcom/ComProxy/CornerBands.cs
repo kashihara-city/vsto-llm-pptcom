@@ -32,17 +32,14 @@ namespace Pptcom.ComProxy
             public double Radius { get; } = radius;
         }
 
-        // The slide's rounded rectangles and rectangles as PowerPoint has them, and the line ("" when no band stands out).
-        public static string Describe(dynamic slide, IDictionary<string, List<string>>? variables)
+        // The slide's rounded rectangles and rectangles, and the line ("" when no band stands out).
+        public static string Describe(SlideShapes shapes)
         {
             List<Card> cards = [];
             List<DeckReader.ShapeBox> bands = [], covers = [];
-            int count = Guard.Try(() => (int)slide.Shapes.Count, 0);
-            for (int i = 1; i <= count; i++)
+            foreach (SlideShapes.Shape shape in shapes.Shapes)
             {
-                int index = i;
-                (Card? card, DeckReader.ShapeBox? band, DeckReader.ShapeBox? cover) =
-                    Guard.Try<(Card?, DeckReader.ShapeBox?, DeckReader.ShapeBox?)>(() => Read((object)slide, (object)slide.Shapes(index), index, variables), (null, null, null));
+                (Card? card, DeckReader.ShapeBox? band, DeckReader.ShapeBox? cover) = Read(shape);
                 if (card is not null)
                 {
                     cards.Add(card);
@@ -136,38 +133,31 @@ namespace Pptcom.ComProxy
             return covers is not null && covers.Any(c => c.Index > front && area.IsInside(c));
         }
 
-        // ---- read from PowerPoint ----
+        // ---- from what PowerPoint has (SlideShapes) ----
 
         // A rounded rectangle (a card), a rectangle (a band), or neither - shapes and text boxes that show (a fill or a
-        // line), not rotated - and whether it hides what is behind it: a rectangle with an opaque solid fill.
-        private static (Card? Card, DeckReader.ShapeBox? Band, DeckReader.ShapeBox? Cover) Read(dynamic slide, dynamic shape, int index, IDictionary<string, List<string>>? variables)
+        // line), not rotated - and whether it hides what is behind it: a rectangle with an opaque solid fill. A shape whose
+        // rotation or form could not be read is neither; a fill or a line that could not be read neither shows nor hides.
+        internal static (Card? Card, DeckReader.ShapeBox? Band, DeckReader.ShapeBox? Cover) Read(SlideShapes.Shape shape)
         {
-            int type = (int)shape.Type;
-            if (Math.Abs((double)shape.Rotation) > 0.01 || DeckReader.IsHidden(shape))
+            if (shape.Rotation is not double rotation || Math.Abs(rotation) > 0.01 || shape.Hidden ||
+                (shape.Type != (int)MsoShapeType.msoAutoShape && shape.Type != (int)MsoShapeType.msoTextBox) || !Shows(shape) ||
+                shape.Form is not (TextContrast.Form form, double radius))
             {
                 return (null, null, null);
             }
 
-            DeckReader.ShapeBox frame = DeckReader.FrameOf(slide, shape, index, variables);
-            if ((type != (int)MsoShapeType.msoAutoShape && type != (int)MsoShapeType.msoTextBox) || !Shows(shape))
-            {
-                return (null, null, null);
-            }
-
-            (TextContrast.Form form, double radius) = TextContrast.FormOf((object)shape, frame);
             if (form == TextContrast.Form.Rounded)
             {
-                return (new Card(frame, radius), null, null);
+                return (new Card(shape.Frame, radius), null, null);
             }
 
-            bool opaque = Guard.Try(() => (int)shape.Fill.Type == (int)MsoFillType.msoFillSolid && (double)shape.Fill.Transparency <= 0.01 && (int)shape.Fill.Visible != 0, fallback: false);
-            return form == TextContrast.Form.Box ? (null, frame, opaque ? frame : null) : (null, null, null);
+            return form == TextContrast.Form.Box ? (null, shape.Frame, shape.FillHides ? shape.Frame : null) : (null, null, null);
         }
 
-        private static bool Shows(dynamic shape)
+        private static bool Shows(SlideShapes.Shape shape)
         {
-            return Guard.Try(() => (int)shape.Fill.Visible != 0 && (double)shape.Fill.Transparency < 0.99, fallback: false) ||
-                   Guard.Try(() => (int)shape.Line.Visible != 0, fallback: false);
+            return shape.FillShows || shape.LineVisible == true;
         }
     }
 }

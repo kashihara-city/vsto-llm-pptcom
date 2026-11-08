@@ -745,18 +745,6 @@ namespace Pptcom.ComProxy
             _handles[id] = value;
         }
 
-        internal static Type? InteropTypeFor(string? comTypeName)
-        {
-            return FindInteropType(comTypeName);
-        }
-        internal static IEnumerable<MemberInfo> MembersOf(Type iface)
-        {
-            return AllMembers(iface);
-        }
-        internal static string TypeLabelOf(Type t)
-        {
-            return TypeLabel(t);
-        }
         internal string? ArgumentHint(JObject op, Exception ex)
         {
             return SignatureHint(op, (string?)op["action"], (string?)op["target"], (string?)op["member"], ex);
@@ -1218,14 +1206,14 @@ namespace Pptcom.ComProxy
         internal static List<KeyValuePair<string, string>> RoundedArguments(string? comTypeName, string action, string member, IReadOnlyList<object?> args, object? setValue)
         {
             List<KeyValuePair<string, string>> found = [];
-            Type? iface = FindInteropType(comTypeName);
+            Type? iface = InteropTypes.Find(comTypeName);
             if (iface is null)
             {
                 return found;
             }
 
-            string where = DisplayName(iface) + "." + member;
-            PropertyInfo? property = AllMembers(iface).OfType<PropertyInfo>().FirstOrDefault(p => p.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
+            string where = InteropTypes.DisplayName(iface) + "." + member;
+            PropertyInfo? property = InteropTypes.Members(iface).OfType<PropertyInfo>().FirstOrDefault(p => p.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
             if (action == ComOpAction.Set)
             {
                 if (property is not null)
@@ -1234,13 +1222,13 @@ namespace Pptcom.ComProxy
                     string? became = Rounding(property.PropertyType, setValue);
                     if (became is not null)
                     {
-                        found.Add(new KeyValuePair<string, string>(where + " is " + TypeLabel(property.PropertyType), became));
+                        found.Add(new KeyValuePair<string, string>(where + " is " + InteropTypes.Label(property.PropertyType), became));
                     }
                 }
 
                 return found;
             }
-            MethodInfo? method = AllMembers(iface).OfType<MethodInfo>().FirstOrDefault(m => !m.IsSpecialName && m.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
+            MethodInfo? method = InteropTypes.Members(iface).OfType<MethodInfo>().FirstOrDefault(m => !m.IsSpecialName && m.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
             ParameterInfo[]? ps = method?.GetParameters() ?? property?.GetIndexParameters();
             if (method is null && property is not null && ps is { Length: 0 } && args.Count > 0)
             {
@@ -1264,7 +1252,7 @@ namespace Pptcom.ComProxy
                 string? became = Rounding(ps[i].ParameterType, args[i]);
                 if (became is not null)
                 {
-                    found.Add(new KeyValuePair<string, string>(Invariant($"{where} argument {i + 1} is {ps[i].Name} As {TypeLabel(ps[i].ParameterType)}"), became));
+                    found.Add(new KeyValuePair<string, string>(Invariant($"{where} argument {i + 1} is {ps[i].Name} As {InteropTypes.Label(ps[i].ParameterType)}"), became));
                 }
             }
         }
@@ -1308,8 +1296,8 @@ namespace Pptcom.ComProxy
                     return null;
                 }
 
-                Type? iface = FindInteropType(ComSecurityPolicy.TryGetTypeName(targetObj));
-                MethodInfo? method = iface is null ? null : AllMembers(iface).OfType<MethodInfo>()
+                Type? iface = InteropTypes.Find(ComSecurityPolicy.TryGetTypeName(targetObj));
+                MethodInfo? method = iface is null ? null : InteropTypes.Members(iface).OfType<MethodInfo>()
                     .FirstOrDefault(m => !m.IsSpecialName && m.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
                 if (iface is null || method is null)
                 {
@@ -1324,7 +1312,7 @@ namespace Pptcom.ComProxy
                     object? value = ResolveArg(args[i]);
                     got.Add(ps[i].Name + " = " + (Rounding(ps[i].ParameterType, value) ?? ArgumentText(args[i], value)));
                 }
-                return DisplayName(iface) + "." + method.Name + "(" + string.Join(", ", ps.Select(FormatParameter)) + ") got " +
+                return InteropTypes.DisplayName(iface) + "." + method.Name + "(" + string.Join(", ", ps.Select(InteropTypes.FormatParameter)) + ") got " +
                        (got.Count > 0 ? string.Join(", ", got) : "no arguments") + ".";
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
@@ -1599,24 +1587,24 @@ namespace Pptcom.ComProxy
                 }
 
                 string? typeName = ComSecurityPolicy.TryGetTypeName(targetObj);
-                Type? iface = FindInteropType(typeName);
+                Type? iface = InteropTypes.Find(typeName);
                 if (iface is null)
                 {
                     return null;
                 }
 
                 List<string> signatures = [];
-                foreach (MethodInfo m in AllMembers(iface).OfType<MethodInfo>().Where(mi => mi.Name == member && !mi.IsSpecialName))
+                foreach (MethodInfo m in InteropTypes.Members(iface).OfType<MethodInfo>().Where(mi => mi.Name == member && !mi.IsSpecialName))
                 {
-                    signatures.Add(DisplayName(iface) + "." + member + "(" + string.Join(", ", m.GetParameters().Select(FormatParameter)) + ")");
+                    signatures.Add(InteropTypes.DisplayName(iface) + "." + member + "(" + string.Join(", ", m.GetParameters().Select(InteropTypes.FormatParameter)) + ")");
                 }
 
-                foreach (PropertyInfo p in AllMembers(iface).OfType<PropertyInfo>().Where(pi => pi.Name == member))
+                foreach (PropertyInfo p in InteropTypes.Members(iface).OfType<PropertyInfo>().Where(pi => pi.Name == member))
                 {
                     ParameterInfo[] idx = p.GetIndexParameters();
-                    string args = idx.Length > 0 ? "(" + string.Join(", ", idx.Select(FormatParameter)) + ")" : "";
+                    string args = idx.Length > 0 ? "(" + string.Join(", ", idx.Select(InteropTypes.FormatParameter)) + ")" : "";
                     string access = p.CanWrite ? (p.CanRead ? "read/write" : "write-only") : "read-only";
-                    signatures.Add(DisplayName(iface) + "." + member + args + " As " + TypeLabel(p.PropertyType) + " (" + access + " property)");
+                    signatures.Add(InteropTypes.DisplayName(iface) + "." + member + args + " As " + InteropTypes.Label(p.PropertyType) + " (" + access + " property)");
                 }
                 if (signatures.Count == 0)
                 {
@@ -1637,87 +1625,6 @@ namespace Pptcom.ComProxy
             {
                 return null; // a hint must never mask the real error
             }
-        }
-
-        private static readonly Assembly[] InteropAssemblies =
-        [
-            typeof(Microsoft.Office.Interop.PowerPoint.Application).Assembly,
-            typeof(Microsoft.Office.Core.MsoTriState).Assembly,
-        ];
-
-        private static Type? FindInteropType(string? comTypeName)
-        {
-            if (comTypeName is null || comTypeName.Length == 0)
-            {
-                return null;
-            }
-
-            foreach (string name in new[] { comTypeName, comTypeName.TrimStart('_') })
-            {
-                foreach (Assembly asm in InteropAssemblies)
-                {
-                    foreach (Type t in asm.GetTypes())
-                    {
-                        if (t.IsInterface && t.Name == name)
-                        {
-                            return t;
-                        }
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        private static IEnumerable<MemberInfo> AllMembers(Type iface)
-        {
-            return new[] { iface }.Concat(iface.GetInterfaces()).SelectMany(static t => t.GetMembers());
-        }
-
-        private static string DisplayName(Type iface)
-        {
-            return iface.Name.TrimStart('_');
-        }
-
-        private static string FormatParameter(ParameterInfo p)
-        {
-            string s = p.Name + " As " + TypeLabel(p.ParameterType);
-            return p.IsOptional ? "[" + s + "]" : s;
-        }
-
-        private static string TypeLabel(Type t)
-        {
-            if (t.IsByRef)
-            {
-                t = t.GetElementType() ?? t;
-            }
-
-            if (t == typeof(float))
-            {
-                return "Single";
-            }
-
-            if (t == typeof(int))
-            {
-                return "Long";
-            }
-
-            if (t == typeof(string))
-            {
-                return "String";
-            }
-
-            if (t == typeof(bool))
-            {
-                return "Boolean";
-            }
-
-            if (t == typeof(object))
-            {
-                return "Variant";
-            }
-
-            return t.Name;
         }
 
         private static string DescribeException(Exception ex)

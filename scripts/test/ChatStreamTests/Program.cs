@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using Pptcom.Agent;
 using Pptcom.ComProxy;
+using Pptcom.Documents;
 using static System.FormattableString;
 
 // Built and run with the repository, not released on its own.
@@ -51,6 +52,7 @@ namespace ChatStreamTests
             OfferedTests();
             ImageColorsTests();
             UserLocaleTests();
+            PendingDocumentTests();
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -564,6 +566,44 @@ namespace ChatStreamTests
             string prompt = File.ReadAllText(Path.Combine(AgentFolder(), "system-prompt.txt"));
             int places = prompt.Split([UserLocale.LanguagePlaceholder], StringSplitOptions.None).Length - 1;
             Check("the system prompt names the language for the reply and the slide text", places == 2, Invariant($"{places} places"));
+        }
+
+        // A window's files being read (PendingDocuments): each goes to the conversation it was taken in, or nowhere when
+        // that ended meanwhile; while a request runs in the conversation, a file is refused as it is taken (and what the
+        // page sends at its end let go) or when it has been read; the latest failures are kept.
+        private static void PendingDocumentTests()
+        {
+            Console.WriteLine("== files being read for a conversation");
+            object first = new(), second = new();
+            PendingDocuments<object> p = new();
+            bool taken = p.Start("p1", "a.pdf", locked: false, () => first);
+            bool reading = p.IsReading(first) && !p.IsReading(second) && !p.IsReading(null);
+            PendingDocuments<object>.End end = p.Finish("p1", first, locked: false, out object? into);
+            Check("a file taken is being read for its conversation, then attached to it",
+                  taken && reading && end == PendingDocuments<object>.End.Attach && ReferenceEquals(into, first) && !p.IsReading(first), Invariant($"{taken} {reading} {end}"));
+
+            p.Start("p2", "b.docx", locked: false, () => first);
+            List<string> ends =
+            [
+                p.Finish("p2", second, locked: false, out _).ToString(), // 新しい会話 meanwhile
+                p.Start("p3", "c.xlsx", locked: true, () => first) ? "taken" : "refused",
+                p.Finish("p3", first, locked: false, out _).ToString(), // its end, after the request
+                p.Finish("p4", first, locked: true, out object? unstarted).ToString(), // read while locked, the page not having said it started
+                p.Finish("p5", first, locked: false, out object? window).ToString(),
+            ];
+            Check("the conversation ended: discarded; locked as taken: refused, its end let go; locked as read: refused; never started: the window's",
+                  string.Join(",", ends) == "Discarded,refused,LetGo,Locked,Attach" && unstarted is null && window is null, string.Join(",", ends));
+
+            p.Start("p6", "d.pdf", locked: true, () => first);
+            bool letGo = p.LetGo("p6") && !p.LetGo("p6");
+            for (int i = 0; i < PendingDocuments<object>.MaxFailures + 2; i++)
+            {
+                p.Fail(Invariant($"f{i}"), Invariant($"f{i}.pdf"), "malformed", i == 0 ? "" : "x");
+            }
+
+            Check("a refused file's attachFailed is let go once; the latest failures are kept, oldest first",
+                  letGo && p.Failed.Count == PendingDocuments<object>.MaxFailures && p.Failed[0] == "f2.pdf: malformed (x)" && !p.Reading.Any(),
+                  string.Join(" | ", p.Failed.Take(2)));
         }
 
         // The colors imagegen reports (ImageColors): the main ones with their share, a background's few steps of noise

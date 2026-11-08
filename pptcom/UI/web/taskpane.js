@@ -71,7 +71,7 @@ function finishWork(state, footer) {
   work = null;
 }
 
-// How a log message from the add-in is shown, by its code (ThisAddIn.cs). Any other code is a side note:
+// How a log message from the add-in is shown, by its code (ThisAddIn, in its ThisAddIn.*.cs files). Any other code is a side note:
 // a row of the request in progress, or a note in parentheses between requests.
 const logKinds = {
   USER_REQUEST: "user", CONTINUE_REQUEST: "user", TOOL_RESULT: "tool", TURN_SIZE: "turn", REQUEST_DONE: "done",

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Imported after VSTO's targets when the build is run with -p:RegisterAddin=false (pptcom.csproj): this empty target takes
+     the place of VSTO's RegisterOfficeAddin, so the add-in is built and its manifests signed, but this user's registration
+     (HKCU ...\Office\PowerPoint\Addins\pptcom) is left as it is. VSTO's trust list (HKCU ...\VSTO\Security\Inclusion) still
+     gets the build's entry, as in any VSTO build. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Target Name="RegisterOfficeAddin" />
+</Project>

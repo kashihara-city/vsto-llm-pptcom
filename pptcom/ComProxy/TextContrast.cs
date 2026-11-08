@@ -98,22 +98,20 @@ namespace Pptcom.ComProxy
             }
         }
 
-        // The slide's shapes and background as PowerPoint has them, and what reads poorly ("" when nothing does).
-        public static string Describe(dynamic slide, IDictionary<string, List<string>>? variables)
+        // The slide's shapes and background, and what reads poorly ("" when nothing does).
+        public static string Describe(SlideShapes shapes)
         {
             List<Layer> layers = [];
-            int count = Guard.Try(() => (int)slide.Shapes.Count, 0);
-            for (int i = 1; i <= count; i++)
+            foreach (SlideShapes.Shape shape in shapes.Shapes)
             {
-                int index = i;
-                Layer? layer = Guard.Try<Layer?>(() => Read((object)slide, (object)slide.Shapes(index), index, variables), fallback: null);
+                Layer? layer = Read(shape);
                 if (layer is not null)
                 {
                     layers.Add(layer);
                 }
             }
 
-            (FillKind kind, int color) = Guard.Try<(FillKind, int)>(() => BackgroundOf((object)slide), (FillKind.Unknown, 0));
+            (FillKind kind, int color) = shapes.Background;
             return Report(layers, kind == FillKind.None ? FillKind.Unknown : kind, color);
         }
 
@@ -211,7 +209,7 @@ namespace Pptcom.ComProxy
             return c <= 0.03928 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
         }
 
-        // ---- read from PowerPoint ----
+        // ---- from what PowerPoint has (SlideShapes) ----
 
         // Shapes whose inside is drawn by PowerPoint rather than filled (a picture, a chart, a table, a group ...): what is
         // on them cannot be judged. Lines and connectors cover nothing and are left out.
@@ -222,26 +220,56 @@ namespace Pptcom.ComProxy
             (int)MsoShapeType.msoLinkedOLEObject, (int)MsoShapeType.msoCanvas, (int)MsoShapeType.msoDiagram,
         ];
 
-        private static Layer? Read(dynamic slide, dynamic shape, int index, IDictionary<string, List<string>>? variables)
+        // A shape as a layer, or null: a line, a connector or a hidden shape, or one whose text's runs could not be read.
+        // A fill that could not be read is Unknown, a form Other; text whose bounds could not be read is none.
+        internal static Layer? Read(SlideShapes.Shape shape)
         {
-            int type = (int)shape.Type;
-            if (type == (int)MsoShapeType.msoLine || Guard.Try(() => (int)shape.Connector != 0, fallback: false) || DeckReader.IsHidden(shape))
+            if (shape.Type == (int)MsoShapeType.msoLine || shape.Connector || shape.Hidden)
             {
                 return null;
             }
 
-            DeckReader.ShapeBox frame = DeckReader.FrameOf(slide, shape, index, variables);
-            bool drawn = DrawnInside.Contains(type) ||
-                         Guard.Try(() => (int)shape.HasChart != 0 || (int)shape.HasTable != 0 || (int)shape.HasSmartArt != 0, fallback: false);
-            if (drawn)
+            if (DrawnInside.Contains(shape.Type) || shape.HasDrawnPart)
             {
-                return new Layer(frame, FillKind.Unknown, fillColor: 0, text: null, styles: []);
+                return new Layer(shape.Frame, FillKind.Unknown, fillColor: 0, text: null, styles: []);
             }
 
-            (FillKind fill, int color) = Guard.Try<(FillKind, int)>(() => FillOf((object)shape.Fill), (FillKind.Unknown, 0));
-            DeckReader.ShapeBox? text = Guard.Try<DeckReader.ShapeBox?>(() => DeckReader.TextBounds(shape), fallback: null);
-            (Form form, double radius) = Guard.Try<(Form, double)>(() => FormOf((object)shape, frame), (Form.Other, 0));
-            return new Layer(frame, fill, color, text, text is null ? [] : Styles((object)shape.TextFrame.TextRange), form, radius);
+            if (shape.Styles is not { } styles)
+            {
+                return null;
+            }
+
+            (FillKind fill, int color) = FillOf(shape);
+            (Form form, double radius) = shape.Form ?? (Form.Other, 0);
+            return new Layer(shape.Frame, fill, color, shape.Text, styles, form, radius);
+        }
+
+        // The shape's fill as FillOfFormat takes a FillFormat, from what of it could be read.
+        private static (FillKind, int) FillOf(SlideShapes.Shape shape)
+        {
+            if (shape.FillVisible is not bool visible)
+            {
+                return (FillKind.Unknown, 0);
+            }
+
+            if (!visible)
+            {
+                return (FillKind.None, 0);
+            }
+
+            if (shape.FillTransparency is not double transparency)
+            {
+                return (FillKind.Unknown, 0);
+            }
+
+            if (transparency >= SlideShapes.Shape.SeeThrough)
+            {
+                return (FillKind.None, 0);
+            }
+
+            return shape.FillHides && shape.FillColor is int color
+                ? (FillKind.Solid, color)
+                : (FillKind.Unknown, 0);
         }
 
         // The outline of an AutoShape or a text box's fill: a rectangle, a rounded rectangle (its corners' radius is its
@@ -270,20 +298,20 @@ namespace Pptcom.ComProxy
 
         // Solid with its color; None when not shown (or fully see-through); Unknown for anything else: a gradient, a
         // picture, a pattern, or a solid that lets what is behind show through.
-        private static (FillKind, int) FillOf(dynamic fill)
+        private static (FillKind, int) FillOfFormat(dynamic fill)
         {
-            if ((int)fill.Visible == 0 || (double)fill.Transparency >= 0.99)
+            if ((int)fill.Visible == 0 || (double)fill.Transparency >= SlideShapes.Shape.SeeThrough)
             {
                 return (FillKind.None, 0);
             }
 
-            return (int)fill.Type == (int)MsoFillType.msoFillSolid && (double)fill.Transparency <= 0.01
+            return (int)fill.Type == (int)MsoFillType.msoFillSolid && (double)fill.Transparency <= SlideShapes.Shape.Opaque
                 ? (FillKind.Solid, (int)fill.ForeColor.RGB)
                 : (FillKind.Unknown, 0);
         }
 
         // The slide's own background, or its layout's, or the master's, as the slide follows them.
-        private static (FillKind, int) BackgroundOf(dynamic slide)
+        internal static (FillKind, int) BackgroundOf(dynamic slide)
         {
             dynamic owner = slide;
             if ((int)slide.FollowMasterBackground != 0)
@@ -291,11 +319,11 @@ namespace Pptcom.ComProxy
                 dynamic layout = slide.CustomLayout;
                 owner = (int)layout.FollowMasterBackground != 0 ? layout.Design.SlideMaster : layout;
             }
-            return FillOf((object)owner.Background.Fill);
+            return FillOfFormat((object)owner.Background.Fill);
         }
 
         // The first run of each paragraph with text, up to 12 paragraphs, as the shape list reads fonts.
-        private static List<TextStyle> Styles(dynamic textRange)
+        internal static List<TextStyle> Styles(dynamic textRange)
         {
             List<TextStyle> styles = [];
             int count = Guard.Try(() => (int)textRange.Paragraphs().Count, 0);

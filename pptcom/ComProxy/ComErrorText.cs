@@ -136,7 +136,7 @@ namespace Pptcom.ComProxy
                     // stays a cause of its own (SizePt -> Size and Colour -> Color are two mistakes).
                     // The variable is not part of the key: C11.TextFrame, C12.TextFrame, ... on Cells
                     // are one mistake with one fix (.Shape.TextFrame), not one per cell.
-                    Type? iface = ComProxyEngine.InteropTypeFor(type);
+                    Type? iface = InteropTypes.Find(type);
                     List<string> via = iface is not null ? [.. OneHopPaths(iface, member).Select(static h => h.Key).Distinct(StringComparer.Ordinal).OrderBy(static k => k, StringComparer.Ordinal)] : [];
                     if (via.Count == 0 && iface is not null)
                     {
@@ -270,7 +270,7 @@ namespace Pptcom.ComProxy
         // shape's. Null for any other member or type.
         private static string? ToHolder(string? type, string typeLabel, string member, string? holder)
         {
-            Type? shapeType = ComProxyEngine.InteropTypeFor("Shape");
+            Type? shapeType = InteropTypes.Find("Shape");
             if (!HeldTypes.Contains(Clean(type) ?? "") || shapeType is null || !HasMember(shapeType, member))
             {
                 return null;
@@ -285,7 +285,7 @@ namespace Pptcom.ComProxy
         {
             List<string> hints = [];
             bool pathFound = false;
-            Type? iface = ComProxyEngine.InteropTypeFor(type);
+            Type? iface = InteropTypes.Find(type);
             string varText = target is not null && !IsSynthetic(target) ? target : typeLabel;
             // first, before the paths inside (tT.Rows(n).Delete), which read as the likelier fix otherwise
             if (ToHolder(type, typeLabel, member, holder) is string toHolder)
@@ -327,7 +327,7 @@ namespace Pptcom.ComProxy
                 // Close spellings (Visable -> Visible), and names that add or drop a word at the end
                 // (CharacterNumber -> Character, Size -> SizeAndPosition...): a typo's edit distance
                 // stays small, an extra word's does not.
-                List<string> names = [.. ComProxyEngine.MembersOf(iface)
+                List<string> names = [.. InteropTypes.Members(iface)
                     .Where(static m => m is PropertyInfo || (m is MethodInfo mi && !mi.IsSpecialName))
                     .Select(static m => m.Name).Distinct(StringComparer.Ordinal)
                     .Where(n => n.Length >= 3 && !n.Equals(member, StringComparison.OrdinalIgnoreCase))
@@ -352,7 +352,7 @@ namespace Pptcom.ComProxy
                             return false;
                         }
 
-                        Type? it = ComProxyEngine.InteropTypeFor(t.Type);
+                        Type? it = InteropTypes.Find(t.Type);
                         return it is not null && HasMember(it, member);
                     })]
                 : [];
@@ -391,7 +391,7 @@ namespace Pptcom.ComProxy
         {
             List<KeyValuePair<string, string>> members = [];
             HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase) { "Application", "Parent", "Creator" };
-            foreach (MemberInfo m in ComProxyEngine.MembersOf(iface).OrderBy(static m => m.Name, StringComparer.OrdinalIgnoreCase))
+            foreach (MemberInfo m in InteropTypes.Members(iface).OrderBy(static m => m.Name, StringComparer.OrdinalIgnoreCase))
             {
                 string kind;
                 if (m is PropertyInfo p)
@@ -512,8 +512,8 @@ namespace Pptcom.ComProxy
             else if (action == ComOpAction.Call && op["args"] is JArray args)
             {
                 int index = args.ToList().FindIndex(a => IsUnresolved(a, name));
-                Type? iface = ComProxyEngine.InteropTypeFor(type);
-                MethodInfo? method = iface is null ? null : ComProxyEngine.MembersOf(iface).OfType<MethodInfo>()
+                Type? iface = InteropTypes.Find(type);
+                MethodInfo? method = iface is null ? null : InteropTypes.Members(iface).OfType<MethodInfo>()
                     .FirstOrDefault(m => m.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
                 ParameterInfo[]? ps = method?.GetParameters();
                 if (ps is not null && index >= 0 && index < ps.Length)
@@ -546,7 +546,7 @@ namespace Pptcom.ComProxy
             }
             if (expected is not null && expected != typeof(object))
             {
-                return head + " " + where + " expects " + ComProxyEngine.TypeLabelOf(expected) + ".";
+                return head + " " + where + " expects " + InteropTypes.Label(expected) + ".";
             }
 
             return head;
@@ -574,24 +574,24 @@ namespace Pptcom.ComProxy
                 return " " + typeLabel + "." + member + " takes a " + pt.Name + ": " + string.Join(", ", names) +
                        (numeric ? ". Write the name, not a number." : ".");
             }
-            return " " + typeLabel + "." + member + " expects " + ComProxyEngine.TypeLabelOf(pt) + (prop.CanWrite ? "" : " and is read-only") + ".";
+            return " " + typeLabel + "." + member + " expects " + InteropTypes.Label(pt) + (prop.CanWrite ? "" : " and is read-only") + ".";
         }
 
         private static PropertyInfo? FindProperty(string? type, string? member)
         {
-            Type? iface = ComProxyEngine.InteropTypeFor(type);
+            Type? iface = InteropTypes.Find(type);
             if (iface is null || member is null)
             {
                 return null;
             }
 
-            return ComProxyEngine.MembersOf(iface).OfType<PropertyInfo>()
+            return InteropTypes.Members(iface).OfType<PropertyInfo>()
                 .FirstOrDefault(p => p.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
         }
 
         private static bool HasMember(Type iface, string member)
         {
-            return ComProxyEngine.MembersOf(iface).Any(m =>
+            return InteropTypes.Members(iface).Any(m =>
                 (m is PropertyInfo || (m is MethodInfo mi && !mi.IsSpecialName)) &&
                 m.Name.Equals(member, StringComparison.OrdinalIgnoreCase));
         }
@@ -669,7 +669,7 @@ namespace Pptcom.ComProxy
         private static List<KeyValuePair<string, string>> OneHopPaths(Type iface, string member)
         {
             List<KeyValuePair<string, string>> hops = [];
-            IEnumerable<PropertyInfo> props = ComProxyEngine.MembersOf(iface).OfType<PropertyInfo>().GroupBy(static p => p.Name, StringComparer.Ordinal).Select(static g => g.First());
+            IEnumerable<PropertyInfo> props = InteropTypes.Members(iface).OfType<PropertyInfo>().GroupBy(static p => p.Name, StringComparer.Ordinal).Select(static g => g.First());
             foreach (PropertyInfo p in props)
             {
                 Type pt = p.PropertyType;
@@ -736,7 +736,7 @@ namespace Pptcom.ComProxy
                     found.Add(new ItemHop { Path = p.Name + "(n)", First = p.Name + "(1)", Second = p.Name + "(2)", Element = element.Name.TrimStart('_') });
                 }
             }
-            foreach (MethodInfo mi in ComProxyEngine.MembersOf(iface).OfType<MethodInfo>())
+            foreach (MethodInfo mi in InteropTypes.Members(iface).OfType<MethodInfo>())
             {
                 if (!ItemAccessors.Contains(mi.Name, StringComparer.Ordinal) || !mi.ReturnType.IsInterface || !fits(mi.ReturnType))
                 {
@@ -798,7 +798,7 @@ namespace Pptcom.ComProxy
         // What a collection's Item(index) returns (CellRange -> Cell, Shapes -> Shape); null if it has no Item.
         private static Type? ItemType(Type collection)
         {
-            foreach (MemberInfo m in ComProxyEngine.MembersOf(collection))
+            foreach (MemberInfo m in InteropTypes.Members(collection))
             {
                 if (m.Name != "Item")
                 {
@@ -848,7 +848,7 @@ namespace Pptcom.ComProxy
 
         private static IEnumerable<PropertyInfo> ObjectProperties(Type iface)
         {
-            return ComProxyEngine.MembersOf(iface).OfType<PropertyInfo>()
+            return InteropTypes.Members(iface).OfType<PropertyInfo>()
                 .Where(static p => p.PropertyType.IsInterface && p.GetIndexParameters().Length == 0 &&
                             p.Name != "Application" && p.Name != "Parent" && p.Name != "Creator" && p.Name != "TextEffect" &&
                             p.Name != "Background") // only its Fill means anything; OneHopPaths allows that one

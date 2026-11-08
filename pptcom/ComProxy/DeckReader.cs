@@ -255,34 +255,44 @@ namespace Pptcom.ComProxy
             int shapeCount = (int)slide.Shapes.Count;
             StringBuilder sb = new();
             sb.Append("Slide ").Append(slideIndex).Append(" (").Append(SizeText(pres)).Append(", ").Append(shapeCount).Append(" shapes):\n");
-            List<ShapeBox> boxes = [];
             for (int i = 1; i <= shapeCount; i++)
             {
                 AppendShape(sb, slide, i, variables, limits);
-                try
-                {
-                    dynamic shape = slide.Shapes(i);
-                    if ((int)shape.Type != 9 && !IsHidden(shape)) // msoLine: a line crossing a box is how lines are drawn; a hidden shape is not drawn
-                    {
-                        ShapeBox frame = FrameOf(slide, shape, i, variables);
-                        bool frameShows = FrameShows(shape);
-                        ShapeBox? text = TextBounds(shape);
-                        ShapeBox? shown = Shown(frame, frameShows, text, (double)pres.PageSetup.SlideWidth, (double)pres.PageSetup.SlideHeight);
-                        if (shown is not null)
-                        {
-                            boxes.Add(shown);
-                        }
-                    }
-                }
-                catch (Exception ex) when (Guard.IsRecoverable(ex))
-                {
-                }
             }
-            sb.Append(Overlaps(boxes));
-            sb.Append(Guard.Try(() => CornerBands.Describe((object)slide, variables), ""));
-            sb.Append(Guard.Try(() => TextContrast.Describe((object)slide, variables), ""));
+
+            SlideShapes drawn = SlideShapes.Read(pres, slide, variables);
+            sb.Append(Overlaps(OverlapBoxes(drawn)));
+            sb.Append(Guard.Try(() => CornerBands.Describe(drawn), ""));
+            sb.Append(Guard.Try(() => TextContrast.Describe(drawn), ""));
             sb.Append(DeckAnimations.Describe((object)slide, slideIndex, variables));
             return sb.ToString();
+        }
+
+        // What of each shape shows (Shown), for the overlaps: not of a line (a line crossing a box is how lines are drawn),
+        // nor of a hidden shape (it is not drawn); nor of one whose text frame or text bounds could not be read.
+        internal static List<ShapeBox> OverlapBoxes(SlideShapes shapes)
+        {
+            List<ShapeBox> boxes = [];
+            if (shapes.SlideWidth is not double width || shapes.SlideHeight is not double height)
+            {
+                return boxes;
+            }
+
+            foreach (SlideShapes.Shape s in shapes.Shapes)
+            {
+                if (s.Type == 9 || s.Hidden || s.HasTextFrame is null || s.TextUnread) // msoLine
+                {
+                    continue;
+                }
+
+                ShapeBox? shown = Shown(s.Frame, FrameShows(s), s.Text, width, height);
+                if (shown is not null)
+                {
+                    boxes.Add(shown);
+                }
+            }
+
+            return boxes;
         }
 
         // ---- shapes that overlap partly ------------------------------------------------------------------
@@ -321,32 +331,11 @@ namespace Pptcom.ComProxy
             return right - left > 0.5 && bottom - top > 0.5 ? new ShapeBox(frame.Index, frame.Variable, left, top, right - left, bottom - top) : null;
         }
 
-        // A text shape's frame shows only with a fill or a line; that of any other (a picture, a table, a group) does.
-        private static bool FrameShows(dynamic shape)
+        // A text shape's frame shows only with a fill (not all but see-through, SlideShapes.Shape.FillShows) or a line;
+        // that of any other (a picture, a table, a group) does. A fill or a line that could not be read does not show.
+        private static bool FrameShows(SlideShapes.Shape s)
         {
-            if ((int)shape.HasTextFrame == 0)
-            {
-                return true;
-            }
-
-            try
-            {
-                if ((int)shape.Fill.Visible != 0 && (double)shape.Fill.Transparency < 1)
-                {
-                    return true;
-                }
-            }
-            catch (Exception ex) when (Guard.IsRecoverable(ex))
-            {
-            }
-            try
-            {
-                return (int)shape.Line.Visible != 0;
-            }
-            catch (Exception ex) when (Guard.IsRecoverable(ex))
-            {
-                return false;
-            }
+            return s.HasTextFrame == false || s.FillShows || s.LineVisible == true;
         }
 
         // Where the shape's text is drawn (TextRange.BoundLeft ...), or null when it has none.
