@@ -272,11 +272,10 @@ namespace Pptcom.ComProxy
                 : (FillKind.Unknown, 0);
         }
 
-        // The outline of an AutoShape or a text box's fill: a rectangle, a rounded rectangle (its corners' radius is its
-        // adjustment times its shorter side), an ellipse, or another form.
-        internal static (Form, double) FormOf(dynamic shape, DeckReader.ShapeBox frame)
+        // The outline of an AutoShape or a text box's fill, by its AutoShapeType: a rectangle, a rounded rectangle (its
+        // corners' radius is its adjustment times its shorter side), an ellipse, or another form.
+        internal static (Form, double) FormOf(int form, dynamic shape, DeckReader.ShapeBox frame)
         {
-            int form = (int)shape.AutoShapeType;
             if (form == (int)MsoAutoShapeType.msoShapeRectangle)
             {
                 return (Form.Box, 0);
@@ -320,33 +319,6 @@ namespace Pptcom.ComProxy
                 owner = (int)layout.FollowMasterBackground != 0 ? layout.Design.SlideMaster : layout;
             }
             return FillOfFormat((object)owner.Background.Fill);
-        }
-
-        // The first run of each paragraph with text, up to 12 paragraphs, as the shape list reads fonts.
-        internal static List<TextStyle> Styles(dynamic textRange)
-        {
-            List<TextStyle> styles = [];
-            int count = Guard.Try(() => (int)textRange.Paragraphs().Count, 0);
-            for (int i = 1; i <= count && i <= 12; i++)
-            {
-                int index = i;
-                TextStyle? style = Guard.Try<TextStyle?>(() =>
-                {
-                    dynamic paragraph = textRange.Paragraphs(index);
-                    if (((string)paragraph.Text ?? "").Trim().Length == 0)
-                    {
-                        return null;
-                    }
-
-                    dynamic font = paragraph.Runs(1).Font;
-                    return new TextStyle((double)font.Size, bold: (int)font.Bold != 0, (int)font.Color.RGB);
-                }, fallback: null);
-                if (style is not null)
-                {
-                    styles.Add(style);
-                }
-            }
-            return styles;
         }
     }
 }

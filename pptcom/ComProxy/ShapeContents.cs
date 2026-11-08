@@ -38,26 +38,28 @@ namespace Pptcom.ComProxy
         }
 
         // What goes at the end of the shape's line (Head: ", 3 rows x 4 columns (Table.Cell(row, column)):") and under it
-        // (Lines, each starting with `indent` and ending in a line break). Both "" for any other shape.
-        public static (string Head, string Lines) Describe(dynamic slide, dynamic shape, IDictionary<string, List<string>>? variables, string indent, Limits limits)
+        // (Lines, each starting with `indent` and ending in a line break). Both "" for any other shape. What kind of shape
+        // it is, from `read` (the slide's shape as SlideShapes read it) when that has it.
+        public static (string Head, string Lines) Describe(dynamic slide, dynamic shape, SlideShapes.Shape? read, IDictionary<string, List<string>>? variables,
+                                                           string indent, Limits limits)
         {
             StringBuilder lines = new();
             string head = "";
             try
             {
-                if (Guard.Try(() => (int)shape.HasTable != 0, fallback: false))
+                if (read?.HasTable ?? Guard.Try(() => (int)shape.HasTable != 0, fallback: false))
                 {
                     head = Table((object)shape.Table, indent, limits, lines);
                 }
-                else if (Guard.Try(() => (int)shape.HasChart != 0, fallback: false))
+                else if (read?.HasChart ?? Guard.Try(() => (int)shape.HasChart != 0, fallback: false))
                 {
                     head = Chart((object)shape.Chart, indent, limits, lines);
                 }
-                else if (Guard.Try(() => (int)shape.HasSmartArt != 0, fallback: false))
+                else if (read?.HasSmartArt ?? Guard.Try(() => (int)shape.HasSmartArt != 0, fallback: false))
                 {
                     head = SmartArt((object)shape.SmartArt, indent, limits, lines);
                 }
-                else if (Guard.Try(() => (int)shape.Type == 6, fallback: false)) // msoGroup
+                else if (read is not null ? read.Type == 6 : Guard.Try(() => (int)shape.Type == 6, fallback: false)) // msoGroup
                 {
                     head = Group((object)slide, (object)shape.GroupItems, variables, indent, limits, lines);
                 }
@@ -217,7 +219,7 @@ namespace Pptcom.ComProxy
                 int before = lines.Length;
                 try
                 {
-                    DeckReader.AppendShapeLine(lines, (object)slide, (object)items.Item(i), variables, indent + "    ", limits);
+                    DeckReader.AppendShapeLine(lines, (object)slide, (object)items.Item(i), read: null, variables, indent + "    ", limits);
                 }
                 catch (Exception ex) when (Guard.IsRecoverable(ex))
                 {

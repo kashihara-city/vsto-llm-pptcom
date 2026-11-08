@@ -162,47 +162,50 @@ namespace Pptcom.ComProxy
             return RenderSize((double)setup.SlideWidth, (double)setup.SlideHeight);
         }
 
-        // "40pt bold RGB(30,40,35)", or per paragraph when they differ:
-        // "p1 40pt bold RGB(..) / p2-3 14pt RGB(..)". First run of each paragraph, up to 3 distinct
-        // styles - enough to match a deck's title/body styles. Font names are left out: text the
-        // model writes should keep the deck's theme fonts.
-        private static string DescribeFonts(dynamic textRange)
+        // The first run of each paragraph with text, up to 12 paragraphs, by paragraph number: the fonts of a shape's line
+        // (FontsText) and what TextContrast judges. A paragraph whose first run could not be read is left out.
+        internal static List<(int Paragraph, TextContrast.TextStyle Style)> ParagraphStyles(dynamic textRange)
         {
-            List<KeyValuePair<string, List<int>>> styles = [];
-            int count;
-            try
-            {
-                count = (int)textRange.Paragraphs().Count;
-            }
-            catch (Exception ex) when (Guard.IsRecoverable(ex))
-            {
-                return "";
-            }
+            List<(int, TextContrast.TextStyle)> styles = [];
+            int count = Guard.Try(() => (int)textRange.Paragraphs().Count, 0);
             for (int i = 1; i <= count && i <= 12; i++)
             {
-                string style;
-                try
+                int index = i;
+                TextContrast.TextStyle? style = Guard.Try<TextContrast.TextStyle?>(() =>
                 {
-                    dynamic para = textRange.Paragraphs(i);
-                    if (((string)para.Text ?? "").Trim().Length == 0)
+                    dynamic paragraph = textRange.Paragraphs(index);
+                    if (((string)paragraph.Text ?? "").Trim().Length == 0)
                     {
-                        continue;
+                        return null;
                     }
 
-                    dynamic font = para.Runs(1).Font;
-                    style = R(font.Size) + "pt" + ((int)font.Bold != 0 ? " bold" : "") + " " + Rgb(font.Color.RGB);
-                }
-                catch (Exception ex) when (Guard.IsRecoverable(ex))
+                    dynamic font = paragraph.Runs(1).Font;
+                    return new TextContrast.TextStyle((double)font.Size, bold: (int)font.Bold != 0, (int)font.Color.RGB);
+                }, fallback: null);
+                if (style is not null)
                 {
-                    continue;
+                    styles.Add((index, style));
                 }
+            }
+            return styles;
+        }
+
+        // "40pt bold RGB(30,40,35)", or per paragraph when they differ:
+        // "p1 40pt bold RGB(..) / p2-3 14pt RGB(..)". Up to 3 distinct styles - enough to match a deck's title/body
+        // styles. Font names are left out: text the model writes should keep the deck's theme fonts.
+        private static string FontsText(IReadOnlyList<(int Paragraph, TextContrast.TextStyle Style)> paragraphs)
+        {
+            List<KeyValuePair<string, List<int>>> styles = [];
+            foreach ((int paragraph, TextContrast.TextStyle font) in paragraphs)
+            {
+                string style = R(font.Size) + "pt" + (font.Bold ? " bold" : "") + " " + Rgb(font.Color);
                 if (styles.Count > 0 && styles[styles.Count - 1].Key == style)
                 {
-                    styles[styles.Count - 1].Value.Add(i);
+                    styles[styles.Count - 1].Value.Add(paragraph);
                 }
                 else
                 {
-                    styles.Add(new KeyValuePair<string, List<int>>(style, [i]));
+                    styles.Add(new KeyValuePair<string, List<int>>(style, [paragraph]));
                 }
 
                 if (styles.Count > 3)
@@ -243,6 +246,7 @@ namespace Pptcom.ComProxy
         //   Partly overlapping (fix it unless it is meant): [4] title and [6] badge, 120 x 6 pt
         // then square shapes standing out of a rounded rectangle's corners (CornerBands), text whose color is too close to
         // what is behind it (TextContrast), and then the slide's animations and transition, when it has any (DeckAnimations).
+        // The slide's shapes are read once (SlideShapes), for their lines and for the lines after them.
         // Names PowerPoint made up ("Rounded Rectangle 15") are left out, as the type says the same;
         // names a script gave are kept ('card1'). The text is complete, as a VBA literal.
         // Under a table, a chart, a SmartArt graphic or a group, what is in it (ShapeContents), up to `limits`
@@ -255,18 +259,33 @@ namespace Pptcom.ComProxy
             int shapeCount = (int)slide.Shapes.Count;
             StringBuilder sb = new();
             sb.Append("Slide ").Append(slideIndex).Append(" (").Append(SizeText(pres)).Append(", ").Append(shapeCount).Append(" shapes):\n");
+            SlideShapes drawn = SlideShapes.Read(pres, slide, variables);
             for (int i = 1; i <= shapeCount; i++)
             {
-                AppendShape(sb, slide, i, variables, limits);
+                AppendShape(sb, slide, i, drawn.At(i), variables, limits);
             }
 
-            SlideShapes drawn = SlideShapes.Read(pres, slide, variables);
             sb.Append(Overlaps(OverlapBoxes(drawn)));
-            sb.Append(Guard.Try(() => CornerBands.Describe(drawn), ""));
-            sb.Append(Guard.Try(() => TextContrast.Describe(drawn), ""));
+            if (ListsCornerBands)
+            {
+                sb.Append(Guard.Try(() => CornerBands.Describe(drawn), ""));
+            }
+
+            if (ListsLowContrast)
+            {
+                sb.Append(Guard.Try(() => TextContrast.Describe(drawn), ""));
+            }
+
             sb.Append(DeckAnimations.Describe((object)slide, slideIndex, variables));
             return sb.ToString();
         }
+
+        // Two of the lines after the overlaps, each of which can be turned off here (by leaving out its "= true"), and with
+        // it what only it reads from PowerPoint (SlideShapes): square shapes standing out of a rounded rectangle's corners
+        // (CornerBands), and text too close in color to what is behind it (TextContrast).
+        internal static bool ListsCornerBands { get; } = true;
+
+        internal static bool ListsLowContrast { get; } = true;
 
         // What of each shape shows (Shown), for the overlaps: not of a line (a line crossing a box is how lines are drawn),
         // nor of a hidden shape (it is not drawn); nor of one whose text frame or text bounds could not be read.
@@ -338,18 +357,6 @@ namespace Pptcom.ComProxy
             return s.HasTextFrame == false || s.FillShows || s.LineVisible == true;
         }
 
-        // Where the shape's text is drawn (TextRange.BoundLeft ...), or null when it has none.
-        internal static ShapeBox? TextBounds(dynamic shape)
-        {
-            if ((int)shape.HasTextFrame == 0 || (int)shape.TextFrame.HasText == 0)
-            {
-                return null;
-            }
-
-            dynamic range = shape.TextFrame.TextRange;
-            return new ShapeBox(0, "", (double)range.BoundLeft, (double)range.BoundTop, (double)range.BoundWidth, (double)range.BoundHeight);
-        }
-
         // A shape set to Visible = msoFalse: listed as hidden, and left out of what the lines after the list judge from
         // what is drawn (overlaps, rounded corners, contrast).
         internal static bool IsHidden(dynamic shape)
@@ -357,10 +364,10 @@ namespace Pptcom.ComProxy
             return Guard.Try(() => (int)shape.Visible == 0, fallback: false);
         }
 
-        // A shape's frame, named by the first variable that holds it ("card1"), as the lines after the shape list name it.
-        internal static ShapeBox FrameOf(dynamic slide, dynamic shape, int index, IDictionary<string, List<string>>? variables)
+        // A shape's frame, named by the first variable that holds it ("card1" of `held`, as VariablesOf writes them), as
+        // the lines after the shape list name it.
+        internal static ShapeBox FrameOf(dynamic shape, int index, string held)
         {
-            string held = VariablesOf(variables, slide, shape);
             return new ShapeBox(index, held.Length > 2 ? held.Substring(2).Split(',')[0].Trim() : "",
                                 (double)shape.Left, (double)shape.Top, (double)shape.Width, (double)shape.Height);
         }
@@ -369,7 +376,7 @@ namespace Pptcom.ComProxy
         {
             public readonly int Index = index;
             public readonly string Variable = variable;
-            public readonly double Left = left, Top = top, Right = left + width, Bottom = top + height;
+            public readonly double Left = left, Top = top, Right = left + width, Bottom = top + height, Width = width, Height = height;
 
             public string Label => Variable.Length > 0 ? Invariant($"[{Index}] {Variable}") : Invariant($"[{Index}]");
 
@@ -418,10 +425,11 @@ namespace Pptcom.ComProxy
         }
 
         // One shape of Brief: the slide's shape Shapes(i), and what is in it under it.
-        private static void AppendShape(StringBuilder sb, dynamic slide, int i, IDictionary<string, List<string>>? variables, ShapeContents.Limits limits)
+        private static void AppendShape(StringBuilder sb, dynamic slide, int i, SlideShapes.Shape? read, IDictionary<string, List<string>>? variables,
+                                        ShapeContents.Limits limits)
         {
             sb.Append('[').Append(i).Append("] ");
-            AppendShapeLine(sb, (object)slide, (object)slide.Shapes(i), variables, ContentIndent, limits);
+            AppendShapeLine(sb, (object)slide, (object)slide.Shapes(i), read, variables, ContentIndent, limits);
         }
 
         // Under a shape's line, what is in it (ShapeContents), indented by this.
@@ -429,21 +437,31 @@ namespace Pptcom.ComProxy
 
         // A shape's line after its number ("[3] ", "GroupItems(2) "): the variables that hold it, its type, name, position
         // and size, fill, line and text; then what is in a table, a chart, a SmartArt graphic or a group, on lines
-        // starting with `indent`.
-        internal static void AppendShapeLine(StringBuilder sb, dynamic slide, dynamic shape, IDictionary<string, List<string>>? variables, string indent,
-                                             ShapeContents.Limits limits)
+        // starting with `indent`. What `read` (the slide's shape as SlideShapes read it) has is taken from it; the rest, and
+        // what it could not read, from PowerPoint, as all of a group's shapes (read null).
+        internal static void AppendShapeLine(StringBuilder sb, dynamic slide, dynamic shape, SlideShapes.Shape? read, IDictionary<string, List<string>>? variables,
+                                             string indent, ShapeContents.Limits limits)
         {
-            string type = TypeName(shape);
-            sb.Append(VariablesOf(variables, slide, shape)).Append(type);
+            string type = read is not null ? TypeName((object)shape, read.Type, read.AutoShapeType ?? 0) : TypeName((object)shape);
+            sb.Append(read is not null ? read.Variables : VariablesOf(variables, (object)slide, (object)shape)).Append(type);
             string name = (string)shape.Name ?? "";
             if (!AutoNamePattern.IsMatch(name))
             {
                 sb.Append(" '").Append(name).Append('\'');
             }
 
-            sb.Append(" L").Append(R(shape.Left)).Append(" T").Append(R(shape.Top))
-              .Append(" W").Append(R(shape.Width)).Append(" H").Append(R(shape.Height));
-            if (IsHidden(shape))
+            if (read is not null)
+            {
+                sb.Append(" L").Append(R(read.Frame.Left)).Append(" T").Append(R(read.Frame.Top))
+                  .Append(" W").Append(R(read.Frame.Width)).Append(" H").Append(R(read.Frame.Height));
+            }
+            else
+            {
+                sb.Append(" L").Append(R(shape.Left)).Append(" T").Append(R(shape.Top))
+                  .Append(" W").Append(R(shape.Width)).Append(" H").Append(R(shape.Height));
+            }
+
+            if (read?.Hidden ?? IsHidden((object)shape))
             {
                 sb.Append(" hidden"); // Visible = msoFalse: it is not in the rendering
             }
@@ -454,10 +472,13 @@ namespace Pptcom.ComProxy
             // each with its own; the group's read "mixed" when they differ).
             try
             {
-                if ((int)shape.HasTable == 0 && Guard.Try(() => (int)shape.HasChart == 0, fallback: true) && (int)shape.Type != 6)
+                bool plain = read is not null
+                    ? read.HasTable == false && read.HasChart != true && read.Type != 6
+                    : (int)shape.HasTable == 0 && Guard.Try(() => (int)shape.HasChart == 0, fallback: true) && (int)shape.Type != 6;
+                if (plain)
                 {
-                    AppendFill(sb, shape.Fill);
-                    AppendLine(sb, shape.Line);
+                    AppendFill(sb, (object)shape, read);
+                    AppendLine(sb, (object)shape, read);
                 }
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
@@ -465,13 +486,13 @@ namespace Pptcom.ComProxy
             }
             try
             {
-                if ((int)shape.HasTextFrame != 0)
+                if (read?.HasTextFrame ?? ((int)shape.HasTextFrame != 0))
                 {
-                    string text = (string)shape.TextFrame.TextRange.Text ?? "";
+                    string text = read?.TextContent ?? (string)shape.TextFrame.TextRange.Text ?? "";
                     if (text.Length > 0)
                     {
                         sb.Append(' ').Append(ComScriptParser.ToVbaLiteral(text));
-                        string fonts = DescribeFonts(shape.TextFrame.TextRange);
+                        string fonts = FontsText(read?.Paragraphs ?? ParagraphStyles((object)shape.TextFrame.TextRange));
                         if (fonts.Length > 0)
                         {
                             sb.Append(" | font ").Append(fonts);
@@ -482,12 +503,42 @@ namespace Pptcom.ComProxy
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
             }
-            (string head, string lines) = ShapeContents.Describe((object)slide, (object)shape, variables, indent, limits);
+            (string head, string lines) = ShapeContents.Describe((object)slide, (object)shape, read, variables, indent, limits);
             sb.Append(head).Append('\n').Append(lines);
         }
 
         // " fill RGB(245,246,247)", " fill gradient RGB(126,183,236) to RGB(0,90,163), GradientAngle 90" or " fill picture",
-        // then " Transparency 0.3" when it is not opaque. Nothing when the shape has no visible fill.
+        // then " Transparency 0.3" when it is not opaque. Nothing when the shape has no visible fill. From what `read` has
+        // (a gradient's stops from PowerPoint); all from PowerPoint without it, or when it lacks a value.
+        private static void AppendFill(StringBuilder sb, dynamic shape, SlideShapes.Shape? read)
+        {
+            if (read?.FillVisible == false)
+            {
+                return;
+            }
+
+            if (read is not { FillVisible: true, FillType: int type, FillTransparency: double transparency } || (type is not (3 or 6) && read.FillColor is null))
+            {
+                AppendFill(sb, shape.Fill);
+                return;
+            }
+
+            if (type == 3) // msoFillGradient
+            {
+                AppendGradient(sb, shape.Fill);
+            }
+            else if (type == 6) // msoFillPicture
+            {
+                sb.Append(" fill picture");
+            }
+            else
+            {
+                sb.Append(" fill ").Append(Rgb(read.FillColor ?? 0));
+            }
+
+            AppendTransparency(sb, transparency);
+        }
+
         private static void AppendFill(StringBuilder sb, dynamic fill)
         {
             if ((int)fill.Visible == 0)
@@ -498,22 +549,7 @@ namespace Pptcom.ComProxy
             int type = (int)fill.Type;
             if (type == 3) // msoFillGradient
             {
-                dynamic stops = fill.GradientStops;
-                int n = (int)stops.Count;
-                sb.Append(" fill gradient ").Append(Rgb(stops.Item(1).Color.RGB)).Append(" to ").Append(Rgb(stops.Item(n).Color.RGB));
-                if (n > 2)
-                {
-                    sb.Append(Invariant($" ({n} stops)"));
-                }
-
-                try
-                {
-                    sb.Append(", GradientAngle ").Append(Num(fill.GradientAngle));
-                }
-                catch (Exception ex) when (Guard.IsRecoverable(ex))
-                {
-                    // a radial or path gradient has no angle
-                }
+                AppendGradient(sb, fill);
             }
             else if (type == 6) // msoFillPicture
             {
@@ -524,7 +560,31 @@ namespace Pptcom.ComProxy
                 sb.Append(" fill ").Append(Rgb(fill.ForeColor.RGB));
             }
 
-            double transparency = (double)fill.Transparency;
+            AppendTransparency(sb, (double)fill.Transparency);
+        }
+
+        private static void AppendGradient(StringBuilder sb, dynamic fill)
+        {
+            dynamic stops = fill.GradientStops;
+            int n = (int)stops.Count;
+            sb.Append(" fill gradient ").Append(Rgb(stops.Item(1).Color.RGB)).Append(" to ").Append(Rgb(stops.Item(n).Color.RGB));
+            if (n > 2)
+            {
+                sb.Append(Invariant($" ({n} stops)"));
+            }
+
+            try
+            {
+                sb.Append(", GradientAngle ").Append(Num(fill.GradientAngle));
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                // a radial or path gradient has no angle
+            }
+        }
+
+        private static void AppendTransparency(StringBuilder sb, double transparency)
+        {
             if (transparency >= 0.005 && transparency <= 1)
             {
                 sb.Append(" Transparency ").Append(Num(transparency));
@@ -532,14 +592,30 @@ namespace Pptcom.ComProxy
         }
 
         // " line RGB(214,0,32) 2pt", with the DashStyle when it is not solid (" msoLineSquareDot"): the line of a Line
-        // shape, the outline of any other. Nothing when it is not visible (its weight then reads as "mixed").
+        // shape, the outline of any other. Nothing when it is not visible (its weight then reads as "mixed"). Whether it
+        // is visible from `read` when that has it; the rest from PowerPoint.
+        private static void AppendLine(StringBuilder sb, dynamic shape, SlideShapes.Shape? read)
+        {
+            if (read?.LineVisible is not bool visible)
+            {
+                AppendLine(sb, shape.Line);
+            }
+            else if (visible)
+            {
+                AppendVisibleLine(sb, shape.Line);
+            }
+        }
+
         private static void AppendLine(StringBuilder sb, dynamic line)
         {
-            if ((int)line.Visible == 0)
+            if ((int)line.Visible != 0)
             {
-                return;
+                AppendVisibleLine(sb, line);
             }
+        }
 
+        private static void AppendVisibleLine(StringBuilder sb, dynamic line)
+        {
             sb.Append(" line ").Append(Rgb(line.ForeColor.RGB)).Append(' ').Append(Num(line.Weight)).Append("pt");
             string? dash = DashName((int)line.DashStyle);
             if (dash is not null)
@@ -743,7 +819,7 @@ namespace Pptcom.ComProxy
                 sb.Append("When the user sent this, PowerPoint showed slide ").Append(s.Slide).Append(" with this selected (as in pptread):\n");
                 foreach (int i in indexes)
                 {
-                    AppendShape(sb, slide, i, variables, ShapeContents.Limits.Default);
+                    AppendShape(sb, (object)slide!, i, read: null, variables, ShapeContents.Limits.Default);
                 }
 
                 if (s.InGroup.Count > 0)
@@ -800,14 +876,20 @@ namespace Pptcom.ComProxy
         // "= d2 " when the script holds this shape in a variable (or several: "= card, c1 ").
         private static string VariablesOf(IDictionary<string, List<string>>? variables, dynamic slide, dynamic shape)
         {
-            if (variables is null)
+            return variables is null ? "" : VariablesById(variables, Guard.Try<int?>(() => (int)slide.SlideID, fallback: null), (object)shape);
+        }
+
+        // The same, by the SlideID of the shape's slide (null when it could not be read: no variable is then found).
+        internal static string VariablesById(IDictionary<string, List<string>>? variables, int? slideId, dynamic shape)
+        {
+            if (variables is null || slideId is not int id)
             {
                 return "";
             }
 
             try
             {
-                if (variables.TryGetValue(ComProxyEngine.ShapeKey((int)slide.SlideID, (int)shape.Id), out List<string> names) && names.Count > 0)
+                if (variables.TryGetValue(ComProxyEngine.ShapeKey(id, (int)shape.Id), out List<string> names) && names.Count > 0)
                 {
                     return "= " + string.Join(", ", names) + " ";
                 }
@@ -839,11 +921,16 @@ namespace Pptcom.ComProxy
             {
                 return "?";
             }
+            return TypeName((object)shape, type, type == 1 ? Guard.Try(() => (int)shape.AutoShapeType, 0) : 0);
+        }
+
+        // The same, of a shape whose MsoShapeType and (an AutoShape's) MsoAutoShapeType are known.
+        private static string TypeName(dynamic shape, int type, int autoShapeType)
+        {
             switch (type)
             {
                 case 1: // msoAutoShape
-                    int auto = Guard.Try(() => (int)shape.AutoShapeType, 0);
-                    return EnumResolver.NameOf(typeof(Microsoft.Office.Core.MsoAutoShapeType), auto, "msoShape") ?? Invariant($"AutoShape({auto})");
+                    return EnumResolver.NameOf(typeof(Microsoft.Office.Core.MsoAutoShapeType), autoShapeType, "msoShape") ?? Invariant($"AutoShape({autoShapeType})");
                 case 14: // msoPlaceholder
                     int role = Guard.Try(() => (int)shape.PlaceholderFormat.Type, 0);
                     string? roleName = EnumResolver.NameOf(typeof(Microsoft.Office.Interop.PowerPoint.PpPlaceholderType), role, "ppPlaceholder");
