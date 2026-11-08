@@ -228,11 +228,40 @@ namespace Pptcom.ComProxy
                 // Shapes.Item(25) -> count on Shapes itself; Slide.Shapes(25) -> count on Shapes.
                 string collection = member is null || member == "Item" ? typeLabel : member;
                 return typeLabel + "." + member + (action == ComOpAction.Call ? "(" + argText + ")" : "") + " failed." +
+                       PartSwitchHint(typeLabel, target, member) +
                        (hint is not null ? " " + hint : "") +
                        (looksLikeIndex ? " If " + argText + " is an index or name: indexes are 1-based, so check " + collection + ".Count, or use the variable you bound when you created the item." : "") +
                        rawNote;
             }
             return null;
+        }
+
+        // The parts of a chart that are there only once switched on: reading Series.DataLabels while HasDataLabels is False
+        // fails, and PowerPoint's words do not name the switch (E_FAIL, "this object has no title", "object required").
+        // Gridlines are read whether shown or not, so they are not here.
+        private static readonly Dictionary<string, string> PartSwitches = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Series.DataLabels"] = "HasDataLabels",
+            ["Point.DataLabel"] = "HasDataLabel",
+            ["Series.ErrorBars"] = "HasErrorBars",
+            ["Chart.ChartTitle"] = "HasTitle",
+            ["Chart.Legend"] = "HasLegend",
+            ["Chart.DataTable"] = "HasDataTable",
+            ["Axis.AxisTitle"] = "HasTitle",
+        };
+
+        // " The Series has no DataLabels until they are switched on: set ser2.HasDataLabels = msoTrue first." ("" for other members)
+        private static string PartSwitchHint(string typeLabel, string? target, string? member)
+        {
+            if (member is null || !PartSwitches.TryGetValue(typeLabel + "." + member, out string on))
+            {
+                return "";
+            }
+
+            string set = target is not null && !IsSynthetic(target)
+                ? target + "." + on + " = msoTrue"
+                : "." + on + " = msoTrue on the " + typeLabel + " (the same expression without ." + member + ")";
+            return " The " + typeLabel + " has no " + member + " until it is switched on: set " + set + " first.";
         }
 
         // Where the member lives instead: a near spelling on the same type, a one-hop path

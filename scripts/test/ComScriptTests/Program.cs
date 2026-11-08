@@ -622,6 +622,18 @@ namespace ComScriptTests
             int toRows = delete.IndexOf("Rows(n).Delete", StringComparison.Ordinal);
             Report("hints: a shape's member written on its table goes to the shape, before the rows", toShape >= 0 && (toRows < 0 || toShape < toRows), delete);
 
+            // A chart's part read before it is switched on: the switch to set first, on the variable written or on the part's owner.
+            static string failed(string type, string target, string member)
+            {
+                JObject op = new() { ["action"] = ComOpAction.Get, ["target"] = target, ["member"] = member };
+                return ComErrorText.Describe(new ComProxyEngine(new object()), op, new FailException(), "エラーを特定できません", type);
+            }
+
+            string labels = failed("Series", "ser2", "DataLabels"), legend = failed("Chart", "_h3", "Legend"), fill = failed("Shape", "card", "Fill");
+            Report("hints: a chart's part read before it is switched on names the switch to set first",
+                   labels.Contains("set ser2.HasDataLabels = msoTrue first") && legend.Contains("set .HasLegend = msoTrue on the Chart") && !fill.Contains("switched on"),
+                   labels + " | " + legend);
+
             // A variable bound again written another way is named as it was written last (the handles ignore case).
             ComProxyEngine engine = new(new object());
             foreach (string script in new[] { "tT = 1", "tt = 2" })
@@ -640,6 +652,16 @@ namespace ComScriptTests
                 : base("名前が不明です。")
             {
                 HResult = unchecked((int)0x80020006);
+            }
+        }
+
+        // What PowerPoint throws for a chart's part read before it is switched on (Series.DataLabels): E_FAIL.
+        internal sealed class FailException : Exception
+        {
+            public FailException()
+                : base("エラーを特定できません")
+            {
+                HResult = unchecked((int)0x80004005);
             }
         }
 
