@@ -124,7 +124,7 @@ namespace Pptcom.Agent
                     {
                         Id = call.Id,
                         Name = call.Name,
-                        Arguments = (t, call.Id) == kept ? PptcomCallsArguments(pptcoms.Count) : ShortenArguments(call),
+                        Arguments = (t, call.Id) == kept ? PptcomCallsArguments(pptcoms.Count, call) : ShortenArguments(call),
                     })];
                     shortened.Add(a);
                     foreach (ToolCall call in calls.Where(c => !answered.Contains((t, c.Id))))
@@ -150,11 +150,32 @@ namespace Pptcom.Agent
         private const string PptcomTool = "pptcom";
         private const string NotRun = "(not run: the user stopped the request)";
 
-        // The one pptcom call of a shortened request: how many there were, with no script.
-        private static string PptcomCallsArguments(int calls)
+        // The one pptcom call of a shortened request: how many there were, with no script and nothing of what they were
+        // for (PptcomRan says why). It keeps the shape of a call - a notice, the language `first` named, a script - as the
+        // model writes its next calls after the ones it sees.
+        private static string PptcomCallsArguments(int calls, ToolCall first)
         {
-            return new JObject { ["script"] = Invariant($"{ElidedScriptMark}{calls} pptcom call(s) of this request, already run - left out of this conversation)") }
-                .ToString(Newtonsoft.Json.Formatting.None);
+            JObject arguments = new() { [RequestRunner.NoticeArgument] = "(left out of this conversation)" };
+            if (ArgumentsOf(first)?["language"] is JValue { Type: JTokenType.String } language)
+            {
+                arguments["language"] = language;
+            }
+
+            arguments["script"] = Invariant($"{ElidedScriptMark}{calls} pptcom call(s) of this request, already run - left out of this conversation)");
+            return arguments.ToString(Newtonsoft.Json.Formatting.None);
+        }
+
+        // A call's arguments as the JSON object they are; null when the model wrote something else.
+        private static JObject? ArgumentsOf(ToolCall call)
+        {
+            try
+            {
+                return JObject.Parse(string.IsNullOrWhiteSpace(call.Arguments) ? "{}" : call.Arguments);
+            }
+            catch (Newtonsoft.Json.JsonReaderException)
+            {
+                return null;
+            }
         }
 
         // Its result: that they ran, and where the slides are to be seen now - nothing of what they did.
@@ -254,8 +275,8 @@ namespace Pptcom.Agent
 
         // Replaces the script of every pptcom call except those of the last `keep` assistant turns that made one with a
         // VBA comment saying it ran. A comment, so that a model imitating its own history writes a script that does
-        // nothing rather than a broken one. The calls themselves stay (their results refer to them). Returns how many
-        // scripts were replaced now.
+        // nothing rather than a broken one. The calls themselves stay (their results refer to them), and so does the
+        // rest of their arguments: the notice says what the script was for. Returns how many scripts were replaced now.
         public static int ElideOldScripts(List<ChatMessage> messages, int keep)
         {
             List<ChatMessage> withScripts = [.. messages.Where(static m => m.ToolCalls is not null && m.ToolCalls.Exists(static c => c.Name == "pptcom"))];
@@ -264,10 +285,12 @@ namespace Pptcom.Agent
             {
                 foreach (ToolCall call in m.ToolCalls.Where(static c => c.Name == "pptcom"))
                 {
+                    JObject? given = null;
                     string script;
                     try
                     {
-                        script = (string?)JObject.Parse(call.Arguments)["script"] ?? "";
+                        given = JObject.Parse(call.Arguments);
+                        script = (string?)given["script"] ?? "";
                     }
                     catch (Exception ex) when (ex is Newtonsoft.Json.JsonException or ArgumentException)
                     {
@@ -278,9 +301,9 @@ namespace Pptcom.Agent
                         continue;
                     }
 
-                    int lines = script.Split('\n').Length;
-                    call.Arguments = new JObject { ["script"] = Invariant($"{ElidedScriptMark}{lines} lines, already run - left out of this conversation to keep it short)") }
-                        .ToString(Newtonsoft.Json.Formatting.None);
+                    JObject arguments = given ?? [];
+                    arguments["script"] = Invariant($"{ElidedScriptMark}{script.Split('\n').Length} lines, already run - left out of this conversation to keep it short)");
+                    call.Arguments = arguments.ToString(Newtonsoft.Json.Formatting.None);
                     replaced++;
                 }
             }

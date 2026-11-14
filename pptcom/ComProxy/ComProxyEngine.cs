@@ -260,6 +260,7 @@ namespace Pptcom.ComProxy
         public async Task<ComBatchResult> ExecuteAsync(string batchJson)
         {
             ComBatchResult result = new();
+            _callTextLanguage = null;
             JArray ops;
             try
             {
@@ -307,6 +308,7 @@ namespace Pptcom.ComProxy
             }
             finally
             {
+                ApplyTextLanguage();
                 await CloseChartDataAsync().ConfigureAwait(true);
                 FlushUsage();
             }
@@ -397,18 +399,23 @@ namespace Pptcom.ComProxy
         // statement the parser could not read (ParseResult.LineErrors) is a failed statement too.
         // Stops after `maxFailures` different mistakes (repeats of one mistake - same
         // ComErrorText.CauseOf key - count once; at most 5x that many failed statements in total).
-        public async Task<ComScriptResult> ExecuteScriptAsync(ComScriptParser.ParseResult parsed, int maxFailures = DefaultMaxFailures)
+        // `textLanguage`: the language of the text the script writes, as its caller named it (TextLanguageOfTag): the
+        // text gets it once the script has run (ApplyTextLanguage). Without one, the text stays as PowerPoint tagged it.
+        public async Task<ComScriptResult> ExecuteScriptAsync(ComScriptParser.ParseResult parsed, int maxFailures = DefaultMaxFailures, int? textLanguage = null)
         {
             ComScriptResult result = new()
             {
                 MaxFailures = maxFailures,
             };
+            _callTextLanguage = textLanguage;
             try
             {
                 await RunLinesAsync(parsed, result, maxFailures).ConfigureAwait(true);
             }
             finally
             {
+                // The text the script wrote gets its language before the slides are rendered.
+                ApplyTextLanguage();
                 // A chart's data the script opened does not stay open in Excel after it (ChartDataWorkbooks).
                 await CloseChartDataAsync().ConfigureAwait(true);
                 FlushUsage();
@@ -613,6 +620,14 @@ namespace Pptcom.ComProxy
 
         // Objects a script deleted (Delete called on them): there is no shape behind them any more, and reading one throws.
         private readonly ConditionalWeakTable<object, object> _deletedObjects = new();
+
+        // What an op that went through did besides giving its result: an object it deleted has nothing behind it any more
+        // (NoteDeleted), and text it wrote gets its language when the call ends (NoteTextWrite).
+        private void NoteEffects(string action, string? member, object targetObj)
+        {
+            NoteDeleted(action, member, targetObj);
+            NoteTextWrite(action, member, targetObj, _lastTargetType);
+        }
 
         // A Delete that went through, as a call or written without parentheses (b1.Delete, parsed as a get): nothing is
         // behind the object any more.
@@ -897,7 +912,7 @@ namespace Pptcom.ComProxy
             object? resultValue = IsApplicationActivePresentation(op, action, member, targetObj)
                 ? Presentation ?? throw new InvalidOperationException("No presentation is open.")
                 : Invoke(op, action, member, targetObj);
-            NoteDeleted(action, member, targetObj);
+            NoteEffects(action, member, targetObj);
             if (resultValue is not null && !ComSecurityPolicy.IsReturnValueAllowed(resultValue))
             {
                 // an Office type the policy keeps out (Application, the custom XML parts...) by its name; anything else by its .NET type
@@ -1539,9 +1554,144 @@ namespace Pptcom.ComProxy
             }
 
             current.GetType().InvokeMember("Text", BindingFlags.SetProperty | BindingFlags.Public | BindingFlags.Instance, binder: null, current, [value], ComCulture);
+            NoteTextWrite(ComOpAction.Set, "Text", current, type);
             _handleSlide.TryGetValue(id, out object? slide);
             MarkTouched(slide);
             return true;
+        }
+
+        // ---- the language of the text a call wrote ----
+        // PowerPoint decides the language of text set through the object model by looking at it. It tells most languages
+        // apart (Korean, Chinese, English, German, French...), but takes Japanese with no kana in it - a date, a heading
+        // of kanji and digits - for Chinese, and the theme then draws it in its Chinese font. So a pptcom call names the
+        // language of the text it writes (tools.json), and that text is given it once the script has run. A call that
+        // names none leaves its text as PowerPoint tagged it.
+
+        // What the ops of the call running wrote text through: text ranges (Range), and chart titles.
+        private readonly List<(object Target, bool Range)> _writtenText = [];
+
+        // The language of the text the call running writes, as its caller named it; null: none named.
+        private int? _callTextLanguage;
+
+        // The language a call names for the text it writes, from its tag ("ja-JP", "zh-TW", "en-US"; "ja" and "en" stand
+        // for their usual regions): PowerPoint's id of it (an LCID), or null for what names no one language - no tag, a
+        // name that is none ("Japanese"), a tag Windows does not know, and "zh" alone, as Traditional and Simplified
+        // Chinese are drawn in different fonts.
+        public static int? TextLanguageOfTag(string? tag)
+        {
+            const int Unknown = 0x1000; // LOCALE_CUSTOM_UNSPECIFIED: a well-formed tag of no language Windows has
+            tag = (tag ?? "").Trim().Replace('_', '-');
+            if (tag.Length == 0 || string.Equals(tag, "zh", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            try
+            {
+                CultureInfo named = CultureInfo.GetCultureInfo(tag);
+                CultureInfo culture = named.IsNeutralCulture ? CultureInfo.CreateSpecificCulture(named.Name) : named;
+                return culture.LCID is Unknown or 0 || culture.Equals(CultureInfo.InvariantCulture) ? null : culture.LCID;
+            }
+            catch (ArgumentException)
+            {
+                return null; // CultureNotFoundException: not a language tag
+            }
+        }
+
+        // What a pptcom call left out of its arguments (tools.json: notice, language, script), for the end of
+        // its result - the call ran all the same, as sending the script again would cost a turn: the notice to the
+        // user, the language of its text, or a language that is no tag of one (its text then stays as PowerPoint tagged
+        // it). "" for a call that gave both.
+        public static string MissingArgumentsNote(string? notice, string? language)
+        {
+            List<string> notes = [];
+            if (string.IsNullOrWhiteSpace(notice))
+            {
+                notes.Add("no notice (one short sentence telling the user what the call is meant to do)");
+            }
+
+            if (string.IsNullOrWhiteSpace(language))
+            {
+                notes.Add("no language (the language of the text the call writes, as a tag such as ja-JP or en-US)");
+            }
+            else if (TextLanguageOfTag(language) is null)
+            {
+                notes.Add("a language that is not the tag of one language (\"" + language + "\": write ja-JP, en-US, zh-TW, zh-CN, ko-KR...)");
+            }
+
+            return notes.Count == 0 ? "" : "\n(This call ran, but its arguments had " + string.Join(" and ", notes) + ". Give notice and language with every pptcom call.)";
+        }
+
+        // An op that writes text, by the COM type name of its target: .Text set on a text range or on a chart's
+        // title, and what a text range inserts or replaces. Formatting, reading and taking a part of the text are not.
+        internal static bool WritesText(string? action, string? typeName, string? member)
+        {
+            if (member is null)
+            {
+                return false;
+            }
+
+            bool range = IsTextRange(typeName);
+            if (string.Equals(action, ComOpAction.Set, StringComparison.Ordinal))
+            {
+                bool title = string.Equals(typeName, "ChartTitle", StringComparison.Ordinal) || string.Equals(typeName, "AxisTitle", StringComparison.Ordinal);
+                return string.Equals(member, "Text", StringComparison.OrdinalIgnoreCase) && (range || title);
+            }
+
+            return range && string.Equals(action, ComOpAction.Call, StringComparison.Ordinal) &&
+                   (member.StartsWith("Insert", StringComparison.OrdinalIgnoreCase) || string.Equals(member, "Replace", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool IsTextRange(string? typeName)
+        {
+            return string.Equals(typeName, "TextRange", StringComparison.Ordinal) || string.Equals(typeName, "TextRange2", StringComparison.Ordinal);
+        }
+
+        // `typeName`: the COM type name of the op's target, as the caller has it.
+        private void NoteTextWrite(string? action, string? member, object targetObj, string? typeName)
+        {
+            if (_callTextLanguage is null || !WritesText(action, typeName, member))
+            {
+                return;
+            }
+
+            if (!_writtenText.Exists(w => ReferenceEquals(w.Target, targetObj)))
+            {
+                _writtenText.Add((targetObj, IsTextRange(typeName)));
+            }
+        }
+
+        // Gives the text the call wrote its language: the whole text of each frame written to, at once and without
+        // looking at what PowerPoint made of it. The East Asian runs take it (text of another East Asian language too);
+        // the Latin ones are English after it, as they are for digits and English words anyway. Only after the text is
+        // there: PowerPoint looks again at text set later.
+        private void ApplyTextLanguage()
+        {
+            if (_callTextLanguage is int language)
+            {
+                foreach ((object target, bool range) in _writtenText)
+                {
+                    try
+                    {
+                        dynamic text = target;
+                        if (range)
+                        {
+                            // the frame's text, whichever part of it was written through
+                            text.Parent.TextRange.LanguageID = language;
+                        }
+                        else
+                        {
+                            text.Format.TextFrame2.TextRange.LanguageID = language; // a chart's title
+                        }
+                    }
+                    catch (Exception ex) when (Guard.IsRecoverable(ex))
+                    {
+                        // deleted since, or text that takes no language: it stays as it is
+                    }
+                }
+            }
+
+            _writtenText.Clear();
         }
 
         // `name = ...` as the script wrote it (the parser flags the op that binds the name), without Set.

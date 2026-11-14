@@ -71,6 +71,7 @@ namespace ComScriptTests
             SelectionTests();
             FingerprintTests();
             ChangeTrackingTests();
+            TextLanguageTests();
             RenderSizeTests();
             OverlapTests();
             Console.WriteLine();
@@ -1681,6 +1682,52 @@ namespace ComScriptTests
                    ComProxyEngine.MayChange(ComOpAction.Get, typeName: null, "Value") && ComProxyEngine.MayChange(ComOpAction.Set, "Shape", "Left") &&
                    ComProxyEngine.MayChange(ComOpAction.Call, "Shapes", "AddShape") && !ComProxyEngine.MayChange(ComOpAction.Item, "Slides", member: null),
                    "");
+        }
+
+        // The text a script wrote gets the language its call named, after the script: which ops count as writing text
+        // (WritesText), which language a tag names (TextLanguageOfTag), and what a call is told that left its notice
+        // to the user or its language out (MissingArgumentsNote).
+        private static void TextLanguageTests()
+        {
+            Report("text language: setting .Text, inserting and replacing write text; formatting, reading and taking a part do not",
+                   ComProxyEngine.WritesText(ComOpAction.Set, "TextRange", "Text") && ComProxyEngine.WritesText(ComOpAction.Set, "TextRange2", "text") &&
+                   ComProxyEngine.WritesText(ComOpAction.Call, "TextRange", "InsertAfter") && ComProxyEngine.WritesText(ComOpAction.Call, "TextRange2", "InsertBefore") &&
+                   ComProxyEngine.WritesText(ComOpAction.Call, "TextRange", "Replace") &&
+                   ComProxyEngine.WritesText(ComOpAction.Set, "ChartTitle", "Text") && ComProxyEngine.WritesText(ComOpAction.Set, "AxisTitle", "Text") &&
+                   !ComProxyEngine.WritesText(ComOpAction.Get, "TextRange", "Text") && !ComProxyEngine.WritesText(ComOpAction.Call, "TextRange", "Paragraphs") &&
+                   !ComProxyEngine.WritesText(ComOpAction.Set, "TextRange", "SpaceAfter") && !ComProxyEngine.WritesText(ComOpAction.Set, "Font", "Size") &&
+                   !ComProxyEngine.WritesText(ComOpAction.Set, "Shape", "Name") && !ComProxyEngine.WritesText(ComOpAction.Call, "ChartTitle", "Delete") &&
+                   !ComProxyEngine.WritesText(ComOpAction.Set, typeName: null, "Text") && !ComProxyEngine.WritesText(ComOpAction.Item, "TextRange", member: null),
+                   "");
+            // The language a call names (its `language` argument): PowerPoint's id of the tag; a bare language stands for
+            // its usual region; none for what is no one language.
+            int?[] ids =
+            [
+                ComProxyEngine.TextLanguageOfTag("ja-JP"), ComProxyEngine.TextLanguageOfTag("en-US"), ComProxyEngine.TextLanguageOfTag("zh-TW"),
+                ComProxyEngine.TextLanguageOfTag("zh-CN"), ComProxyEngine.TextLanguageOfTag("ko-KR"), ComProxyEngine.TextLanguageOfTag("de-DE"),
+                ComProxyEngine.TextLanguageOfTag("ja"), ComProxyEngine.TextLanguageOfTag(" en "), ComProxyEngine.TextLanguageOfTag("zh_TW"), ComProxyEngine.TextLanguageOfTag("JA-jp"),
+            ];
+            Report("text language: a call's tag gives PowerPoint's id of the language",
+                   ids.SequenceEqual([1041, 1033, 1028, 2052, 1042, 1031, 1041, 1033, 1028, 1041]), string.Join(",", ids.Select(static i => i?.ToString(CultureInfo.InvariantCulture) ?? "-")));
+            int?[] none =
+            [
+                ComProxyEngine.TextLanguageOfTag(tag: null), ComProxyEngine.TextLanguageOfTag(""), ComProxyEngine.TextLanguageOfTag("zh"), ComProxyEngine.TextLanguageOfTag("Japanese"),
+                ComProxyEngine.TextLanguageOfTag("xx-YY"), ComProxyEngine.TextLanguageOfTag("日本語"),
+            ];
+            Report("text language: no tag, Chinese without its script, a language's name and an unknown tag name no language",
+                   none.All(static i => i is null), string.Join(",", none.Select(static i => i?.ToString(CultureInfo.InvariantCulture) ?? "-")));
+            string both = ComProxyEngine.MissingArgumentsNote(notice: null, language: " ");
+            string badTag = ComProxyEngine.MissingArgumentsNote("表紙を作ります", "Japanese");
+            Report("text language: a call that ran without its notice to the user or its language is told so after its result; one that gave both is not",
+                   ComProxyEngine.MissingArgumentsNote("表紙を作ります", "ja-JP").Length == 0 && both.StartsWith("\n(This call ran", StringComparison.Ordinal) &&
+                   both.Contains("no notice") && both.Contains("no language") && !badTag.Contains("no notice") && badTag.Contains("\"Japanese\"") &&
+                   badTag.Contains("ja-JP"),
+                   both + " / " + badTag);
+            // A script that writes no text runs the same with a language named and with none.
+            ComScriptParser.ParseResult parsed = ComScriptParser.Parse("x = 1 + 2", priorKnownIds: null, 10);
+            ComScriptResult plain = new ComProxyEngine(new object()).ExecuteScriptAsync(parsed).GetAwaiter().GetResult();
+            ComScriptResult given = new ComProxyEngine(new object()).ExecuteScriptAsync(parsed, textLanguage: 1041).GetAwaiter().GetResult();
+            Report("text language: a script that writes no text runs the same with a language named", plain.Success && given.Success, "");
         }
 
         // ActivePresentation.Slides.Count and Slides(n), as late binding reaches them.

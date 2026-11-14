@@ -411,6 +411,36 @@ namespace ChatStreamTests
                   (notes[1].Content ?? "").EndsWith("Carry on from Next.", StringComparison.Ordinal) && notes.TrueForAll(static m => m.Notes),
                   string.Join(" / ", notes.ConvertAll(static m => m.Role + ": " + m.Content)));
             ShortenForLaterTests();
+            CallArgumentsTests();
+        }
+
+        // A pptcom call's notice and language through the shortenings: an older script leaves, the rest of the call's
+        // arguments stays; the one call later requests get of a request has none of the notices, and the language the
+        // first call named.
+        private static void CallArgumentsTests()
+        {
+            const string call = "{\"notice\":\"表紙を作ります\",\"language\":\"ja-JP\",\"script\":\"a = 1\\nb = 2\"}";
+            List<ChatMessage> messages = [new ChatMessage("system", "s"), new ChatMessage("user", "make slides")];
+            for (int i = 1; i <= 3; i++)
+            {
+                AddTurn(messages, Invariant($"p{i}"), "pptcom", call, "OK: 2 lines executed.", slide: i);
+            }
+
+            Compaction.ElideOldScripts(messages, Compaction.KeepRecent);
+            JObject older = JObject.Parse(messages.Find(static m => m.Role == "assistant")!.ToolCalls![0].Arguments);
+            Check("an older script leaves, its call's notice and language stay, in their places",
+                  string.Join(",", older.Properties().Select(static p => p.Name)) == "notice,language,script" && (string?)older[RequestRunner.NoticeArgument] == "表紙を作ります" &&
+                  (string?)older["language"] == "ja-JP" && ((string?)older["script"] ?? "").StartsWith(Compaction.ElidedScriptMark + "2 lines", StringComparison.Ordinal),
+                  older.ToString(Newtonsoft.Json.Formatting.None));
+
+            List<ChatMessage> run = [new ChatMessage("system", "s"), new ChatMessage("user", "make slides")];
+            AddTurn(run, "p1", "pptcom", call, "OK: 2 lines executed.", slide: 1);
+            AddTurn(run, "p2", "pptcom", "{\"notice\":\"文字の重なりを直します\",\"language\":\"ja-JP\",\"script\":\"c = 3\"}", "OK: 1 lines executed.", slide: 1);
+            JObject later = JObject.Parse(Compaction.ShortenForLater(run, run[1], "make slides", ending: null)[1].ToolCalls![0].Arguments);
+            Check("later requests get one call with its three arguments: no notice of what was done, the language, no script",
+                  string.Join(",", later.Properties().Select(static p => p.Name)) == "notice,language,script" && !((string?)later[RequestRunner.NoticeArgument] ?? "").Contains("表紙") &&
+                  (string?)later["language"] == "ja-JP" && ((string?)later["script"] ?? "").StartsWith(Compaction.ElidedScriptMark + "2 pptcom call(s)", StringComparison.Ordinal),
+                  later.ToString(Newtonsoft.Json.Formatting.None));
         }
 
         // What the requests after one get of it (Compaction.ShortenForLater): the request as written, each turn without
@@ -518,6 +548,12 @@ namespace ChatStreamTests
 
             JArray plain = AgentTools.Tools(template, withDocuments: false, imagePrompt: null);
             Check("no documents, no image model: pptread and pptcom", AgentTools.Names(plain) == "pptread, pptcom", AgentTools.Names(plain));
+            JToken? scriptCall = plain.FirstOrDefault(static t => (string?)t["function"]?["name"] == "pptcom")?["function"]?["parameters"];
+            string arguments = string.Join(",", (scriptCall?["properties"] as JObject)?.Properties().Select(static p => p.Name) ?? []);
+            string required = string.Join(",", (scriptCall?["required"] as JArray)?.Select(static r => (string?)r) ?? []);
+            Check("pptcom takes a notice to the user, the language of its text and the script, in that order, all three required; the system prompt says so",
+                  arguments == "notice,language,script" && required == arguments && prompt.Contains("`notice`") && prompt.Contains("`language`"),
+                  arguments + " / " + required);
             JArray all = AgentTools.Tools(template, withDocuments: true, imagePrompt: zimage);
             Check("documents and an image model: all four", AgentTools.Names(all) == "imagegen, pptread, pptcom, docread", AgentTools.Names(all));
             JToken image = all[0]["function"] ?? new JObject();
@@ -582,7 +618,7 @@ namespace ChatStreamTests
 
             string prompt = File.ReadAllText(Path.Combine(AgentFolder(), "system-prompt.txt"));
             int places = prompt.Split([UserLocale.LanguagePlaceholder], StringSplitOptions.None).Length - 1;
-            Check("the system prompt names the language for the reply and the slide text", places == 2, Invariant($"{places} places"));
+            Check("the system prompt names the language for the reply, the slide text and a pptcom call's notice", places == 3, Invariant($"{places} places"));
         }
 
         // A window's files being read (PendingDocuments): each goes to the conversation it was taken in, or nowhere when
@@ -640,6 +676,21 @@ namespace ChatStreamTests
                   string.Join(",", tool.Tools.Calls) == "pptcom" && tool.State.ScriptLines == 3 && tool.State.ToolLines.SequenceEqual(["[1] pptcom -> ran pptcom"], StringComparer.Ordinal) &&
                   tool.Messages.Exists(static m => m.Role == "tool" && m.Content == "ran pptcom") && tool.Shows("TOOL_RESULT,TURN_SIZE,AI_REPLY,REQUEST_DONE"),
                   tool.Describe());
+
+            // A pptcom call's notice is shown as the model's words, once, before the call's result; a call without one shows none.
+            Run noticed = await RunRequestAsync(
+                [CallsTool("pptcom", arguments: "{\"notice\":\"表紙を作ります\",\"language\":\"ja-JP\",\"script\":\"x = 1\"}"), Reply("ok")]).ConfigureAwait(true);
+            Check("a pptcom call's notice is shown once, before its result; a call without one shows none",
+                  noticed.Shows("AI_STEP,TOOL_RESULT,AI_REPLY,REQUEST_DONE") && noticed.View.Steps.SequenceEqual(["表紙を作ります"], StringComparer.Ordinal) &&
+                  !tool.Shows("AI_STEP"), noticed.Describe() + " / " + string.Join("|", noticed.View.Steps));
+            Check("the notice is read from arguments still being written when it comes first and is closed, and from whole ones wherever it is",
+                  RequestRunner.NoticeOf("{\"notice\":\"表紙を作ります\",\"language\":\"ja-JP\",\"script\":\"Set s = ") == "表紙を作ります" &&
+                  RequestRunner.NoticeOf("{\"notice\":\"表紙を作") is null && RequestRunner.NoticeOf("{ \"notice\" : \"a \\\"quoted\\\" word\", \"scr") == "a \"quoted\" word" &&
+                  RequestRunner.NoticeOf("{\"notice\":\"\\u8868\\u7d19\"") == "表紙" && RequestRunner.NoticeOf("{\"script\":\"x = 1\",\"notice\":\"after\"}") == "after" &&
+                  RequestRunner.NoticeOf("{\"script\":\"x = 1\"") is null && RequestRunner.NoticeOf("{\"script\":\"x = 1\"}") is null &&
+                  RequestRunner.NoticeOf("{\"notice\":\"  \",\"script\":\"x\"}") is null && RequestRunner.NoticeOf("{\"notice\":3,\"script\":\"x\"}") is null &&
+                  RequestRunner.NoticeOf("not json") is null && RequestRunner.NoticeOf("") is null,
+                  RequestRunner.NoticeOf("{\"notice\":\"表紙を作ります\",\"language\":\"ja-JP\",\"script\":\"Set s = ") ?? "-");
 
             Run limit = await RunRequestAsync([CallsTool("pptcom"), CallsTool("pptcom")], maxTurns: 2, tools: new FakeTools(renders: true)).ConfigureAwait(true);
             List<SlideImage> images = [.. limit.Messages.Where(static m => m.Images is not null).SelectMany(static m => m.Images)];
@@ -766,11 +817,18 @@ namespace ChatStreamTests
         {
             public List<string> Codes { get; } = [];
 
+            // What it was shown of the pptcom calls' notices (AI_STEP).
+            public List<string> Steps { get; } = [];
+
             public int Retries { get; private set; }
 
             public void Log(string code, params object[] args)
             {
                 Codes.Add(code);
+                if (code == "AI_STEP")
+                {
+                    Steps.Add(args.Length > 0 ? args[0] as string ?? "" : "");
+                }
             }
 
             public void SetStatus(string code, params object[] args)
@@ -835,9 +893,9 @@ namespace ChatStreamTests
         }
 
         // A streamed reply that calls one tool.
-        private static string CallsTool(string name, int promptTokens = 0)
+        private static string CallsTool(string name, int promptTokens = 0, string arguments = "{\"script\":\"x = 1\"}")
         {
-            JObject call = new() { ["index"] = 0, ["id"] = "call_" + name, ["function"] = new JObject { ["name"] = name, ["arguments"] = "{\"script\":\"x = 1\"}" } };
+            JObject call = new() { ["index"] = 0, ["id"] = "call_" + name, ["function"] = new JObject { ["name"] = name, ["arguments"] = arguments } };
             string delta = new JObject { ["choices"] = new JArray(new JObject { ["delta"] = new JObject { ["tool_calls"] = new JArray(call) } }) }.ToString(Newtonsoft.Json.Formatting.None);
             return Http(200, Sse([.. Usage(promptTokens), delta, Finish("tool_calls"), "[DONE]"]));
         }

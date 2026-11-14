@@ -76,6 +76,7 @@ function finishWork(state, footer) {
 const logKinds = {
   USER_REQUEST: "user", CONTINUE_REQUEST: "user", TOOL_RESULT: "tool", TURN_SIZE: "turn", REQUEST_DONE: "done",
   AI_REPLY: "reply", AI_DONE: "reply",
+  AI_STEP: "reply",   // what a pptcom call is meant to do, in the model's words, while the request runs
   AI_ERROR: "stopped", AI_CANCELLED: "stopped", AI_SERVER_ERROR: "error", AI_SERVER_UNREACHABLE: "error", AI_TURN_LIMIT: "error", AI_REPLY_CUT: "error",
   AI_CONTEXT_FULL: "error", AI_COMPACTION_FAILED: "error",
   AI_DECK_CLOSED: "stopped",

@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
 using Pptcom.ComProxy;
 using Pptcom.UI;
 using static System.FormattableString;
@@ -90,9 +92,14 @@ namespace Pptcom.Agent
                 try
                 {
                     return await settings.Llm.ChatAsync(messages, settings.Tools, p =>
+                    {
                         view.SetStatus("STATUS_TURN", turn, Chars(p.ReasoningChars), Chars(p.ContentChars + p.ToolArgChars),
-                                       p.Elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture)),
-                        ct).ConfigureAwait(true);
+                                       p.Elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture));
+                        if (p.ToolArgChars > 0)
+                        {
+                            ShowNotices(turn, p.PartialToolCalls());
+                        }
+                    }, ct).ConfigureAwait(true);
                 }
                 catch (LlmServerException ex)
                 {
@@ -133,10 +140,60 @@ namespace Pptcom.Agent
             };
         }
 
+        // A pptcom call tells the user in `notice` what it is meant to do (tools.json): they are shown it as the
+        // model's words, once per call - as soon as it has come, while the script after it is still being written (the
+        // model gives it first), or else when the call is run.
+        private readonly HashSet<(int Turn, int Call)> _noticesShown = [];
+
+        // The name of that argument.
+        internal const string NoticeArgument = "notice";
+
+        private void ShowNotices(int turn, List<ToolCall> calls)
+        {
+            for (int i = 0; i < calls.Count; i++)
+            {
+                if (calls[i].Name == "pptcom" && !_noticesShown.Contains((turn, i)) && NoticeOf(calls[i].Arguments) is string notice)
+                {
+                    _noticesShown.Add((turn, i));
+                    view.Log("AI_STEP", notice);
+                }
+            }
+        }
+
+        // A call's arguments open with the notice and its text is closed: the part of them that has come is enough.
+        private static readonly Regex NoticeFirst = new(@"^\s*\{\s*""" + NoticeArgument + @"""\s*:\s*(""(?:[^""\\]|\\.)*"")", RegexOptions.CultureInvariant, Guard.RegexTimeout);
+
+        // The notice to the user in a pptcom call's arguments - all of them, or as much as has come of them - or null:
+        // none yet, none at all, or an empty one.
+        internal static string? NoticeOf(string arguments)
+        {
+            string? notice = null;
+            try
+            {
+                Match first = NoticeFirst.Match(arguments);
+                if (first.Success)
+                {
+                    notice = (string?)JToken.Parse(first.Groups[1].Value);
+                }
+                else if (JObject.Parse(arguments)[NoticeArgument] is JValue { Type: JTokenType.String } given)
+                {
+                    notice = (string?)given;
+                }
+            }
+            catch (Exception ex) when (ex is Newtonsoft.Json.JsonException or RegexMatchTimeoutException)
+            {
+                // arguments still being written, or no JSON object
+            }
+
+            notice = notice?.Trim();
+            return string.IsNullOrEmpty(notice) ? null : notice;
+        }
+
         // The turn's tool calls and their results; the renderings they made follow on a user message.
         private async Task RunToolCallsAsync(ChatReply reply, int turn, List<ChatMessage> messages, CancellationToken ct)
         {
             List<SlideImage> renderings = [];
+            ShowNotices(turn, reply.ToolCalls);
             foreach (ToolCall call in reply.ToolCalls)
             {
                 ct.ThrowIfCancellationRequested();

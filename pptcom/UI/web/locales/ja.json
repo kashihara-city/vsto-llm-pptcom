@@ -136,6 +136,7 @@
   "TOKENS": "{0} tok",
   "TOKENS_UNKNOWN": "- tok",
   "AI_REPLY": "{0}",
+  "AI_STEP": "{0}",
   "AI_DONE": "完了しました。",
   "AI_CANCELLED": "中止しました。",
   "AI_ERROR": "エラーが発生しました。{0}",

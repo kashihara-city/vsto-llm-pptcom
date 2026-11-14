@@ -26,6 +26,7 @@ namespace Pptcom.Agent
         public StreamedReply(Action<StreamProgress>? onProgress)
         {
             _onProgress = onProgress;
+            _progress.PartialToolCalls = () => [.. _toolSlots.Select(kv => new ToolCall { Id = kv.Value.Id, Name = kv.Value.Name, Arguments = _toolArgs[kv.Key].ToString() })];
         }
 
         // One event (the JSON of a "data:" line). `onProgress` hears of it at most every 500 ms.

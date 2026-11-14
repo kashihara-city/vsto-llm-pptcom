@@ -19,13 +19,15 @@ namespace ComScriptRunner
     // Experiment harness: runs ComScript through the add-in's own parser/engine/policy against
     // a fresh PowerPoint instance, then saves the deck and exports slide PNGs.
     //
-    //   ComScriptRunner.exe run <script.txt> <out.pptx> [maxLines]
+    //   ComScriptRunner.exe run <script.txt> <out.pptx> [maxLines] [language]
+    //       language: the language of the text the script writes, as a pptcom call names it ("zh-TW")
     //   ComScriptRunner.exe export <in.pptx> <pngDir>
     //   ComScriptRunner.exe serve
     //       Persistent session for a script that drives it (checks on a real PowerPoint): one JSON
     //       object per stdin line, one JSON result per stdout line. PowerPoint and the engine
     //       (variables, generated images) live across requests.
     //         {"script": "..."}     -> {"success", "lines", "error", "wouldDefine", "definedIds", ...}
+    //                                  (with "language": "zh-TW", the text it writes is given that language)
     //         {"save": "out.pptx"}  -> {"saved", "slides", "pngDir"}
     //         {"quit": true}
     //
@@ -50,7 +52,7 @@ namespace ComScriptRunner
 
             if (args.Length >= 3 && args[0] == "run")
             {
-                return Run(args[1], args[2], args.Length > 3 ? int.Parse(args[3], CultureInfo.InvariantCulture) : 200);
+                return Run(args[1], args[2], args.Length > 3 ? int.Parse(args[3], CultureInfo.InvariantCulture) : 200, args.Length > 4 ? args[4] : null);
             }
 
             if (args.Length >= 1 && args[0] == "serve")
@@ -521,7 +523,8 @@ namespace ComScriptRunner
             }
             else
             {
-                ComScriptResult result = engine.ExecuteScriptAsync(parsed).GetAwaiter().GetResult();
+                // "language": the language of the text the script writes, as a pptcom call names it ("zh-TW")
+                ComScriptResult result = engine.ExecuteScriptAsync(parsed, textLanguage: ComProxyEngine.TextLanguageOfTag((string?)req["language"])).GetAwaiter().GetResult();
                 foreach (string id in parsed.DefinedIds)
                 {
                     if (!knownIds.Contains(id) && engine.TryGetHandle(id, out _))
@@ -553,7 +556,7 @@ namespace ComScriptRunner
             return reply;
         }
 
-        private static int Run(string scriptPath, string outPptx, int maxLines)
+        private static int Run(string scriptPath, string outPptx, int maxLines, string? language)
         {
             string script = File.ReadAllText(scriptPath);
             outPptx = Path.GetFullPath(outPptx);
@@ -573,7 +576,7 @@ namespace ComScriptRunner
             try
             {
                 ComProxyEngine engine = new((object)app, MakeImageGenerator());
-                ComScriptResult result = engine.ExecuteScriptAsync(parsed).GetAwaiter().GetResult();
+                ComScriptResult result = engine.ExecuteScriptAsync(parsed, textLanguage: ComProxyEngine.TextLanguageOfTag(language)).GetAwaiter().GetResult();
 
                 foreach (ComLineResult l in result.Lines)
                 {

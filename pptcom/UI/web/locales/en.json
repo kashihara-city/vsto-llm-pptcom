@@ -136,6 +136,7 @@
   "TOKENS": "{0} tok",
   "TOKENS_UNKNOWN": "- tok",
   "AI_REPLY": "{0}",
+  "AI_STEP": "{0}",
   "AI_DONE": "Done.",
   "AI_CANCELLED": "Stopped.",
   "AI_ERROR": "An error occurred. {0}",

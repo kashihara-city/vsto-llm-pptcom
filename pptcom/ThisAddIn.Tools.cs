@@ -247,8 +247,12 @@ namespace Pptcom
             }
             // A failing statement no longer stops the script: only the statements that depend
             // on what it should have set are skipped (see ComProxyEngine.ExecuteScriptAsync).
+            // The text it writes gets the language the call names; a call that names none (or no language) runs all the
+            // same, its text left as PowerPoint tagged it, and its result ends with a note on what was missing
+            // (MissingArgumentsNote), as it does for a call without its notice to the user.
+            string notGiven = ComProxyEngine.MissingArgumentsNote(TextOf(args[RequestRunner.NoticeArgument]), TextOf(args["language"]));
             Stopwatch watch = Stopwatch.StartNew();
-            ComScriptResult result = await engine.ExecuteScriptAsync(parsed).ConfigureAwait(true);
+            ComScriptResult result = await engine.ExecuteScriptAsync(parsed, textLanguage: ComProxyEngine.TextLanguageOfTag(TextOf(args["language"]))).ConfigureAwait(true);
             TimeSpan scriptTime = watch.Elapsed;
             knownIds.AddRange(parsed.DefinedIds.Where(id => !knownIds.Contains(id) && engine.TryGetHandle(id, out _)));
             int applied = result.Count(ComLineStatus.Applied);
@@ -265,21 +269,34 @@ namespace Pptcom
                 string values = engine.DescribeValues(parsed.DefinedIds);
                 string done = Invariant($"OK: {parsed.Lines.Count} lines executed. Defined: {ids}.") + changedText +
                               (values.Length > 0 ? " Values: " + values : "") + roundedText;
-                return WithAutoRenders(engine, new ToolResult(done)
+                return WithNote(WithAutoRenders(engine, new ToolResult(done)
                 {
                     LinesApplied = applied,
                     Script = scriptTime,
-                });
+                }), notGiven);
             }
             List<string> notAssigned = result.NotAssigned;
             string partial = engine.DescribeValues(parsed.DefinedIds.Where(id => !notAssigned.Contains(id)));
             string failed = result.Describe() + (changedText.Length > 0 ? "\n" + changedText.Trim() : "") +
                             (partial.Length > 0 ? "\nValues set: " + partial : "") + roundedText;
-            return WithAutoRenders(engine, new ToolResult(failed)
+            return WithNote(WithAutoRenders(engine, new ToolResult(failed)
             {
                 LinesApplied = applied,
                 Script = scriptTime,
-            });
+            }), notGiven);
+        }
+
+        // A tool result with a note after all of its text.
+        private static ToolResult WithNote(ToolResult outcome, string note)
+        {
+            outcome.Text += note;
+            return outcome;
+        }
+
+        // The text of a string argument; null for one that is not there or is no string.
+        private static string? TextOf(JToken? argument)
+        {
+            return argument is JValue { Type: JTokenType.String } ? (string?)argument : null;
         }
 
         // docread page: pages of an attached PDF drawn by the task pane (PDF.js) and shown to the model like
