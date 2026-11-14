@@ -717,6 +717,14 @@ namespace ChatStreamTests
                   retried.View.Retries == 1 && retried.State.ServerErrors == 1 && retried.Shows("AI_SERVER_ERROR,TURN_SIZE,AI_REPLY") &&
                   stopped.Error is OperationCanceledException && stopped.Shows("AI_SERVER_ERROR") && !stopped.Shows("REQUEST_DONE"),
                   retried.Describe() + " | " + stopped.Describe());
+            // A reply that broke off after its call's notice was shown; the reply that 再試行 brings makes another call.
+            Run again = await RunRequestAsync(
+                [CallsTool("pptcom", arguments: "{\"notice\":\"表紙を作ります\",\"language\":\"ja-JP\",\"script\":\"x = 1\"}", cut: true),
+                 CallsTool("pptcom", arguments: "{\"notice\":\"表を直します\",\"language\":\"ja-JP\",\"script\":\"y = 2\"}"), Reply("ok")]).ConfigureAwait(true);
+            Check("after 再試行 the turn's new reply shows its own call's notice, once, and that call is the one run",
+                  again.View.Retries == 1 && again.Tools.Calls.Count == 1 && again.View.Steps.SequenceEqual(["表紙を作ります", "表を直します"], StringComparer.Ordinal) &&
+                  again.Shows("AI_STEP,AI_SERVER_ERROR,AI_STEP,TOOL_RESULT,AI_REPLY,REQUEST_DONE"),
+                  again.Describe() + " / " + string.Join("|", again.View.Steps));
 
             TcpListener port = new(IPAddress.Loopback, 0);
             port.Start();
@@ -959,12 +967,12 @@ namespace ChatStreamTests
             return Http(200, Sse([.. Usage(promptTokens), Content(text), Finish("stop"), "[DONE]"]));
         }
 
-        // A streamed reply that calls one tool.
-        private static string CallsTool(string name, int promptTokens = 0, string arguments = "{\"script\":\"x = 1\"}")
+        // A streamed reply that calls one tool. `cut`: it ends after the call, without saying that it has ended.
+        private static string CallsTool(string name, int promptTokens = 0, string arguments = "{\"script\":\"x = 1\"}", bool cut = false)
         {
             JObject call = new() { ["index"] = 0, ["id"] = "call_" + name, ["function"] = new JObject { ["name"] = name, ["arguments"] = arguments } };
             string delta = new JObject { ["choices"] = new JArray(new JObject { ["delta"] = new JObject { ["tool_calls"] = new JArray(call) } }) }.ToString(Newtonsoft.Json.Formatting.None);
-            return Http(200, Sse([.. Usage(promptTokens), delta, Finish("tool_calls"), "[DONE]"]));
+            return Http(200, Sse(cut ? [delta] : [.. Usage(promptTokens), delta, Finish("tool_calls"), "[DONE]"]));
         }
 
         private static string[] Usage(int promptTokens)

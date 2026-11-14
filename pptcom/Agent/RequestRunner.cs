@@ -89,6 +89,9 @@ namespace Pptcom.Agent
         {
             while (true)
             {
+                // Each reply asked for shows its own calls' notices: one that failed midway may have shown some, and
+                // the reply that 再試行 brings need not make the same calls.
+                _noticesShown.RemoveWhere(shown => shown.Turn == turn);
                 try
                 {
                     return await settings.Llm.ChatAsync(messages, settings.Tools, p =>
@@ -142,7 +145,8 @@ namespace Pptcom.Agent
 
         // A pptcom call tells the user in `notice` what it is meant to do (tools.json): they are shown it as the
         // model's words, once per call - as soon as it has come, while the script after it is still being written (the
-        // model gives it first), or else when the call is run.
+        // model gives it first), or else when the call is run. The calls are those of one reply: when a turn's reply is
+        // asked for again, what was shown of the one before is forgotten (ChatTurnAsync).
         private readonly HashSet<(int Turn, int Call)> _noticesShown = [];
 
         // The name of that argument.
