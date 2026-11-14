@@ -26,7 +26,9 @@ namespace Pptcom.UI
     // new window is refused.
     internal sealed class AiTaskPaneControl : UserControl
     {
-        private const string Origin = "https://pptcom.invalid/";
+        // The page's host: a name that never resolves, so that a request the add-in does not answer goes nowhere.
+        internal const string OriginHost = "pptcom.invalid";
+        private const string Origin = "https://" + OriginHost + "/";
         // The page shows its text in the add-in's language (Texts.Language), from locales/<language>.json. `pane` is
         // the window's (ThisAddIn.WindowPane.Hwnd), which the page does not use: it tells the panes apart in DevTools.
         private readonly string _startPage;
@@ -131,10 +133,17 @@ namespace Pptcom.UI
                     CoreWebView2Environment.SetLoaderDllFolderPath(loader);
                 }
 
-                CoreWebView2Environment env = await CoreWebView2Environment.CreateAsync(browserExecutableFolder: null, userData).ConfigureAwait(true);
+                // The pane talks to no one: its page comes from this DLL and the model is called by the add-in itself.
+                // What WebView2 lets an app switch off of its own traffic is switched off: a crash's dump is not sent
+                // to Microsoft (it stays in the profile folder), and the page's address is not checked with SmartScreen.
+                // The rest of what the browser does by itself - asking for its configuration, looking for updates of
+                // its components, looking for a proxy - is kept from leaving this PC (BrowserArguments).
+                CoreWebView2EnvironmentOptions options = new() { AdditionalBrowserArguments = BrowserArguments(), IsCustomCrashReportingEnabled = true };
+                CoreWebView2Environment env = await CoreWebView2Environment.CreateAsync(browserExecutableFolder: null, userData, options).ConfigureAwait(true);
                 await _web.EnsureCoreWebView2Async(env).ConfigureAwait(true);
                 CoreWebView2 core = _web.CoreWebView2;
                 CoreWebView2Settings settings = core.Settings;
+                settings.IsReputationCheckingRequired = false;
 #if DEBUG
                 settings.AreDevToolsEnabled = true;
 #else
@@ -168,6 +177,22 @@ namespace Pptcom.UI
             {
                 ShowLoadError(ex);
             }
+        }
+
+        // Browser arguments that keep the pane's WebView2 off the network. Left to itself it asks Microsoft for its
+        // configuration and for updates of its components, and looks for a proxy on the network. It is given a proxy
+        // that refuses everything (RefusingProxy: a port on this PC the add-in holds), so that whatever it asks for
+        // goes there and nowhere else; the page's own requests are answered here before any proxy is asked. Its
+        // background requests and component updates are switched off too, which leaves little to refuse. Without that
+        // port, no host name resolves and no proxy is looked for instead. These are Chromium's switches, which
+        // WebView2 passes on but does not promise to keep: should one stop working, that traffic comes back and the
+        // pane works as before. The arguments are the same for every pane of this PowerPoint, as its panes share one
+        // browser (the same profile folder), and that takes one set of them.
+        private static string BrowserArguments()
+        {
+            const string quiet = "--disable-background-networking --disable-component-update";
+            int port = RefusingProxy.Port;
+            return port > 0 ? Invariant($"--proxy-server=127.0.0.1:{port} {quiet}") : "--host-resolver-rules=\"MAP * ~NOTFOUND\" --no-proxy-server " + quiet;
         }
 
         // PowerPoint's own architecture decides which loader fits (32-bit Office is common).

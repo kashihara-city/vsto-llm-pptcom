@@ -7,6 +7,12 @@ PowerPointで開いているプレゼンテーションを、LLMが作ったり�
 - PDF.js 6.5.438
 - anydoc 0.2.4
 
+## 何を解決し（避け）ようとしているか
+
+- 業務データに対する統制（主権）の喪失
+- オフィスワークでのLLM利用とネットワークモデルの結合
+- 謎のテレメトリ通信
+
 ## 動作環境
 
 - Windows 11
@@ -55,11 +61,11 @@ PowerPointで開いているプレゼンテーションを、LLMが作ったり�
 設定は、インストール（管理者権限不要）後に、作業ウィンドウの上の歯車アイコンから行います。  
 設定項目は以下のとおりです。
 
-- 接続先URL（必須）
-- LLMモデル名（必須）
+- 接続先（必須。`https://litellm.example.com`など。）
+- LLMモデル名（必須。接続先の「取得」ボタンを押すと、接続先のモデル一覧（`/model/info`、無ければ`/v1/models`）から選択できるようになります。ここで選択したLLMを`/v1/chat/completions`で呼び出します。）
 - コンテキスト上限: このトークン数を超えると、経過を要約します。既定値は、そのモデルの最大入力の75%です（自動検出できなければ100,000）。
-- 画像生成モデル名（使用する場合）
-- 画像生成プロンプト: AIが画像を頼むときの指示の書き方と大きさ（Z-Image用とMOSS-Image用）
+- 画像生成モデル名（使用する場合。画像生成モデルを`/v1/images/generations`で呼び出します。）
+- 画像生成プロンプト: AIが画像を頼むときの指示の書き方と大きさ（現在は、Z-Image用とMOSS-Image用のみです。）
 - APIキー（必要な場合。設定すると、接続先URLにはhttpsしか設定できません。）
 - スライドを開いたらAIアシスタントを表示する: アドインを自動で表示するかどうか（既定でオン）
 - 途中経過を保存する: 記録を`%LOCALAPPDATA%\KashiharaCity\pptcom\`に残すかどうか（既定でオフ）
@@ -105,12 +111,16 @@ HKEY_CURRENT_USER\Software\
 ```
 
 
-＊は、組織で配布する際に、グループポリシーで設定する意味がある設定です。以下はその設定例です。
+＊は、組織で配布する際に、グループポリシーで設定する意味がある設定です。
+
+#### レジストリ設定例
+
+＊の付いた値の設定例です。
 
 | 値の名前 | 型 | 例 | 書き方 |
 |---|---|---|---|
 | `endpoint` | REG_SZ | `https://litellm.example.com` | スキームとホスト名（とポート）まで。パスは使わない（`/v1/chat/completions`などはアドインが付ける） |
-| `chat_model` | REG_SZ | `Qwen3-VL-32B-Instruct` | 接続先のモデル一覧（`/v1/models`）に出る名前。スライドの描画を画像で渡すので、画像を読めるモデル |
+| `chat_model` | REG_SZ | `Qwen3-VL-32B-Instruct` | 接続先のモデル一覧（LiteLLMの`/model/info`、無ければ`/v1/models`）に出る名前。スライドの描画を画像で渡すので、画像を読めるモデル |
 | `context_limit` | REG_DWORD | `100000` | トークン数（8000〜10000000）。無いときや範囲外なら、モデルの最大入力の75%（分からなければ100,000）になる |
 | `image_model` | REG_SZ | `z-image-turbo` | 接続先のモデル一覧に出る、画像生成（`/v1/images/generations`）のモデル。空なら画像を作らない |
 | `image_prompt` | REG_SZ | `zimage` | 画像生成プロンプト。無いときや知らない値は`zimage`になる |
@@ -157,6 +167,7 @@ PowerPoint
    │   ├─ ComProxy              pptcom（資料の画像もd1_img3などの変数として貼れる）
    │   ├─ Documents             添付資料の保持、docread、画像の変換
    │   ├─ AiTaskPaneControl     作業ウィンドウ（WebView2）の土台。DLL内のファイルを返す
+   │   ├─ RefusingProxy         作業ウィンドウのWebView2に指定するプロキシ（このPC内のポート。来た通信をすべて断る）
    │   ├─ PaneRibbon            ホームタブの「AIアシスタント」ボタン
    │   └─ PaneText / Texts      作業ウィンドウに送るメッセージ（コードと値）、アドインが自分で描く文言
    ├─ 結合したライブラリ         Newtonsoft.Json、WebView2 SDK（Core、WinForms）
@@ -211,7 +222,7 @@ C#のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.N
 | 実行するもの | 調べること |
 |---|---|
 | `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcomスクリプトの解析と実行（式の値はVBScriptとVBAの値と照らす）。断る文とメンバー、依頼のプレゼンテーションの固定、グラフのデータで使えるもの、書いた文字に入れる言語とその対象。モデルへの報告（エラーの案内、引数の丸め、図形一覧の中身とアニメーション、背景に対して見えにくい文字、角丸の角からはみ出す四角い図形） |
-| `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMとの通信（応答の読み取り、失敗の見分け、中止と待ち時間、APIキーの扱い）。依頼のターン（作業ウィンドウとPowerPointは偽物で、ツールの実行、pptcomの呼び出しの案内の表示、ターンの上限、再試行と中止、文脈の上限での会話の短縮）。モデルに渡すもの（ツールとシステムプロンプト、会話の短縮、表示言語と日付、画像の色）。添付の受け付け |
+| `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMとの通信（応答の読み取り、失敗の見分け、中止と待ち時間、APIキーの扱い）。依頼のターン（作業ウィンドウとPowerPointは偽物で、ツールの実行、pptcomの呼び出しの案内の表示、ターンの上限、再試行と中止、文脈の上限での会話の短縮）。モデルに渡すもの（ツールとシステムプロンプト、会話の短縮、表示言語と日付、画像の色）。添付の受け付け。作業ウィンドウのWebView2に指定するプロキシ（来た通信を断る） |
 | `node scripts/test/docs-queue.cjs` | 作業ウィンドウの添付（`docs.js`）。どこで失敗しても後のファイルが続くこと、画像と貼り付けの扱い |
 | `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼の送り方と終わり方、「続ける」、設定欄、APIキーの入力と削除 |
 | `python -X utf8 scripts/test/js-syntax.py` | 作業ウィンドウのJavaScriptが構文として読めること |

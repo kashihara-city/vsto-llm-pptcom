@@ -49,6 +49,7 @@ namespace ChatStreamTests
             await ToolChoiceAsync().ConfigureAwait(true);
             await ModelListAsync().ConfigureAwait(true);
             await RequestRunnerAsync().ConfigureAwait(true);
+            await RefusingProxyAsync().ConfigureAwait(true);
             CompactionTests();
             OfferedTests();
             ImageColorsTests();
@@ -738,6 +739,51 @@ namespace ChatStreamTests
                   noNotes.State.CompactionFailed && noNotes.Shows("AI_COMPACTION_FAILED,REQUEST_DONE") && noNotes.State.Turns == 3 &&
                   full.State.ContextFull && full.Shows("CONVERSATION_COMPACTED") && full.Shows("AI_CONTEXT_FULL,REQUEST_DONE") && full.State.Turns == 4,
                   noNotes.Describe() + " | " + full.Describe());
+        }
+
+        // The proxy the task pane's browser is given (RefusingProxy): a port on this PC that answers 403 to whatever
+        // is asked through it - a plain request, and the tunnel an https one needs - and keeps which hosts were asked
+        // for, without their paths.
+        private static async Task RefusingProxyAsync()
+        {
+            Console.WriteLine("== the proxy the task pane's browser is given");
+            int port = Pptcom.UI.RefusingProxy.Port;
+            using System.Net.Http.HttpClientHandler handler = new() { Proxy = new WebProxy("127.0.0.1", port), UseProxy = true };
+            using System.Net.Http.HttpClient http = new(handler) { Timeout = TimeSpan.FromSeconds(10) };
+            using CancellationTokenSource limit = new(TimeSpan.FromSeconds(20));
+            string plain, tunnel;
+            try
+            {
+                using System.Net.Http.HttpResponseMessage answer = await http.GetAsync(new Uri("http://updates.example.invalid/some/path?id=1"), limit.Token).ConfigureAwait(true);
+                plain = ((int)answer.StatusCode).ToString(CultureInfo.InvariantCulture);
+            }
+            catch (System.Net.Http.HttpRequestException ex)
+            {
+                plain = "failed: " + Guard.MessagesOf(ex);
+            }
+
+            try
+            {
+                using System.Net.Http.HttpResponseMessage answer = await http.GetAsync(new Uri("https://config.example.invalid/config/v1"), limit.Token).ConfigureAwait(true);
+                tunnel = "answered " + ((int)answer.StatusCode).ToString(CultureInfo.InvariantCulture);
+            }
+            catch (System.Net.Http.HttpRequestException)
+            {
+                tunnel = "failed";
+            }
+
+            List<string> refused = Pptcom.UI.RefusingProxy.TakeRefused();
+            Check("everything asked through it is refused, and the hosts asked for are kept without their paths",
+                  port > 0 && Pptcom.UI.RefusingProxy.Port == port && plain == "403" && tunnel == "failed" &&
+                  refused.SequenceEqual(["config.example.invalid:443 x1", "updates.example.invalid x1"], StringComparer.Ordinal) &&
+                  Pptcom.UI.RefusingProxy.TakeRefused().Count == 0,
+                  Invariant($"port {port}, plain {plain}, tunnel {tunnel}, refused: ") + string.Join(", ", refused));
+            Check("the host of a proxy request's first line: a tunnel's host and port, a plain request's host, nothing else",
+                  Pptcom.UI.RefusingProxy.TargetOf("CONNECT edge.example.invalid:443 HTTP/1.1\r\nHost: edge.example.invalid:443\r\n") == "edge.example.invalid:443" &&
+                  Pptcom.UI.RefusingProxy.TargetOf("GET http://edge.example.invalid/a/b?c=d HTTP/1.1\r\n") == "edge.example.invalid" &&
+                  Pptcom.UI.RefusingProxy.TargetOf("GET /a/b HTTP/1.1\r\n") == "?" && Pptcom.UI.RefusingProxy.TargetOf("") == "?" &&
+                  Pptcom.UI.RefusingProxy.TargetOf("\u0016\u0003\u0001") == "?",
+                  Pptcom.UI.RefusingProxy.TargetOf("GET http://edge.example.invalid/a/b?c=d HTTP/1.1\r\n"));
         }
 
         // One request run by RequestRunner: what it came to, what the fakes saw, its conversation, what it wrote to the

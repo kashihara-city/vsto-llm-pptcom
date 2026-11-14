@@ -178,6 +178,7 @@
       <SubType>UserControl</SubType>
     </Compile>
     <Compile Include="UI\PaneText.cs" />
+    <Compile Include="UI\RefusingProxy.cs" />
     <Compile Include="UI\TextEventArgs.cs" />
     <Compile Include="UI\SwitchEventArgs.cs" />
     <Compile Include="UI\DocumentConvertedEventArgs.cs" />

@@ -659,6 +659,15 @@ namespace Pptcom
             run.Engine = engine;
             run.MissingSetBefore = engine.MissingSetStatements.Count;
             List<ChatMessage> messages = StartMessages(userMessage, run, conversation);
+            // What the task pane's browser asked the network for since the last request, all of it refused
+            // (RefusingProxy): the log shows when it starts asking for something new. Not the page's own host, which it
+            // connects to ahead of each page load although the add-in answers the page's requests itself.
+            List<string> refused = [.. RefusingProxy.TakeRefused().Where(static r => !r.StartsWith(AiTaskPaneControl.OriginHost + ":", StringComparison.OrdinalIgnoreCase))];
+            if (refused.Count > 0)
+            {
+                LogToFile("(the task pane's browser asked for " + string.Join(", ", refused) + ": refused)");
+            }
+
             // the tools offered stay the same through the request: its documents do not change meanwhile (DocumentsLocked)
             RequestSettings settings = new()
             {
