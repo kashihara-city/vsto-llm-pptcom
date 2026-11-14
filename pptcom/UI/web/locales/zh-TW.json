@@ -38,6 +38,9 @@
   "API_KEY_NOT_SET": "未設定",
   "ABOUT_VERSION": "vsto-llm-pptcom {0}（{1}）",
   "ABOUT_HINT": "版本與建置時的提交（+ 表示含有未提交變更的建置）",
+  "PROXY_ON": "refusing proxy: 已啟用",
+  "PROXY_OFF": "refusing proxy: 已停用",
+  "PROXY_HINT": "此增益集是否在這台電腦內拒絕工作窗格的瀏覽器元件（WebView2）自行發出的通訊",
 
   "RETRY_BAR": "因通訊錯誤而停止。",
   "RETRY": "重試",

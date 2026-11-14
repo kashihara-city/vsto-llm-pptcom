@@ -778,6 +778,27 @@ namespace ChatStreamTests
                   refused.SequenceEqual(["config.example.invalid:443 x1", "updates.example.invalid x1"], StringComparer.Ordinal) &&
                   Pptcom.UI.RefusingProxy.TakeRefused().Count == 0,
                   Invariant($"port {port}, plain {plain}, tunnel {tunnel}, refused: ") + string.Join(", ", refused));
+            Check("which hosts have come to it stays known after that list is taken, whatever their port: how the pane sees that its browser uses the proxy",
+                  Pptcom.UI.RefusingProxy.Refused("config.example.invalid") && Pptcom.UI.RefusingProxy.Refused("UPDATES.example.invalid") &&
+                  !Pptcom.UI.RefusingProxy.Refused("example.invalid") && !Pptcom.UI.RefusingProxy.Refused("config.example.invalid:443"),
+                  "config: " + Pptcom.UI.RefusingProxy.Refused("config.example.invalid") + ", example.invalid: " + Pptcom.UI.RefusingProxy.Refused("example.invalid"));
+            foreach (string address in (string[])["https://pane.example.invalid/index.html", "https://probe.pane.example.invalid/", "https://notpane.example.invalid/"])
+            {
+                try
+                {
+                    using System.Net.Http.HttpResponseMessage answer = await http.GetAsync(new Uri(address), limit.Token).ConfigureAwait(true);
+                }
+                catch (System.Net.Http.HttpRequestException)
+                {
+                    // refused, as everything is
+                }
+            }
+
+            List<string> others = Pptcom.UI.RefusingProxy.TakeRefused("pane.example.invalid");
+            Check("the list leaves out the pane's own host and the names under it, which the browser asks for at every start",
+                  others.SequenceEqual(["notpane.example.invalid:443 x1"], StringComparer.Ordinal) && Pptcom.UI.RefusingProxy.Refused("probe.pane.example.invalid") &&
+                  Pptcom.UI.RefusingProxy.TakeRefused().Count == 0,
+                  string.Join(", ", others));
             Check("the host of a proxy request's first line: a tunnel's host and port, a plain request's host, nothing else",
                   Pptcom.UI.RefusingProxy.TargetOf("CONNECT edge.example.invalid:443 HTTP/1.1\r\nHost: edge.example.invalid:443\r\n") == "edge.example.invalid:443" &&
                   Pptcom.UI.RefusingProxy.TargetOf("GET http://edge.example.invalid/a/b?c=d HTTP/1.1\r\n") == "edge.example.invalid" &&

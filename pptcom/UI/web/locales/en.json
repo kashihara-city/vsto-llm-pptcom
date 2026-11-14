@@ -38,6 +38,9 @@
   "API_KEY_NOT_SET": "Not set",
   "ABOUT_VERSION": "vsto-llm-pptcom {0} ({1})",
   "ABOUT_HINT": "The version and the commit it was built from (+ means a build with uncommitted changes)",
+  "PROXY_ON": "refusing proxy: enabled",
+  "PROXY_OFF": "refusing proxy: disabled",
+  "PROXY_HINT": "Whether the add-in refuses, on this PC, the traffic that the task pane's browser component (WebView2) starts by itself",
 
   "RETRY_BAR": "Stopped by an error talking to the endpoint.",
   "RETRY": "Retry",

@@ -644,6 +644,27 @@ namespace Pptcom
             return messages;
         }
 
+        // For the session log, the task pane's browser and the network. What it asked for since the last request, all
+        // of it refused (RefusingProxy): the log shows when it starts asking for something new. And whether it uses
+        // that proxy at all, as the page's probe showed (AiTaskPaneControl.ProxyInUse): should it stop, nothing
+        // would arrive there, and a log that says nothing would look the same as one with nothing to say.
+        private static void LogBrowserTraffic()
+        {
+            List<string> refused = RefusingProxy.TakeRefused(AiTaskPaneControl.OriginHost);
+            if (refused.Count > 0)
+            {
+                LogToFile("(the task pane's browser asked for " + string.Join(", ", refused) + ": refused)");
+            }
+
+            LogToFile(AiTaskPaneControl.ProxyInUse switch
+            {
+                true => "(refusing proxy: enabled)",
+                false when RefusingProxy.Port == 0 => "(refusing proxy: disabled - no port could be opened for it)",
+                false => "(refusing proxy: disabled - the task pane's browser did not send its probe request to it)",
+                null => "(refusing proxy: not checked - no task pane has loaded its page yet)",
+            });
+        }
+
         private async Task RunAgentAsync(string userMessage, RunRecord run)
         {
             // The engine (variables, generated images) and the names the parser knows carry over from
@@ -659,15 +680,7 @@ namespace Pptcom
             run.Engine = engine;
             run.MissingSetBefore = engine.MissingSetStatements.Count;
             List<ChatMessage> messages = StartMessages(userMessage, run, conversation);
-            // What the task pane's browser asked the network for since the last request, all of it refused
-            // (RefusingProxy): the log shows when it starts asking for something new. Not the page's own host, which it
-            // connects to ahead of each page load although the add-in answers the page's requests itself.
-            List<string> refused = [.. RefusingProxy.TakeRefused().Where(static r => !r.StartsWith(AiTaskPaneControl.OriginHost + ":", StringComparison.OrdinalIgnoreCase))];
-            if (refused.Count > 0)
-            {
-                LogToFile("(the task pane's browser asked for " + string.Join(", ", refused) + ": refused)");
-            }
-
+            LogBrowserTraffic();
             // the tools offered stay the same through the request: its documents do not change meanwhile (DocumentsLocked)
             RequestSettings settings = new()
             {

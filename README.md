@@ -27,6 +27,7 @@ PowerPointで開いているプレゼンテーションを、LLMが作ったり�
 - 画面や図形を作業ウィンドウに貼り付け、「こんな感じのグラフ/スライドを作って」と指示できます。
 - PowerPointの図形や文字、スライドの選択もAIに伝わるので、図形を選んで「これを赤くして」のように頼めます。
 - LLMはVBAに近い短いスクリプト（pptcomスクリプト）を書きます。アドインがそれを検査してからPowerPointで実行します。
+- 設定されたエンドポイント以外には通信しません。WebView2ランタイム自体の診断通信なども遮断します。
 - 多言語対応です。
 
 ![橿原市第5期地域福祉推進計画（PDF）を添付して「この資料を5枚にまとめて」と依頼し、続けて1枚目の文字の高さを揃えるよう頼んだところ。右が作業ウィンドウで、オンプレミスで動かしているモデルを使っている](docs/image.png)
@@ -224,7 +225,7 @@ C#のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.N
 | `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcomスクリプトの解析と実行（式の値はVBScriptとVBAの値と照らす）。断る文とメンバー、依頼のプレゼンテーションの固定、グラフのデータで使えるもの、書いた文字に入れる言語とその対象。モデルへの報告（エラーの案内、引数の丸め、図形一覧の中身とアニメーション、背景に対して見えにくい文字、角丸の角からはみ出す四角い図形） |
 | `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMとの通信（応答の読み取り、失敗の見分け、中止と待ち時間、APIキーの扱い）。依頼のターン（作業ウィンドウとPowerPointは偽物で、ツールの実行、pptcomの呼び出しの案内の表示、ターンの上限、再試行と中止、文脈の上限での会話の短縮）。モデルに渡すもの（ツールとシステムプロンプト、会話の短縮、表示言語と日付、画像の色）。添付の受け付け。作業ウィンドウのWebView2に指定するプロキシ（来た通信を断る） |
 | `node scripts/test/docs-queue.cjs` | 作業ウィンドウの添付（`docs.js`）。どこで失敗しても後のファイルが続くこと、画像と貼り付けの扱い |
-| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼の送り方と終わり方、「続ける」、設定欄、APIキーの入力と削除 |
+| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼の送り方と終わり方、「続ける」、設定欄、通信遮断プロキシの状態の表示、APIキーの入力と削除 |
 | `python -X utf8 scripts/test/js-syntax.py` | 作業ウィンドウのJavaScriptが構文として読めること |
 | `python -X utf8 scripts/test/i18n.py` | 文言のコードと言語ファイルがそろい、コードに日本語の文が無いこと |
 | `python -X utf8 scripts/test/no-secrets.py` | Gitが追跡するファイルに、私有IP、社内のホスト名、APIキー、開発機のパス、鍵や証明書が無いこと |

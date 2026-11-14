@@ -38,6 +38,9 @@
   "API_KEY_NOT_SET": "未設定",
   "ABOUT_VERSION": "vsto-llm-pptcom {0}（{1}）",
   "ABOUT_HINT": "版と、元にしたコミット（+ は未コミットの変更を含むビルド）",
+  "PROXY_ON": "refusing proxy: 有効",
+  "PROXY_OFF": "refusing proxy: 無効",
+  "PROXY_HINT": "作業ウィンドウのブラウザー部品（WebView2）が自分で行う通信を、アドインがこのPCの中で断っているかどうか",
 
   "RETRY_BAR": "通信のエラーで止まっています。",
   "RETRY": "再試行",

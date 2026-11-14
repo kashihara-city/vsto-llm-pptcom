@@ -29,15 +29,20 @@ namespace Pptcom.UI
         // The page's host: a name that never resolves, so that a request the add-in does not answer goes nowhere.
         internal const string OriginHost = "pptcom.invalid";
         private const string Origin = "https://" + OriginHost + "/";
+        // A name under it that the page asks for once when it has loaded (AskProbe). It is not answered here as the
+        // page's own requests are, so the browser sends it out: to the refusing proxy, if the browser uses that. The
+        // settings show whether it arrived there (ProxyInUse).
+        private const string ProbeHost = "probe." + OriginHost;
         // The page shows its text in the add-in's language (Texts.Language), from locales/<language>.json. `pane` is
         // the window's (ThisAddIn.WindowPane.Hwnd), which the page does not use: it tells the panes apart in DevTools.
         private readonly string _startPage;
         private const string ResourcePrefix = "pptcom.web/";
         private static readonly char[] QueryOrFragment = ['?', '#'];
         // 'wasm-unsafe-eval' lets the page compile WebAssembly (anydoc, PDF.js's image decoders); it does
-        // not allow eval of JavaScript. blob: and data: images are pictures the page makes itself.
+        // not allow eval of JavaScript. blob: and data: images are pictures the page makes itself. The one address
+        // outside the page's own that it may ask for is the probe's, a name that does not resolve either.
         private const string ContentSecurityPolicy =
-            "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; " +
+            "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' https://" + ProbeHost + "; " +
             "style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; base-uri 'none'; form-action 'none'";
 
         private readonly WebView2 _web;
@@ -52,6 +57,10 @@ namespace Pptcom.UI
         private bool _pageReady;
         private bool _navigated;
         private bool _initStarted;
+
+        // Whether the panes' browser sends what it asks for to the refusing proxy, as a page's last probe showed; null
+        // until a page has asked. One value for all the panes, as they share one browser.
+        internal static bool? ProxyInUse { get; private set; }
 
         // The request as typed.
         public event EventHandler<TextEventArgs>? SendRequested;
@@ -287,6 +296,10 @@ namespace Pptcom.UI
                     }
 
                     _pending.Clear();
+                    AskProbe();
+                    break;
+                case "probed":
+                    ShowProxyState(RefusingProxy.Refused(ProbeHost));
                     break;
                 case "send":
                     string text = ((string?)m["text"] ?? "").Trim();
@@ -507,6 +520,28 @@ namespace Pptcom.UI
         internal void SetAbout(PaneText text)
         {
             Post(new JObject { ["type"] = "about", ["text"] = text.ToJson() });
+        }
+
+        // Has the page ask for the probe's address once; it says "probed" when that request has ended (refused by the
+        // proxy, or failed for want of an address if the browser does not use the proxy). The proxy has noted a request
+        // before it answers, so what it has seen by then tells which. Without a port there is no proxy to ask through.
+        private void AskProbe()
+        {
+            if (RefusingProxy.Port > 0)
+            {
+                Post(new JObject { ["type"] = "proxy", ["probe"] = "https://" + ProbeHost + "/" });
+            }
+            else
+            {
+                ShowProxyState(inUse: false);
+            }
+        }
+
+        // The line under the version: refusing proxy enabled / disabled.
+        private void ShowProxyState(bool inUse)
+        {
+            ProxyInUse = inUse;
+            Post(new JObject { ["type"] = "proxy", ["on"] = inUse });
         }
 
         public void SetOptions(bool externalControl, bool saveProgress, bool openPane, int contextLimit, string imagePrompt)

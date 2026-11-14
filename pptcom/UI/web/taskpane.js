@@ -3,8 +3,8 @@
 //   page -> add-in: {type: "ready" | "send" | "cancel" | "retry" | "continue" | "newChat" | "endpoint" | "chatModel" | "imageModel" | "apiKey", ...}
 //   page -> add-in also: {type: "openPane" | "saveProgress" | "externalControl", value: bool}, {type: "contextLimit", value: "<digits>"},
 //   {type: "imagePrompt", value: "<name>"}, {type: "apiKey", value: "<the key typed>"}, {type: "apiKeyDelete"};
-//   "imageModel" may be "" (（使わない）)
-//   add-in -> page: {type: "log" | "status" | "busy" | "retry" | "continue" | "endpoint" | "models" | "apiKeyState" | "options" | "selection" | "about", ...}
+//   "imageModel" may be "" (（使わない）); {type: "probed"} answers the add-in's {type: "proxy", probe: "<address>"}
+//   add-in -> page: {type: "log" | "status" | "busy" | "retry" | "continue" | "endpoint" | "models" | "apiKeyState" | "options" | "selection" | "about" | "proxy", ...}
 //   ("log" and "status" carry a message: {code, args}, shown with the text of locales/<language>.json, see i18n.js)
 // Attached documents (drop, attach button, chips, PDF pages) have their own messages: see docs.js.
 const host = window.chrome && window.chrome.webview;
@@ -315,6 +315,13 @@ const handlers = {
   },
   // the add-in's version and the commit it was built from, at the bottom of the settings
   about: m => { $("about").textContent = m.text ? i18n.t(m.text) : ""; },
+  // Under it, whether this browser sends what it asks for to the add-in's refusing proxy. The add-in gives an address
+  // to ask for once (`probe`); the request fails either way, and "probed" says it has ended. The add-in looks whether
+  // it came to the proxy, and says which to show (`on`).
+  proxy: m => {
+    if (m.probe) fetch(m.probe, { mode: "no-cors", cache: "no-store" }).catch(() => {}).then(() => post({ type: "probed" }));
+    else $("proxy").textContent = i18n.t(m.on ? "PROXY_ON" : "PROXY_OFF");
+  },
   // what is selected in PowerPoint (or which slide it shows); a request sends the same to the model
   selection: m => { $("selection-text").textContent = m.text ? i18n.t(m.text) : ""; $("selection").classList.toggle("show", !!m.text); },
 };

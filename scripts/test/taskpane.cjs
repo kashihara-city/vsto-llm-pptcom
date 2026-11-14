@@ -2,8 +2,9 @@
 // time, also before the add-in's busy state arrives and while another window's pane runs one; a refused send does
 // not leave the page waiting; a request that stops (the deck was closed, 中止, an error) closes its block as stopped,
 // one that finishes as done; 続ける shows last after a request that stopped at the turn limit, and sends like
-// a request; the line above the input shows what is selected in PowerPoint, and the settings the version, the
-// context limit, the models (none chosen yet, 使わない), the image prompt and the API key (typed in, deleted).
+// a request; the line above the input shows what is selected in PowerPoint, and the settings the version, whether
+// the browser uses the add-in's refusing proxy, the context limit, the models (none chosen yet, 使わない), the image
+// prompt and the API key (typed in, deleted).
 // taskpane.js runs as it is, in a stand-in for the browser and WebView2 made of plain objects; messages
 // from the add-in arrive as WebView2 delivers them. No packages.
 //
@@ -62,10 +63,12 @@ function element() {
 // `texts`: how i18n.load ends (by default never: the codes show, and "ready" is not sent); `readyState`: the page's
 // document.readyState as taskpane.js starts ("loading" until the test fires DOMContentLoaded).
 function page({ texts = () => new Promise(() => {}), readyState = "complete" } = {}) {
-  const sent = [], elements = new Map(), onDocument = {};
+  const sent = [], fetched = [], elements = new Map(), onDocument = {};
   let onMessage = null;
   const context = vm.createContext({
     console, URLSearchParams, location: { search: "" },
+    // nothing answers: the add-in's proxy refuses whatever the page asks the network for
+    fetch: url => { fetched.push(url); return Promise.reject(new TypeError("Failed to fetch")); },
     window: { chrome: { webview: {
       postMessage: m => sent.push(m),
       addEventListener: (type, fn) => { if (type === "message") onMessage = fn; },
@@ -83,6 +86,7 @@ function page({ texts = () => new Promise(() => {}), readyState = "complete" } =
     sends: () => sent.filter(m => m.type === "send").map(m => m.text),
     sent: type => sent.filter(m => m.type === type),
     posted: () => sent.map(m => m.type),
+    fetched: () => fetched,
     fire: type => { if (onDocument[type]) onDocument[type](); },
     submit: text => { context.text = text; run("input.value = text; submit();"); },
     host: data => onMessage({ data }),
@@ -177,6 +181,24 @@ function about() {
   p.host({ type: "about", text: { code: "ABOUT_VERSION", args: ["0.0.4", "5efe257"] } });
   check("the version and commit show at the bottom of the settings", p.element("about").textContent === "ABOUT_VERSION",
         p.element("about").textContent);
+}
+
+// The line under the version: whether the pane's browser sends what it asks for to the add-in's refusing proxy. The
+// add-in gives an address to ask for once; the page asks, says when that request has ended (it fails: the proxy
+// refuses it), and shows what the add-in then found.
+async function proxyState() {
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+  const p = page();
+  const line = p.element("proxy");
+  p.host({ type: "proxy", probe: "https://probe.example.invalid/" });
+  check("the page asks for the address the add-in gives, and shows nothing yet",
+        p.fetched().join(",") === "https://probe.example.invalid/" && line.textContent === "", p.fetched().join(",") + " / " + line.textContent);
+  await tick();
+  check("it tells the add-in once that request has ended, failed as it is", p.sent("probed").length === 1, p.posted().join(","));
+  p.host({ type: "proxy", on: true });
+  check("the settings show that the refusing proxy is in use", line.textContent === "PROXY_ON" && p.fetched().length === 1, line.textContent);
+  p.host({ type: "proxy", on: false });
+  check("or that it is not", line.textContent === "PROXY_OFF" && p.fetched().length === 1, line.textContent);
 }
 
 // The settings show the add-in's values (the switches, the context limit, the image prompt); everything in them is
@@ -383,7 +405,7 @@ settingsStayOpen();
 newChat();
 continueButton();
 ends();
-readyWaitsForDocs().then(() => {
+readyWaitsForDocs().then(proxyState).then(() => {
   console.log();
   console.log(failed === 0 ? `ALL PASSED (${passed})` : `${failed} FAILED, ${passed} passed`);
   process.exitCode = failed === 0 ? 0 : 1;

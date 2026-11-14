@@ -16,13 +16,16 @@ namespace Pptcom.UI
     // DLL and the model is called by the add-in itself - but the browser under it asks Microsoft for its configuration
     // and for updates of its components by itself. Sent to a proxy, all of that arrives here and goes nowhere. Nothing
     // is let through: there is no address the pane should reach. What was asked for is kept (the host only), so that
-    // the session log can tell when the browser starts asking for something new.
+    // the session log can tell when the browser starts asking for something new, and so that the pane can see that
+    // the browser sends its requests here at all (Refused): if it stopped, nothing would come and nothing would tell.
     internal static class RefusingProxy
     {
         private const int MaxNoted = 50;
         private const int SilenceLimitMs = 2000;
         private static readonly object Gate = new();
         private static readonly Dictionary<string, int> Noted = new(StringComparer.OrdinalIgnoreCase);
+        // The hosts asked for since PowerPoint started, without their ports: TakeRefused does not forget these.
+        private static readonly HashSet<string> Hosts = new(StringComparer.OrdinalIgnoreCase);
         private static readonly byte[] Refusal = Encoding.ASCII.GetBytes("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
         private static readonly Lazy<int> Opened = new(Open, LazyThreadSafetyMode.ExecutionAndPublication);
 
@@ -30,15 +33,39 @@ namespace Pptcom.UI
         // share one browser, which takes one set of arguments. 0 when no port could be opened.
         public static int Port => Opened.Value;
 
-        // What was refused since the last call, as "host:port x3", and forgets it.
-        public static List<string> TakeRefused()
+        // What was refused since the last call, as "host:port x3", and forgets it. Without what was asked of `own` or
+        // of a name under it: the page's own host, which the browser connects to ahead of the page's requests although
+        // the add-in answers those itself, and the name the page asks for to show that the browser uses this proxy.
+        public static List<string> TakeRefused(string? own = null)
         {
             lock (Gate)
             {
-                List<string> taken = [.. Noted.OrderBy(static n => n.Key, StringComparer.OrdinalIgnoreCase).Select(static n => Invariant($"{n.Key} x{n.Value}"))];
+                List<string> taken = [.. Noted.Where(n => !IsOf(HostOf(n.Key), own)).OrderBy(static n => n.Key, StringComparer.OrdinalIgnoreCase)
+                                                .Select(static n => Invariant($"{n.Key} x{n.Value}"))];
                 Noted.Clear();
                 return taken;
             }
+        }
+
+        // Whether a request for `host` (on any port) has come here since PowerPoint started.
+        public static bool Refused(string host)
+        {
+            lock (Gate)
+            {
+                return Hosts.Contains(host);
+            }
+        }
+
+        private static bool IsOf(string host, string? domain)
+        {
+            return domain is not null && (string.Equals(host, domain, StringComparison.OrdinalIgnoreCase) || host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // A target without its port: "host:443" and "host" give "host", "[::1]:443" gives "[::1]".
+        private static string HostOf(string target)
+        {
+            int colon = target.LastIndexOf(':');
+            return colon > 0 && target.IndexOf(']', colon) < 0 ? target.Substring(0, colon) : target;
         }
 
         private static int Open()
@@ -119,6 +146,11 @@ namespace Pptcom.UI
         {
             lock (Gate)
             {
+                if (Hosts.Count < MaxNoted)
+                {
+                    Hosts.Add(HostOf(target));
+                }
+
                 if (Noted.TryGetValue(target, out int count))
                 {
                     Noted[target] = count + 1;
