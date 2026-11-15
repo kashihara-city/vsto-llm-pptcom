@@ -105,6 +105,7 @@ namespace Pptcom
         // shows for it (CONTINUE_REQUEST), as the conversation shows it to the model too.
         private async Task SendAsync(WindowPane pane, string userMessage, bool fromOutside, bool continues = false)
         {
+            StayOnThisThread();
             if (IsBusy)
             {
                 LogToFile("(a request came while one runs; dropped: " + userMessage + ")");

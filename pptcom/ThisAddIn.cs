@@ -270,6 +270,26 @@ namespace Pptcom
             }
         }
 
+        // What brings the add-in's awaits back to PowerPoint's thread when that thread has no synchronization context
+        // (StayOnThisThread).
+        private System.Windows.Forms.WindowsFormsSynchronizationContext? _ownThread;
+
+        // For the head of an async method that starts on PowerPoint's thread, as everything that comes into the add-in
+        // does (a message from the page, a call from another program, startup): its awaits come back to this thread.
+        // That thread has no synchronization context when a request starts, from the page or from another program, and
+        // without one an await goes on on a thread of the pool: every call into PowerPoint from there is marshaled back
+        // to this thread, many times slower, and the add-in's own state is changed on two threads at once. With a
+        // context of Windows Forms, a continuation is posted here as a window message, which PowerPoint's message loop
+        // delivers.
+        private void StayOnThisThread()
+        {
+            if (SynchronizationContext.Current is null)
+            {
+                _ownThread ??= new System.Windows.Forms.WindowsFormsSynchronizationContext();
+                SynchronizationContext.SetSynchronizationContext(_ownThread);
+            }
+        }
+
         // The latest RefreshModelsAsync: one asked for earlier that answers later changes nothing.
         private int _modelsRequest;
 
@@ -280,6 +300,7 @@ namespace Pptcom
         // `asker`: the pane it was asked from, which gets its messages; null at startup (every pane).
         private async Task RefreshModelsAsync(string endpoint, WindowPane? asker)
         {
+            StayOnThisThread();
             endpoint = (endpoint ?? "").Trim().TrimEnd('/');
             if (endpoint.Length == 0)
             {
