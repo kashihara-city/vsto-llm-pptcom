@@ -35,15 +35,28 @@ namespace Pptcom.Documents
         // A file of `conversation` is still being read: a request sent now would go without it.
         public bool IsReading(TConversation? conversation)
         {
-            return conversation is not null && _reading.Values.Any(p => ReferenceEquals(p.Value, conversation));
+            return ReadingFor(conversation) > 0;
+        }
+
+        // How many files are being read for `conversation`.
+        public int ReadingFor(TConversation? conversation)
+        {
+            return conversation is null ? 0 : _reading.Values.Count(p => ReferenceEquals(p.Value, conversation));
+        }
+
+        // The file of this ticket is being read.
+        public bool Taken(string ticket)
+        {
+            return _reading.ContainsKey(ticket);
         }
 
         // A file taken (attachStarted, AttachFromOutside), for the window's conversation (made if need be). Refused, false,
-        // while a request runs in that conversation (`locked`): its documents stay as the request found them, and what the
-        // page sends at the file's end is let go. A ticket already being read stays as it was taken.
-        public bool Start(string ticket, string name, bool locked, Func<TConversation> conversation)
+        // when `refused`: a request runs in that conversation, whose documents stay as the request found them, or the
+        // conversation has as many files as it may. What the page sends at the file's end is then let go. A ticket already
+        // being read stays as it was taken.
+        public bool Start(string ticket, string name, bool refused, Func<TConversation> conversation)
         {
-            if (locked)
+            if (refused)
             {
                 _refused.Add(ticket);
                 return false;

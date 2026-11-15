@@ -22,12 +22,18 @@ namespace Pptcom.Documents
         public required string Name;   // the file name
         public required string Format; // anydoc's format name (docx, xlsx, pdf, ...), "text" or "image"
         public long Size;              // bytes of the file
+        public string Digest = "";     // the SHA-256 of the file's bytes, in hex, as the page made it ("" when it gave none)
         public string[] Lines = [];
         public readonly List<AttachedImage> Images = [];
-        // PDFs: the page count, and the file itself - the task pane draws pages from it for docread page.
+        // PDFs: the page count, how many of the pages have (almost) no text - scans and pictures, which the model can
+        // only look at -, and the file itself: the task pane draws pages from it for docread page.
         // The text has a "[page N]" line where each page starts.
         public int Pages;
+        public int TextlessPages;
         public byte[]? Source;
+
+        // docread page draws a page with its long side at most this many pixels (ThisAddIn.ReadPdfPagesAsync).
+        public const int PageMaxSide = 1600;
         // Pictures: a small PNG the page drew for the chip (a data: URL, "" when it could not), and whether a
         // request has shown the picture to the model yet.
         public string Thumbnail = "";
@@ -43,6 +49,15 @@ namespace Pptcom.Documents
         // model sees it as [image d1_img3], the name it uses in docread and pptcom.
         private static readonly Regex ImageMark = new(@"\[\[img:(\d+)\]\]", RegexOptions.None, Guard.RegexTimeout);
 
+        private static readonly Regex Sha256Hex = new("^[0-9a-f]{64}$", RegexOptions.None, Guard.RegexTimeout);
+
+        // The digest the page gave with a file it read; "" when it gave none, or something else.
+        public static string DigestOf(JObject m)
+        {
+            string digest = (string?)m["digest"] ?? "";
+            return Sha256Hex.IsMatch(digest) ? digest : "";
+        }
+
         public static AttachedDocument FromPage(JObject m, string id)
         {
             AttachedDocument doc = new()
@@ -51,6 +66,7 @@ namespace Pptcom.Documents
                 Name = (string?)m["name"] ?? "document",
                 Format = (string?)m["format"] ?? "",
                 Size = (long?)m["size"] ?? 0,
+                Digest = DigestOf(m),
             };
             Dictionary<int, AttachedImage> byIndex = [];
             foreach (JObject img in (m["images"] as JArray ?? []).OfType<JObject>())
@@ -80,6 +96,7 @@ namespace Pptcom.Documents
                     MediaType = (string?)img["mediaType"] ?? "",
                     Data = data,
                     Standalone = doc.IsImage,
+                    OnTextlessPage = (bool?)img["textlessPage"] ?? false,
                 };
                 byIndex[(int?)img["index"] ?? -1] = image;
                 doc.Images.Add(image);
@@ -106,6 +123,7 @@ namespace Pptcom.Documents
             }
             doc.Lines = lines;
             doc.Pages = (int?)m["pages"] ?? 0;
+            doc.TextlessPages = Math.Max(0, Math.Min((int?)m["textlessPages"] ?? 0, doc.Pages));
             string source = (string?)m["source"] ?? "";
             if (source.Length > 0)
             {
@@ -130,6 +148,16 @@ namespace Pptcom.Documents
         public bool IsPdf => Format == "pdf";
 
         public bool IsImage => Format == "image";
+
+        // What reading all of it would add to a conversation, in tokens: an estimate made as it is attached, before
+        // any of it is sent, for AttachmentRoom. A token for each character of its text; a token for every
+        // AttachedImage.PixelsPerToken pixels of each image as the model is shown it; and the same for each page of a
+        // PDF without text, taken at the largest a page is drawn. The images of such a page are left out: they are the
+        // page again. A page that has text is not counted as a picture, though the model may look at it as one.
+        public long EstimatedTokens => Lines.Sum(static l => (long)l.Length) + Images.Where(static i => !i.OnTextlessPage).Sum(static i => i.EstimatedTokens) + TextlessPageTokens;
+
+        // The part of it that the pages without text make.
+        public long TextlessPageTokens => TextlessPages * AttachedImage.TokensOf((long)PageMaxSide * PageMaxSide);
 
         public string Kind => Format switch
         {
@@ -209,6 +237,8 @@ namespace Pptcom.Documents
                 "resourceLimit" => PaneText.Of("DOC_FAILED_RESOURCE_LIMIT"),
                 "missingPart" => PaneText.Of("DOC_FAILED_MISSING_PART"),
                 "tooLarge" => PaneText.Of("DOC_FAILED_TOO_LARGE"),
+                "tooMany" => PaneText.Of("DOC_FAILED_TOO_MANY", AttachmentRoom.MaxFiles), // its conversation has as many files as it may
+                "duplicate" => PaneText.Of("DOC_FAILED_DUPLICATE", detail), // the same file is attached already: detail names it ("d2 a.pdf")
                 "busy" => PaneText.Of("DOC_FAILED_BUSY"), // taken while a request ran in its conversation (ThisAddIn.DocumentsLocked)
                 _ => string.IsNullOrEmpty(detail) ? PaneText.Of("DOC_FAILED") : PaneText.Of("DOC_FAILED_DETAIL", detail),
             };

@@ -84,6 +84,8 @@ const logKinds = {
   NO_ENDPOINT_OR_MODEL: "stopped", DOC_STILL_CONVERTING: "stopped", HTTP_WITH_API_KEY: "stopped",
   HAND_EDITS: "handEdits", NEW_CONVERSATION: "reset",
   READY: "plain", NO_ENDPOINT_HELP: "plain",
+  // a file that was not attached, with the reason
+  DOC_NOT_ATTACHED: "notAttached", DOC_DISCARDED: "notAttached",
 };
 
 function onLog(m) {
@@ -136,6 +138,10 @@ function onLog(m) {
       return;
     case "plain":
       add(div("note", text));
+      return;
+    case "notAttached":   // in red: a side note is easy to miss, and the request would go without the file
+      if (work) workRow("extra alert", null, text);
+      else add(div("note alert", text));
       return;
     default:
       if (work) workRow("extra", null, text);

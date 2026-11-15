@@ -15,9 +15,6 @@ namespace Pptcom.Documents
     // conversation ends.
     internal static class DocumentImages
     {
-        // Long side of a preview, like a slide rendering (1280x720).
-        private const int PreviewMax = 1280;
-
         // Reads the image's type and pixel size, and writes the file AddPicture will place. Formats PowerPoint
         // places as they are keep their bytes; anything else System.Drawing can decode becomes a PNG. An image
         // neither can use keeps FilePath null (listed, but not placeable).
@@ -36,6 +33,7 @@ namespace Pptcom.Documents
                 using Image image = Image.FromStream(ms);
                 img.Width = image.Width;
                 img.Height = image.Height;
+                img.Vector = image is Metafile;
                 if (ext is not null)
                 {
                     img.FilePath = Write(img.Data, ext);
@@ -64,8 +62,8 @@ namespace Pptcom.Documents
             return ex is ArgumentException or ExternalException or OutOfMemoryException;
         }
 
-        // A PNG of at most PreviewMax on the long side (drawn on white: EMF, PNG and GIF may be transparent).
-        // Null when the image cannot be decoded here (SVG, a broken file).
+        // A PNG of the size the model is shown (AttachedImage.ShownSize), drawn on white: EMF, PNG and GIF may be
+        // transparent. Null when the image cannot be decoded here (SVG, a broken file).
         public static string? Preview(AttachedImage img)
         {
             if (img.PreviewPath is not null && File.Exists(img.PreviewPath))
@@ -77,15 +75,7 @@ namespace Pptcom.Documents
             {
                 using MemoryStream ms = new(img.Data);
                 using Image image = Image.FromStream(ms);
-                int w = Math.Max(1, image.Width), h = Math.Max(1, image.Height);
-                double scale = Math.Min(1.0, (double)PreviewMax / Math.Max(w, h));
-                // vector pictures (EMF/WMF) report small sizes at times: draw them at a readable size
-                if (image is Metafile && Math.Max(w, h) < 640)
-                {
-                    scale = 640.0 / Math.Max(w, h);
-                }
-
-                int pw = Math.Max(1, (int)Math.Round(w * scale, MidpointRounding.AwayFromZero)), ph = Math.Max(1, (int)Math.Round(h * scale, MidpointRounding.AwayFromZero));
+                (int pw, int ph) = AttachedImage.ShownSize(image.Width, image.Height, image is Metafile);
                 using Bitmap bmp = new(pw, ph);
                 using (Graphics g = Graphics.FromImage(bmp))
                 {

@@ -43,7 +43,7 @@ function fileReader(fails) {
 }
 
 // docs.js in a fresh page. `messages` is what it posted to the add-in; `fromAddin` delivers a message to it.
-function page({ worker = TextWorker, readerFails = false } = {}) {
+function page({ worker = TextWorker, readerFails = false, crypto = require("node:crypto").webcrypto } = {}) {
   const messages = [], classes = new Set(), elements = new Map(), onDocument = {};
   let onMessage = null;
   const element = () => ({
@@ -52,7 +52,7 @@ function page({ worker = TextWorker, readerFails = false } = {}) {
     appendChild(child) { this.children.push(child); },
   });
   const context = vm.createContext({
-    console, Uint8Array, Blob, atob, queueMicrotask,
+    console, Uint8Array, Blob, atob, queueMicrotask, crypto,
     window: { chrome: { webview: {
       postMessage: m => messages.push(m),
       addEventListener: (type, fn) => { if (type === "message") onMessage = fn; },
@@ -221,6 +221,53 @@ async function textStartingLikeBmp() {
   check("a text file that starts with BM is a document, not a picture", m && m.format === "text", JSON.stringify(m));
 }
 
+// What the PDF converter says of pages without text goes on to the add-in, which counts them when it sizes what is
+// attached: how many there are, and which images sit on one. The converter here stands in for pdfdoc.js (the page
+// loads that one with import(), which this stand-in for the browser has not): docs.js treats its result alike.
+async function pagesWithoutText() {
+  class PdfResult extends TextWorker {
+    postMessage() {
+      const images = [{ index: 0, mediaType: "image/png", data: new Uint8Array([1]), textlessPage: true },
+                      { index: 1, mediaType: "image/png", data: new Uint8Array([2]), textlessPage: false }];
+      queueMicrotask(() => this.onmessage({ data: { ok: true, format: "pdf", text: "[page 1]", images, pages: 3, textlessPages: 2 } }));
+    }
+  }
+  const p = page({ worker: PdfResult }), scan = file("scan.bin");
+  p.addFiles([scan]);
+  scan.arrive();
+  await p.settled();
+  const m = p.messages.find(x => x.type === "attach");
+  check("a PDF's pages without text, and the images on them, are told to the add-in",
+        m && m.pages === 3 && m.textlessPages === 2 && m.images.length === 2 && m.images[0].textlessPage === true && !("textlessPage" in m.images[1]),
+        JSON.stringify(m));
+
+  const q = page(), doc = file("image.docx");
+  q.addFiles([doc]);
+  doc.arrive();
+  await q.settled();
+  const other = q.messages.find(x => x.type === "attach");
+  check("another document says nothing of pages", other && !("textlessPages" in other) && !("textlessPage" in other.images[0]), JSON.stringify(other));
+}
+
+// Each attached file goes with the SHA-256 of its bytes, by which the add-in refuses the same file a second time:
+// the same for the same bytes whatever the name, another for other bytes, for a picture as for a document. Without
+// it (a browser that cannot make one) the file is attached all the same.
+async function digest() {
+  const attachedWith = async (p, files) => {
+    p.addFiles(files);
+    for (const f of files) f.arrive();
+    await p.settled();
+    return p.messages.filter(m => m.type === "attach").map(m => m.digest);
+  };
+  const sha = bytes => require("node:crypto").createHash("sha256").update(Buffer.from(bytes)).digest("hex");
+  const got = await attachedWith(page(), [file("a.txt", 1, [65]), file("copy of a.txt", 1, [65]), file("b.txt", 1, [66]), file("image.png", PngHeader.length, PngHeader)]);
+  check("a file goes with the SHA-256 of its bytes: the same for a copy under another name, another for other bytes",
+        got.length === 4 && got[0] === sha([65]) && got[1] === got[0] && got[2] === sha([66]) && got[3] === sha(PngHeader),
+        JSON.stringify(got));
+  const without = await attachedWith(page({ crypto: null }), [file("a.txt")]);
+  check("without a digest the file is attached all the same", without.length === 1 && without[0] === "", JSON.stringify(without));
+}
+
 // The conversation's documents stay as they are from the send on (body.sending), and while a request runs: nothing
 // dropped, picked or pasted is taken, × removes nothing. Once the busy state is back, they change again.
 async function lockedFromTheSend() {
@@ -276,6 +323,8 @@ async function paste() {
   await fromAddin();
   await picture();
   await textStartingLikeBmp();
+  await pagesWithoutText();
+  await digest();
   await paste();
   await lockedFromTheSend();
   console.log();

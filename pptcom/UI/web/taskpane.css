@@ -139,6 +139,8 @@ input[type=text]:focus, input[type=password]:focus, input[type=number]:focus, se
 .continue-row { display: flex; justify-content: flex-end; margin-top: -4px; }
 /* a long path (the run folder) breaks anywhere rather than making the conversation scroll sideways */
 .note { color: var(--muted); font-size: 12px; padding: 0 2px; overflow-wrap: anywhere; }
+/* a file that was not attached, with the reason */
+.note.alert { color: var(--err); }
 
 /* the turns of one request, folded into one block */
 .work {
@@ -175,6 +177,7 @@ input[type=text]:focus, input[type=password]:focus, input[type=number]:focus, se
 .row.failed .text { color: var(--warn); }
 .row.turn { color: var(--faint); font-size: 11px; }
 .row.extra { color: var(--faint); font-size: 11px; }
+.row.alert .text { color: var(--err); }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--faint); }
 .work.running .dot { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
 .work.done .dot { background: var(--ok); }

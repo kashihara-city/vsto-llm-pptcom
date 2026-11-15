@@ -301,8 +301,6 @@ namespace Pptcom
 
         // docread page: pages of an attached PDF drawn by the task pane (PDF.js) and shown to the model like
         // slide renderings - for scans, charts and text that did not extract cleanly.
-        private const int PdfPageMaxSide = 1600;
-
         private static async Task<string> ReadPdfPagesAsync(AiTaskPaneControl ui, IList<AttachedDocument> docs, string id, string spec, List<KeyValuePair<string, string>> renders)
         {
             AttachedDocument? doc = docs.FirstOrDefault(d => string.Equals(d.Id, id.Trim(), StringComparison.OrdinalIgnoreCase));
@@ -326,7 +324,7 @@ namespace Pptcom
             Dictionary<int, byte[]> drawn;
             try
             {
-                drawn = await ui.RenderPdfPagesAsync(doc.Source, pages, PdfPageMaxSide, errors).ConfigureAwait(true);
+                drawn = await ui.RenderPdfPagesAsync(doc.Source, pages, AttachedDocument.PageMaxSide, errors).ConfigureAwait(true);
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {

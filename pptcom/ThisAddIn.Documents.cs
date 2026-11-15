@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using Newtonsoft.Json.Linq;
 using Pptcom.Agent;
 using Pptcom.ComProxy;
 using Pptcom.Documents;
+using Pptcom.UI;
 using static System.FormattableString;
 
 namespace Pptcom
@@ -34,11 +36,21 @@ namespace Pptcom
             return IsBusy && ReferenceEquals(pane, _runPane);
         }
 
+        // The files the pane's conversation has and is being read: no more than AttachmentRoom.MaxFiles are taken.
+        private static int Attachments(WindowPane pane)
+        {
+            return (pane.Conversation is not null ? pane.Conversation.Documents.Count : 0) + pane.Pending.ReadingFor(pane.Conversation);
+        }
+
+        // A file taken by the page. One attached from outside was taken, and counted, before the page was given it
+        // (AttachFromOutside).
         private void OnDocumentStarted(WindowPane pane, string ticket, string name)
         {
-            if (!pane.Pending.Start(ticket, name, DocumentsLocked(pane), () => ConversationOf(pane)))
+            bool locked = DocumentsLocked(pane);
+            bool full = !locked && !pane.Pending.Taken(ticket) && Attachments(pane) >= AttachmentRoom.MaxFiles;
+            if (!pane.Pending.Start(ticket, name, locked || full, () => ConversationOf(pane)))
             {
-                OnDocumentFailed(pane, ticket, name, "busy", "");
+                OnDocumentFailed(pane, ticket, name, locked ? "busy" : "tooMany", "");
             }
         }
 
@@ -59,31 +71,56 @@ namespace Pptcom
             }
 
             Conversation c = taken ?? ConversationOf(pane);
-            AttachedDocument doc = AttachedDocument.FromPage(m, Invariant($"d{++c.DocumentsAttached}"));
+            // The same file again, under whatever name: the one attached stays, and the user is told which it is.
+            if (AttachmentRoom.Same(c.Documents, AttachedDocument.DigestOf(m)) is AttachedDocument same)
+            {
+                OnDocumentFailed(pane, ticket, name, "duplicate", same.Id + " " + same.Name);
+                return;
+            }
+
+            // the last guard: the page did not say it started this file, or more were being read than there was room for
+            if (c.Documents.Count >= AttachmentRoom.MaxFiles)
+            {
+                OnDocumentFailed(pane, ticket, name, "tooMany", "");
+                return;
+            }
+
+            // Its number is taken when it is attached: one refused below leaves no gap in d1, d2, ...
+            AttachedDocument doc = AttachedDocument.FromPage(m, Invariant($"d{c.DocumentsAttached + 1}"));
             if (doc.IsImage && doc.Images.Count == 0)
             {
                 OnDocumentFailed(pane, ticket, doc.Name, "malformed", "");
                 return;
             }
 
-            // Each image becomes a variable (d1_img3) that pptcom's AddPicture accepts, like an imagegen image.
             foreach (AttachedImage img in doc.Images)
             {
                 DocumentImages.Prepare(img);
-                if (img.Standalone && img.Width == 0)
-                {
-                    // The model sees an attached picture as a PNG drawn here (DocumentImages.Preview): one that cannot
-                    // be drawn would be attached in name only. Refused now, where the user sees it (a broken file);
-                    // the page's own check is only the first bytes.
-                    if (img.FilePath is not null)
-                    {
-                        TryDelete(img.FilePath);
-                    }
+            }
 
-                    OnDocumentFailed(pane, ticket, doc.Name, "malformed", "");
-                    return;
-                }
+            // The model sees an attached picture as a PNG drawn here (DocumentImages.Preview): one that cannot be drawn
+            // would be attached in name only. Refused now, where the user sees it (a broken file); the page's own check
+            // is only the first bytes.
+            if (doc.Images.Exists(static img => img.Standalone && img.Width == 0))
+            {
+                DeleteImageFiles(doc);
+                OnDocumentFailed(pane, ticket, doc.Name, "malformed", "");
+                return;
+            }
 
+            // Its size is known now: the text, and the pixel sizes of its images (Prepare).
+            long left = AttachmentRoom.Left(c.Documents, _settings.ContextLimit);
+            AttachmentRoom.Refusal refusal = AttachmentRoom.Check(doc, left);
+            if (refusal != AttachmentRoom.Refusal.None)
+            {
+                DeleteImageFiles(doc);
+                RefuseForRoom(pane, ticket, doc, refusal, left);
+                return;
+            }
+
+            // Each image becomes a variable (d1_img3) that pptcom's AddPicture accepts, like an imagegen image.
+            foreach (AttachedImage img in doc.Images)
+            {
                 if (img.FilePath is null)
                 {
                     continue;
@@ -95,16 +132,52 @@ namespace Pptcom
                     c.KnownIds.Add(img.Name);
                 }
             }
+            c.DocumentsAttached++;
             c.Documents.Add(doc);
             ShowAttachments(pane);
             pane.Control.Log(doc.IsImage ? "IMAGE_ATTACHED" : "DOC_ATTACHED", doc.Id, doc.Name, doc.Detail());
-            LogToFile("(document attached: " + doc.Describe() + ")");
+            LogToFile("(document attached: " + doc.Describe() + Invariant($"; taken as {doc.EstimatedTokens} tokens, {left - doc.EstimatedTokens} left for more)"));
+        }
+
+        // The files Prepare wrote for the images of a document that is not attached after all.
+        private static void DeleteImageFiles(AttachedDocument doc)
+        {
+            foreach (AttachedImage img in doc.Images)
+            {
+                if (img.FilePath is not null)
+                {
+                    TryDelete(img.FilePath);
+                }
+            }
+        }
+
+        // A document the conversation has no room for (AttachmentRoom): the pane says how much it is taken as and how
+        // much was left - or, when it is its pages without text that do not fit, how many those are.
+        private static void RefuseForRoom(WindowPane pane, string ticket, AttachedDocument doc, AttachmentRoom.Refusal refusal, long left)
+        {
+            bool scanned = refusal == AttachmentRoom.Refusal.Scanned;
+            PaneText shown = scanned
+                ? PaneText.Of("DOC_FAILED_SCANNED", doc.TextlessPages)
+                : PaneText.Of("DOC_FAILED_TOO_LONG", TokensText(doc.EstimatedTokens), TokensText(left));
+            string detail = Invariant($"taken as {doc.EstimatedTokens} tokens, {doc.TextlessPageTokens} of them for {doc.TextlessPages} page(s) without text; {left} left");
+            ShowNotAttached(pane, ticket, doc.Name, scanned ? "scanned" : "tooLong", detail, shown);
+        }
+
+        // "98,304 tok"; none left shows as 0 (the limit may have been lowered below what is attached).
+        private static PaneText TokensText(long tokens)
+        {
+            return PaneText.Of("TOKENS", Math.Max(0, tokens).ToString("N0", CultureInfo.InvariantCulture));
         }
 
         private static void OnDocumentFailed(WindowPane pane, string ticket, string name, string reason, string detail)
         {
+            ShowNotAttached(pane, ticket, name, reason, detail, AttachedDocument.Failure(reason, detail));
+        }
+
+        private static void ShowNotAttached(WindowPane pane, string ticket, string name, string reason, string detail, PaneText shown)
+        {
             pane.Pending.Fail(ticket, name, reason, detail);
-            pane.Control.Log("DOC_NOT_ATTACHED", name, AttachedDocument.Failure(reason, detail));
+            pane.Control.Log("DOC_NOT_ATTACHED", name, shown);
             LogToFile("(document not attached: " + name + " - " + reason + " " + detail + ")");
         }
 
@@ -229,6 +302,11 @@ namespace Pptcom
                 throw new InvalidOperationException("50MB を超えるファイルは添付できません: " + path);
             }
 
+            if (Attachments(pane) >= AttachmentRoom.MaxFiles)
+            {
+                throw new InvalidOperationException(Invariant($"添付できるのは {AttachmentRoom.MaxFiles} 個までです: ") + path);
+            }
+
             ShowForOutside(pane);
             // Read before the ticket exists, and the ticket dropped if the page cannot be given the file: a ticket
             // left pending would keep this conversation from sending (IsReadingDocuments).
@@ -236,7 +314,7 @@ namespace Pptcom
             try
             {
                 byte[] bytes = File.ReadAllBytes(info.FullName);
-                pane.Pending.Start(ticket, info.Name, locked: false, () => ConversationOf(pane));
+                pane.Pending.Start(ticket, info.Name, refused: false, () => ConversationOf(pane));
                 pane.Control.ConvertDocument(ticket, info.Name, bytes);
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))

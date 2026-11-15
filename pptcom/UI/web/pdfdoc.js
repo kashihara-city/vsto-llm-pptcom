@@ -1,13 +1,15 @@
 // PDFs, with PDF.js (anydoc is not used for them: it refuses a whole PDF when a single page is a scan,
 // and its text has no page boundaries). Used by docs.js:
-//   convertPdf(bytes)  -> { ok, format: "pdf", text, images: [{index, mediaType, data}], pages }
+//   convertPdf(bytes)  -> { ok, format: "pdf", text, images: [{index, mediaType, data, textlessPage}], pages, textlessPages }
 //   renderPages(bytes, pages, maxSide) -> [{ page, data (PNG, base64) }]   for docread page
 //
 // The text is per page: a "[page 3]" line, then the page's text lines as PDF.js reads them, then a
 // [[img:N]] line for each image drawn on that page with where it sits ("upper left" ...). A page with
 // (almost) no text gets a note instead: it is a scan or a picture, and the model looks at it with
 // docread page. Text from PDFs can be incomplete or garbled (charts, fonts without a character map),
-// which is what the page renderings are for.
+// which is what the page renderings are for. The add-in is told how many pages have no text and which
+// images sit on them (textlessPages, textlessPage): reading those pages means looking at each one, which
+// it counts when it sizes what is attached.
 import * as pdfjs from "./vendor/pdfjs/pdf.mjs";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL("vendor/pdfjs/pdf.worker.mjs", import.meta.url).href;
@@ -34,12 +36,17 @@ export async function convertPdf(bytes) {
   }
   try {
     const out = [], images = [], seen = new Set();
+    let textlessPages = 0;
     for (let p = 1; p <= doc.numPages; p++) {
       const page = await doc.getPage(p);
       out.push(`[page ${p}]`);
       const lines = textLines(await page.getTextContent());
       const chars = lines.reduce((n, l) => n + l.replace(/\s/g, "").length, 0);
-      if (chars < 20) out.push(`(page ${p} has ${chars ? "almost " : ""}no text: a scan or a picture - look at it with docread page)`);
+      const textless = chars < 20;
+      if (textless) {
+        textlessPages++;
+        out.push(`(page ${p} has ${chars ? "almost " : ""}no text: a scan or a picture - look at it with docread page)`);
+      }
       for (const l of lines) out.push(l);
       if (images.length < MaxImages) {
         for (const img of await pageImages(page)) {
@@ -48,12 +55,12 @@ export async function convertPdf(bytes) {
           if (seen.has(key)) continue;
           seen.add(key);
           out.push(`[[img:${images.length}]] (page ${p}, ${img.where})`);
-          images.push({ index: images.length, mediaType: "image/png", data: img.data });
+          images.push({ index: images.length, mediaType: "image/png", data: img.data, textlessPage: textless });
         }
       }
       page.cleanup();
     }
-    return { ok: true, format: "pdf", text: out.join("\n"), images, pages: doc.numPages };
+    return { ok: true, format: "pdf", text: out.join("\n"), images, pages: doc.numPages, textlessPages };
   } finally {
     await doc.loadingTask.destroy();   // ends the worker's copy of the document too
   }

@@ -9,6 +9,8 @@
 //   page -> add-in: {type: "attachStarted", ticket, name}                   a file is taken, before it is read (the add-in ties it to the conversation)
 //                   {type: "attach", ticket, name, size, format, text, pages, images: [{index, mediaType, data (base64)}],
 //                    source (the PDF itself, base64; PDFs only), thumb (a small PNG as a data: URL; pictures only)}
+//                    PDFs also: textlessPages (how many pages have no text), and textlessPage: true on the images of such a page
+//                    digest: the SHA-256 of the file's bytes, in hex ("" when it could not be made); the add-in refuses the same file twice
 //                   {type: "attachFailed", ticket, name, reason, detail}
 //                   {type: "detach", id}
 //                   {type: "pagesRendered", request, pages: [{page, data (PNG, base64) | error}]} or {..., error}
@@ -67,17 +69,38 @@ async function attach(ticket, name, read) {
 
 const isPdf = bytes => bytes.length > 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46; // %PDF
 
-// The message for the add-in: attach, or attachFailed when the converter says why it could not.
+// The message for the add-in: attach, with the digest of the file as it was read, or attachFailed when the
+// converter says why it could not.
 async function convert(ticket, name, bytes) {
+  const msg = await converted(ticket, name, bytes);
+  if (msg.type === "attach") msg.digest = await digestOf(bytes);
+  return msg;
+}
+
+// The SHA-256 of the bytes, in hex; "" when the browser cannot make one (the file is attached all the same).
+async function digestOf(bytes) {
+  try {
+    const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    return Array.from(hash, b => b.toString(16).padStart(2, "0")).join("");
+  } catch (e) {
+    return "";
+  }
+}
+
+async function converted(ticket, name, bytes) {
   const size = bytes.byteLength;
   const picture = pictureType(bytes);
   if (picture) return pictureMessage(ticket, name, size, picture, bytes);
   const r = isPdf(bytes) ? await (await import("./pdfdoc.js")).convertPdf(bytes) : await inWorker(name, bytes.slice());
   if (!r.ok) return { type: "attachFailed", ticket, name, reason: r.reason, detail: r.detail || "" };
   const images = [];
-  for (const img of r.images) images.push({ index: img.index, mediaType: img.mediaType, data: await base64(img.data) });
+  for (const img of r.images) {
+    const image = { index: img.index, mediaType: img.mediaType, data: await base64(img.data) };
+    if (img.textlessPage) image.textlessPage = true;
+    images.push(image);
+  }
   const msg = { type: "attach", ticket, name, size, format: r.format, text: r.text, images };
-  if (r.format === "pdf") { msg.pages = r.pages; msg.source = await base64(bytes); }
+  if (r.format === "pdf") { msg.pages = r.pages; msg.textlessPages = r.textlessPages || 0; msg.source = await base64(bytes); }
   return msg;
 }
 

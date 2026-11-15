@@ -25,9 +25,9 @@ namespace ChatStreamTests
     // not followed, and that 中止 and the idle limit end a stream or an error body that stopped sending; for an image
     // (GenerateImageAsync), that the end of the request ends the wait. Also how the notes before a conversation is
     // shortened are asked for, what the model list says of each model's input, what shortening leaves out
-    // (Compaction), which tools and system prompt lines a request offers (AgentTools), and the colors imagegen
-    // reports of an image (ImageColors). A server on the loopback address answers each request as the test needs; no
-    // LLM is called.
+    // (Compaction), which tools and system prompt lines a request offers (AgentTools), the colors imagegen
+    // reports of an image (ImageColors), and how much may be attached to a conversation (AttachmentRoom). A server on
+    // the loopback address answers each request as the test needs; no LLM is called.
     internal static class Program
     {
         // How a server that does not know mm_processor_kwargs answers.
@@ -55,6 +55,7 @@ namespace ChatStreamTests
             ImageColorsTests();
             UserLocaleTests();
             PendingDocumentTests();
+            AttachmentRoomTests();
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -630,17 +631,17 @@ namespace ChatStreamTests
             Console.WriteLine("== files being read for a conversation");
             object first = new(), second = new();
             PendingDocuments<object> p = new();
-            bool taken = p.Start("p1", "a.pdf", locked: false, () => first);
+            bool taken = p.Start("p1", "a.pdf", refused: false, () => first);
             bool reading = p.IsReading(first) && !p.IsReading(second) && !p.IsReading(null);
             PendingDocuments<object>.End end = p.Finish("p1", first, locked: false, out object? into);
             Check("a file taken is being read for its conversation, then attached to it",
                   taken && reading && end == PendingDocuments<object>.End.Attach && ReferenceEquals(into, first) && !p.IsReading(first), Invariant($"{taken} {reading} {end}"));
 
-            p.Start("p2", "b.docx", locked: false, () => first);
+            p.Start("p2", "b.docx", refused: false, () => first);
             List<string> ends =
             [
                 p.Finish("p2", second, locked: false, out _).ToString(), // 新しい会話 meanwhile
-                p.Start("p3", "c.xlsx", locked: true, () => first) ? "taken" : "refused",
+                p.Start("p3", "c.xlsx", refused: true, () => first) ? "taken" : "refused",
                 p.Finish("p3", first, locked: false, out _).ToString(), // its end, after the request
                 p.Finish("p4", first, locked: true, out object? unstarted).ToString(), // read while locked, the page not having said it started
                 p.Finish("p5", first, locked: false, out object? window).ToString(),
@@ -648,7 +649,7 @@ namespace ChatStreamTests
             Check("the conversation ended: discarded; locked as taken: refused, its end let go; locked as read: refused; never started: the window's",
                   string.Join(",", ends) == "Discarded,refused,LetGo,Locked,Attach" && unstarted is null && window is null, string.Join(",", ends));
 
-            p.Start("p6", "d.pdf", locked: true, () => first);
+            p.Start("p6", "d.pdf", refused: true, () => first);
             bool letGo = p.LetGo("p6") && !p.LetGo("p6");
             for (int i = 0; i < PendingDocuments<object>.MaxFailures + 2; i++)
             {
@@ -658,6 +659,103 @@ namespace ChatStreamTests
             Check("a refused file's attachFailed is let go once; the latest failures are kept, oldest first",
                   letGo && p.Failed.Count == PendingDocuments<object>.MaxFailures && p.Failed[0] == "f2.pdf: malformed (x)" && !p.Reading.Any(),
                   string.Join(" | ", p.Failed.Take(2)));
+
+            PendingDocuments<object> counted = new();
+            counted.Start("p1", "a.pdf", refused: false, () => first);
+            counted.Start("p2", "b.pdf", refused: false, () => first);
+            counted.Start("p3", "c.pdf", refused: false, () => second);
+            counted.Start("p4", "d.pdf", refused: true, () => first);
+            Check("the files being read are counted for their conversation, without the refused ones; a ticket taken is known",
+                  counted.ReadingFor(first) == 2 && counted.ReadingFor(second) == 1 && counted.ReadingFor(conversation: null) == 0 &&
+                  counted.Taken("p1") && !counted.Taken("p4") && !counted.Taken("p9"),
+                  Invariant($"{counted.ReadingFor(first)} {counted.ReadingFor(second)} {counted.ReadingFor(conversation: null)} {counted.Taken("p1")} {counted.Taken("p4")}"));
+        }
+
+        // What a conversation may have attached (AttachmentRoom). A document's size is estimated as it is attached
+        // (AttachedDocument.EstimatedTokens): a token for each character of its text, a token for every 1000 pixels of
+        // each image as the model is shown it, and the same for each page of a PDF without text - whose images are not
+        // counted again. The documents of a conversation may come to half the context limit; one that would fit but for
+        // its pages without text is refused as scanned.
+        private static void AttachmentRoomTests()
+        {
+            Console.WriteLine("== room for attached documents");
+            (int Width, int Height) photo = AttachedImage.ShownSize(4000, 3000, vector: false), small = AttachedImage.ShownSize(300, 200, vector: false),
+                                    drawing = AttachedImage.ShownSize(300, 200, vector: true);
+            Check("an image is sized as the model is shown it: the long side at most 1280, a small vector picture drawn larger",
+                  photo == (1280, 960) && small == (300, 200) && drawing == (640, 427), Invariant($"{photo} {small} {drawing}"));
+
+            AttachedDocument pdf = AttachedDocument.FromPage(new JObject
+            {
+                ["name"] = "scan.pdf",
+                ["format"] = "pdf",
+                ["pages"] = 3,
+                ["textlessPages"] = 2,
+                ["text"] = "[page 1]\nabcde\n[page 2]\n[page 3]",
+                ["images"] = new JArray(PageImage(0, textlessPage: false), PageImage(1, textlessPage: true), PageImage(2, textlessPage: false)),
+            }, "d1");
+            pdf.Images[0].Width = pdf.Images[1].Width = 4000;   // each shown as 1280x960; the third's size is not known
+            pdf.Images[0].Height = pdf.Images[1].Height = 3000;
+            long text = 8 + 5 + 8 + 8, image = 1229, pages = 2 * 2560;
+            Check("text by its characters, an image and a page without text by their pixels; not the image of such a page, nor one that cannot be shown",
+                  pdf.TextlessPages == 2 && pdf.Images.Count == 3 && pdf.Images[1].OnTextlessPage && pdf.Images[2].EstimatedTokens == 0 &&
+                  pdf.TextlessPageTokens == pages && pdf.EstimatedTokens == text + image + pages,
+                  Invariant($"{pdf.EstimatedTokens} tokens, {pdf.TextlessPageTokens} for {pdf.TextlessPages} pages, images {string.Join(",", pdf.Images.Select(static i => i.EstimatedTokens))}"));
+
+            AttachedDocument more = AttachedDocument.FromPage(new JObject { ["name"] = "x.pdf", ["format"] = "pdf", ["pages"] = 3, ["textlessPages"] = 9, ["text"] = "" }, "d1");
+            AttachedDocument none = AttachedDocument.FromPage(new JObject { ["name"] = "x.docx", ["format"] = "docx", ["text"] = "abc" }, "d1");
+            Check("no more pages without text than the PDF has pages; none unless the page says so",
+                  more.TextlessPages == 3 && none.TextlessPages == 0 && none.EstimatedTokens == 3, Invariant($"{more.TextlessPages} {none.TextlessPages} {none.EstimatedTokens}"));
+
+            AttachedDocument attached = Text(600);
+            long left = AttachmentRoom.Left([attached], contextLimit: 2000);
+            Check("the documents of a conversation may come to half the context limit", AttachmentRoom.Limit(2000) == 1000 && left == 400,
+                  Invariant($"limit {AttachmentRoom.Limit(2000)}, left {left}"));
+            Check("a document that fits what is left is taken, one that does not is too long",
+                  AttachmentRoom.Check(Text(400), left) == AttachmentRoom.Refusal.None && AttachmentRoom.Check(Text(401), left) == AttachmentRoom.Refusal.TooLong,
+                  Invariant($"{AttachmentRoom.Check(Text(400), left)} {AttachmentRoom.Check(Text(401), left)}"));
+
+            AttachedDocument scan = Scan(textChars: 100, textlessPages: 1), longScan = Scan(textChars: 500, textlessPages: 1);
+            Check("one that would fit but for its pages without text is refused as scanned; too long without them too: too long",
+                  AttachmentRoom.Check(scan, left) == AttachmentRoom.Refusal.Scanned && AttachmentRoom.Check(longScan, left) == AttachmentRoom.Refusal.TooLong &&
+                  AttachmentRoom.Check(scan, left: 5000) == AttachmentRoom.Refusal.None,
+                  Invariant($"{AttachmentRoom.Check(scan, left)} {AttachmentRoom.Check(longScan, left)} {AttachmentRoom.Check(scan, left: 5000)}"));
+            Check("nothing fits once the limit is below what is attached", AttachmentRoom.Check(Text(1), AttachmentRoom.Left([attached], contextLimit: 1000)) == AttachmentRoom.Refusal.TooLong,
+                  Invariant($"left {AttachmentRoom.Left([attached], contextLimit: 1000)}"));
+
+            string sha = new('a', 64), other = new('b', 64);
+            AttachedDocument first = File("a.pdf", sha), unknown = File("b.pdf", "not a digest");
+            Check("the same file - the same bytes, whatever its name - is found among the attached ones; one without a digest is like no other",
+                  first.Digest == sha && unknown.Digest.Length == 0 && ReferenceEquals(AttachmentRoom.Same([unknown, first], AttachedDocument.DigestOf(new JObject { ["name"] = "copy.pdf", ["digest"] = sha })), first) &&
+                  AttachmentRoom.Same([unknown, first], other) is null && AttachmentRoom.Same([unknown, first], AttachedDocument.DigestOf(new JObject { ["name"] = "c.pdf" })) is null &&
+                  AttachmentRoom.Same([unknown], unknown.Digest) is null,
+                  Invariant($"'{first.Digest}' '{unknown.Digest}'"));
+
+            static AttachedDocument File(string name, string digest)
+            {
+                return AttachedDocument.FromPage(new JObject { ["name"] = name, ["format"] = "pdf", ["text"] = "x", ["digest"] = digest }, "d1");
+            }
+
+            static AttachedDocument Text(int chars)
+            {
+                return AttachedDocument.FromPage(new JObject { ["name"] = "a.txt", ["format"] = "text", ["text"] = new string('x', chars) }, "d1");
+            }
+
+            static AttachedDocument Scan(int textChars, int textlessPages)
+            {
+                return AttachedDocument.FromPage(new JObject
+                {
+                    ["name"] = "s.pdf",
+                    ["format"] = "pdf",
+                    ["pages"] = textlessPages + 1,
+                    ["textlessPages"] = textlessPages,
+                    ["text"] = new string('x', textChars),
+                }, "d1");
+            }
+
+            static JObject PageImage(int index, bool textlessPage)
+            {
+                return new JObject { ["index"] = index, ["mediaType"] = "image/png", ["data"] = "AQ==", ["textlessPage"] = textlessPage };
+            }
         }
 
         // A request's turns (RequestRunner) against a fake server, with the task pane and PowerPoint as fakes (FakeView,

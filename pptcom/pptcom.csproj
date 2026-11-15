@@ -156,6 +156,7 @@
     <Compile Include="Polyfills\CompilerFeatureRequiredAttribute.cs" />
     <Compile Include="Documents\AttachedDocument.cs" />
     <Compile Include="Documents\AttachedImage.cs" />
+    <Compile Include="Documents\AttachmentRoom.cs" />
     <Compile Include="Documents\DocRead.cs" />
     <Compile Include="Documents\DocumentImages.cs" />
     <Compile Include="Documents\PendingDocuments.cs" />

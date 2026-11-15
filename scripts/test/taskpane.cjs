@@ -375,6 +375,29 @@ function continueButton() {
         log.children.map(e => e.className).join(" | "));
 }
 
+// A file that was not attached shows in red (alert), with the reason: as a note between requests, as a row of the
+// request's block while one runs. One that was attached is a side note like any other.
+function notAttached() {
+  const p = page();
+  const log = p.element("log");
+  p.log("DOC_ATTACHED", "d1", "a.pdf", "x");
+  p.log("DOC_NOT_ATTACHED", "b.pdf", { code: "DOC_FAILED_TOO_LONG", args: ["1", "2"] });
+  p.log("DOC_DISCARDED", "c.pdf");
+  const classes = log.children.map(e => e.className).join(" | ");
+  check("a file that was not attached shows in red, with the reason",
+        classes === "note | note alert | note alert" && log.children[1].textContent === "DOC_NOT_ATTACHED" && log.children[2].textContent === "DOC_DISCARDED",
+        classes + " / " + log.children.map(e => e.textContent).join(" | "));
+
+  p.submit("request");
+  p.log("USER_REQUEST", "request");
+  p.host({ type: "busy", value: true });
+  p.log("DOC_NOT_ATTACHED", "d.pdf", { code: "DOC_FAILED_BUSY", args: [] });
+  const rows = p.lastBlock().children[1].children;
+  const row = rows[rows.length - 1];
+  check("and while a request runs, as a row of its block, in red too",
+        !!row && row.className === "row extra alert" && row.children[0].textContent === "DOC_NOT_ATTACHED", row ? row.className : "(no row)");
+}
+
 // "ready" waits for docs.js as well as the texts: the add-in then sends at once what waited, files to convert among it,
 // and only docs.js takes those. docs.js is a module script, so it has run by DOMContentLoaded.
 async function readyWaitsForDocs() {
@@ -405,6 +428,7 @@ settingsStayOpen();
 newChat();
 continueButton();
 ends();
+notAttached();
 readyWaitsForDocs().then(proxyState).then(() => {
   console.log();
   console.log(failed === 0 ? `ALL PASSED (${passed})` : `${failed} FAILED, ${passed} passed`);
