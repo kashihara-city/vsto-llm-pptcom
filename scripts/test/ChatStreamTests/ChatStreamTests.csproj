@@ -52,6 +52,7 @@
     <Compile Include="..\..\..\pptcom\Agent\ToolResult.cs" />
     <Compile Include="..\..\..\pptcom\UI\PaneText.cs" />
     <Compile Include="..\..\..\pptcom\UI\RefusingProxy.cs" />
+    <Compile Include="..\..\..\pptcom\UI\SlideLock.cs" />
     <Compile Include="..\..\..\pptcom\Documents\AttachedDocument.cs" />
     <Compile Include="..\..\..\pptcom\Documents\AttachedImage.cs" />
     <Compile Include="..\..\..\pptcom\Documents\AttachmentRoom.cs" />

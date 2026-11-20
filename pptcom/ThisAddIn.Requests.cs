@@ -161,6 +161,7 @@ namespace Pptcom
             }
             IsBusy = true;
             _runPane = pane;
+            HoldSlides(pane);
             ShowBusy(pane);
             _cancel = new CancellationTokenSource();
             _windowGone = new CancellationTokenSource();
@@ -181,6 +182,7 @@ namespace Pptcom
             }
             finally
             {
+                ReleaseSlides();
                 IsBusy = false;
                 _runPane = null;
                 ShowBusy(running: null);

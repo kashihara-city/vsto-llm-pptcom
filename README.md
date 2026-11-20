@@ -169,6 +169,7 @@ PowerPoint
    │   ├─ Documents             添付資料の保持、docread、画像の変換
    │   ├─ AiTaskPaneControl     作業ウィンドウ（WebView2）の土台。DLL内のファイルを返す
    │   ├─ RefusingProxy         作業ウィンドウのWebView2に指定するプロキシ（このPC内のポート。来た通信をすべて断る）
+   │   ├─ SlideLock             依頼の間、そのプレゼンテーションのスライドを手で操作できなくする（スライドの入った窓を無効にする）
    │   ├─ PaneRibbon            ホームタブの「AIアシスタント」ボタン
    │   └─ PaneText / Texts      作業ウィンドウに送るメッセージ（コードと値）、アドインが自分で描く文言
    ├─ 結合したライブラリ         Newtonsoft.Json、WebView2 SDK（Core、WinForms）

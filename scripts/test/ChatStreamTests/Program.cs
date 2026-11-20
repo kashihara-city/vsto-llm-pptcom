@@ -56,6 +56,7 @@ namespace ChatStreamTests
             UserLocaleTests();
             PendingDocumentTests();
             AttachmentRoomTests();
+            SlideLockTests();
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
             return _fail == 0 ? 0 : 1;
@@ -846,6 +847,99 @@ namespace ChatStreamTests
                   full.State.ContextFull && full.Shows("CONVERSATION_COMPACTED") && full.Shows("AI_CONTEXT_FULL,REQUEST_DONE") && full.State.Turns == 4,
                   noNotes.Describe() + " | " + full.Describe());
         }
+
+        // Holding a presentation's slides while a request runs (SlideLock), on windows made here in the shape of
+        // PowerPoint's: a frame, a window between, the document window (here of the class Button) and a pane in it.
+        // The document window is disabled and enabled again, the frame around it never; one that something else
+        // disabled is left alone; the keyboard focus leaves the document window and comes back to it.
+        private static void SlideLockTests()
+        {
+            Console.WriteLine("== holding the slides of a window");
+            const string documentClass = "Button";
+            (IntPtr frame, IntPtr between, IntPtr document, IntPtr inside) = LikePowerPoint(documentClass);
+            (IntPtr otherFrame, _, IntPtr otherDocument, _) = LikePowerPoint(documentClass);
+            IntPtr bare = MakeWindow("Static", IntPtr.Zero);
+            try
+            {
+                Pptcom.UI.SlideLock held = new(documentClass);
+                _ = EnableWindow(otherDocument, enable: false); // by something else, before
+                int first = held.Lock([frame, otherFrame, bare]);
+                Check("the document window of a frame is disabled, the frame and what is around it are not",
+                      first == 1 && !IsWindowEnabled(document) && IsWindowEnabled(frame) && IsWindowEnabled(between) && held.Holds(frame) && held.Count == 1,
+                      Invariant($"held {first}; document {IsWindowEnabled(document)}, frame {IsWindowEnabled(frame)}, between {IsWindowEnabled(between)}"));
+                Check("a frame without a document window, and one whose document window was disabled already, are not held",
+                      !held.Holds(bare) && !held.Holds(otherFrame), Invariant($"{held.Holds(bare)} {held.Holds(otherFrame)}"));
+                Check("a frame held already is not held twice", held.Lock([frame]) == 0 && held.Count == 1, Invariant($"{held.Count}"));
+
+                held.Release();
+                Check("released, it is enabled again; what something else disabled stays disabled",
+                      IsWindowEnabled(document) && !IsWindowEnabled(otherDocument) && !held.Holds(frame) && held.Count == 0,
+                      Invariant($"document {IsWindowEnabled(document)}, the other {IsWindowEnabled(otherDocument)}"));
+
+                // The focus: only where this thread can take it at all (a session without a desktop cannot).
+                _ = SetFocus(inside);
+                bool taken = GetFocus() == inside;
+                held.Lock([frame]);
+                IntPtr during = GetFocus();
+                _ = SetFocus(inside);
+                IntPtr tried = GetFocus();
+                held.Release();
+                Check("the keyboard focus leaves a document window being held, cannot come back meanwhile, and returns to it after",
+                      !taken || (during == IntPtr.Zero && tried == IntPtr.Zero && GetFocus() == document),
+                      Invariant($"focus taken {taken}; during {during}, after trying {tried}, after {GetFocus()} (document {document})"));
+            }
+            finally
+            {
+                foreach (IntPtr window in new[] { frame, otherFrame, bare })
+                {
+                    _ = DestroyWindow(window);
+                }
+            }
+
+            static (IntPtr Frame, IntPtr Between, IntPtr Document, IntPtr Inside) LikePowerPoint(string documentClass)
+            {
+                IntPtr frame = MakeWindow("Static", IntPtr.Zero);
+                IntPtr between = MakeWindow("Static", frame);
+                IntPtr document = MakeWindow(documentClass, between);
+                return (frame, between, document, MakeWindow("Static", document));
+            }
+        }
+
+        // A window of a class Windows has from the start, never shown: a child of `parent`, or a window of its own.
+        private static IntPtr MakeWindow(string windowClass, IntPtr parent)
+        {
+            const uint child = 0x40000000, popup = 0x80000000;
+            IntPtr window = CreateWindowEx(0, windowClass, "", parent == IntPtr.Zero ? popup : child, 0, 0, 10, 10, parent, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            return window != IntPtr.Zero ? window : throw new InvalidOperationException("no window of the class " + windowClass);
+        }
+
+        [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "CreateWindowExW", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern IntPtr CreateWindowEx(uint exStyle, string windowClass, string name, uint style, int x, int y, int width, int height,
+                                                    IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+
+        [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool DestroyWindow(IntPtr window);
+
+        [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool IsWindowEnabled(IntPtr window);
+
+        [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool EnableWindow(IntPtr window, [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)] bool enable);
+
+        [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SetFocus(IntPtr window);
+
+        [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr GetFocus();
 
         // The proxy the task pane's browser is given (RefusingProxy): a port on this PC that answers 403 to whatever
         // is asked through it - a plain request, and the tunnel an https one needs - and keeps which hosts were asked

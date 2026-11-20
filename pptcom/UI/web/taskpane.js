@@ -273,13 +273,15 @@ function fill(select, items, selected, none) {
 // ---- messages from the add-in -------------------------------------------------------------------
 
 // `elsewhere`: the request runs in another window's pane (each window has its own). This one waits meanwhile: nothing
-// to send or stop here.
-function setBusy(on, elsewhere) {
+// to send or stop here. `locked`: the add-in keeps this window's slides from being edited by hand until the request
+// ends; a line above the input says so (body.locked), as nothing in PowerPoint itself shows it.
+function setBusy(on, elsewhere, locked) {
   busy = on;
   setSending(false);
   cancelling = false;
   const waiting = on && !!elsewhere;
   document.body.classList.toggle("busy", on);
+  document.body.classList.toggle("locked", on && !!locked);
   action.disabled = waiting;
   action.title = i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND_TITLE");
   action.setAttribute("aria-label", i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND"));
@@ -294,7 +296,7 @@ function setBusy(on, elsewhere) {
 const handlers = {
   log: m => onLog(m),
   status: m => { $("status").textContent = m.code ? i18n.t(m) : ""; },
-  busy: m => setBusy(!!m.value, !!m.elsewhere),
+  busy: m => setBusy(!!m.value, !!m.elsewhere, !!m.locked),
   retry: m => $("retry-bar").classList.toggle("show", !!m.value),
   // whether the conversation's last request stopped at the turn limit and can be carried on
   continue: m => showContinue(!!m.value),

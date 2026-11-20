@@ -128,6 +128,7 @@
   "STATUS_SERVER_ERROR": "Turn {0}: server error. Waiting for Retry",
   "STATUS_SERVER_UNREACHABLE": "Turn {0}: the endpoint cannot be reached. Waiting for Retry",
   "STATUS_BUSY_ELSEWHERE": "A request is running in another window",
+  "SLIDES_LOCKED": "Until the work is done, this presentation's slides cannot be edited by hand",
   "STATUS_CANCELLING": "Stopping...",
   "STATUS_RESENDING": "Sending the same request again...",
 

@@ -196,6 +196,9 @@ input[type=text]:focus, input[type=password]:focus, input[type=number]:focus, se
   text-overflow: ellipsis;
 }
 #status:not(:empty) { padding: 4px 12px; }
+/* while a request runs: the slides of this window cannot be edited by hand */
+#lock-note { flex: none; display: none; padding: 0 12px 4px; color: var(--warn); font-size: 12px; }
+body.locked #lock-note { display: block; }
 #retry-bar {
   flex: none;
   display: none;

@@ -128,6 +128,7 @@
   "STATUS_SERVER_ERROR": "ターン{0}: サーバエラー。再試行を待っています",
   "STATUS_SERVER_UNREACHABLE": "ターン{0}: 接続先に届きません。再試行を待っています",
   "STATUS_BUSY_ELSEWHERE": "別のウィンドウで依頼を実行しています",
+  "SLIDES_LOCKED": "作業が終わるまで、このプレゼンテーションのスライドは直接操作できません",
   "STATUS_CANCELLING": "中止しています...",
   "STATUS_RESENDING": "同じ内容を送り直しています...",
 

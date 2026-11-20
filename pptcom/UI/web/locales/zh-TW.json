@@ -128,6 +128,7 @@
   "STATUS_SERVER_ERROR": "第 {0} 回合：伺服器錯誤。等待重試",
   "STATUS_SERVER_UNREACHABLE": "第 {0} 回合：無法連到端點。等待重試",
   "STATUS_BUSY_ELSEWHERE": "另一個視窗正在執行要求",
+  "SLIDES_LOCKED": "作業完成前，無法直接操作這份簡報的投影片",
   "STATUS_CANCELLING": "正在停止...",
   "STATUS_RESENDING": "正在重新傳送相同的內容...",
 

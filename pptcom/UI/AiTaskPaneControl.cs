@@ -618,9 +618,10 @@ namespace Pptcom.UI
         // While busy the send button turns into the stop button and the settings are locked
         // (no switching endpoint/model in the middle of a request). `elsewhere`: the request runs in another
         // window's pane; this one only waits (no stop button, nothing to send meanwhile).
-        public void SetBusy(bool busy, bool elsewhere = false)
+        // `locked`: the slides of this pane's window cannot be edited by hand meanwhile (SlideLock); the page says so.
+        public void SetBusy(bool busy, bool elsewhere = false, bool locked = false)
         {
-            Post(new JObject { ["type"] = "busy", ["value"] = busy, ["elsewhere"] = elsewhere });
+            Post(new JObject { ["type"] = "busy", ["value"] = busy, ["elsewhere"] = elsewhere, ["locked"] = locked });
         }
     }
 }

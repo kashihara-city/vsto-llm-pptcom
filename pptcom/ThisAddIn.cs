@@ -531,6 +531,7 @@ namespace Pptcom
         private void ThisAddIn_Shutdown(object sender, System.EventArgs e)
         {
             _shuttingDown = true;
+            _slideLock.Release(); // a request still running does not leave the windows disabled
             foreach (WindowPane pane in _panes.Values)
             {
                 EndConversation(pane);

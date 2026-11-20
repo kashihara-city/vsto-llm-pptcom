@@ -129,7 +129,13 @@ namespace Pptcom
             _forFirstPane.Clear();
             if (IsBusy)
             {
-                control.SetBusy(busy: true, elsewhere: true);
+                // another window of the request's presentation, opened while it runs, is held like the others
+                if (_runPane is not null)
+                {
+                    HoldSlides(_runPane);
+                }
+
+                control.SetBusy(busy: true, elsewhere: true, locked: _slideLock.Holds(new IntPtr(hwnd)));
             }
 
             pane.Pane.Width = 320;
@@ -214,12 +220,55 @@ namespace Pptcom
             pane.Control.Dispose();
         }
 
-        // The request's pane shows its stop button, the others that a request runs elsewhere; null: none runs.
+        // The request's pane shows its stop button, the others that a request runs elsewhere; null: none runs. Each
+        // says whether its window's slides are held meanwhile (HoldSlides).
         private void ShowBusy(WindowPane? running)
         {
             foreach (WindowPane pane in _panes.Values)
             {
-                pane.Control.SetBusy(busy: running is not null, elsewhere: running is not null && !ReferenceEquals(pane, running));
+                pane.Control.SetBusy(busy: running is not null, elsewhere: running is not null && !ReferenceEquals(pane, running),
+                                     locked: running is not null && _slideLock.Holds(new IntPtr(pane.Hwnd)));
+            }
+        }
+
+        // While a request runs, the slides of its presentation cannot be edited by hand (SlideLock): the model works
+        // from what it saw of them, and a shape moved or deleted meanwhile would fail its next script or be overwritten
+        // by it. Every window of the presentation is held, from the request's start to its end, whatever ends it.
+        private readonly SlideLock _slideLock = new();
+
+        private void HoldSlides(WindowPane pane)
+        {
+            // a window's HWND is its document window, the one SlideLock disables
+            List<IntPtr> windows = [new IntPtr(pane.Hwnd)];
+            try
+            {
+                foreach (Microsoft.Office.Interop.PowerPoint.DocumentWindow window in ((Microsoft.Office.Interop.PowerPoint.Presentation)pane.Presentation).Windows)
+                {
+                    IntPtr other = new(window.HWND);
+                    if (!windows.Contains(other))
+                    {
+                        windows.Add(other);
+                    }
+                }
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                // its other windows could not be listed: the request's own is held at least
+            }
+
+            int held = _slideLock.Lock(windows);
+            if (held > 0)
+            {
+                LogToFile(string.Format(CultureInfo.InvariantCulture, "(the slides of {0} window(s) are held while the request runs)", held));
+            }
+        }
+
+        private void ReleaseSlides()
+        {
+            if (_slideLock.Count > 0)
+            {
+                _slideLock.Release();
+                LogToFile("(the slides are released)");
             }
         }
 

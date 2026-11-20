@@ -375,6 +375,23 @@ function continueButton() {
         log.children.map(e => e.className).join(" | "));
 }
 
+// While a request runs, the add-in keeps the slides of its window from being edited by hand; the page says so
+// (body.locked shows the line above the input) for as long as the add-in says it does, and not in a pane that only
+// waits for another window's request.
+function slidesLocked() {
+  const p = page();
+  p.host({ type: "busy", value: true, locked: true });
+  const during = p.bodyHas("locked");
+  p.host({ type: "busy", value: false });
+  check("the page says the slides are held while its request runs, and no longer once it has ended",
+        during && !p.bodyHas("locked"), "during=" + during + " after=" + p.bodyHas("locked"));
+  p.host({ type: "busy", value: true, elsewhere: true });
+  const waiting = p.bodyHas("locked");
+  p.host({ type: "busy", value: true, elsewhere: true, locked: true });
+  check("a pane that waits for another window's request says so only when its own window's slides are held too",
+        !waiting && p.bodyHas("locked"), "waiting=" + waiting + " same deck=" + p.bodyHas("locked"));
+}
+
 // A file that was not attached shows in red (alert), with the reason: as a note between requests, as a row of the
 // request's block while one runs. One that was attached is a side note like any other.
 function notAttached() {
@@ -429,6 +446,7 @@ newChat();
 continueButton();
 ends();
 notAttached();
+slidesLocked();
 readyWaitsForDocs().then(proxyState).then(() => {
   console.log();
   console.log(failed === 0 ? `ALL PASSED (${passed})` : `${failed} FAILED, ${passed} passed`);
