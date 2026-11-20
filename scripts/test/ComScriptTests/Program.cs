@@ -420,6 +420,15 @@ namespace ComScriptTests
             string read = DeckReader.Read(engine.Presentation, "", out _);
             Report("deck: pptread reads that deck after a switch", read == "Presentation: 0 slide(s), 720x540 pt.", read);
 
+            // Each script starts an entry of the application's undo history, so that Undo takes back one script.
+            int before = app.UndoEntries;
+            foreach (string script in new[] { "n = 1", "m = 2" })
+            {
+                engine.ExecuteScriptAsync(ComScriptParser.Parse(script, priorKnownIds: null, 2000)).GetAwaiter().GetResult();
+            }
+
+            Report("deck: each script is its own undo entry", app.UndoEntries - before == 2, Invariant($"{app.UndoEntries - before} new entries for 2 scripts"));
+
             ComProxyEngine none = new(new StubApp());
             string? error = null;
             try
@@ -1917,8 +1926,14 @@ namespace ComScriptTests
         internal sealed class StubApp
         {
             public StubDeck? Active;
+            public int UndoEntries;   // how often StartNewUndoEntry was called
 
             public StubDeck ActivePresentation => Active ?? throw new InvalidOperationException("no presentation is open");
+
+            public void StartNewUndoEntry()
+            {
+                UndoEntries++;
+            }
         }
 
         internal sealed class StubDeck

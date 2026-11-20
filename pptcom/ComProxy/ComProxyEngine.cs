@@ -407,6 +407,7 @@ namespace Pptcom.ComProxy
             {
                 MaxFailures = maxFailures,
             };
+            StartUndoEntry();
             _callTextLanguage = textLanguage;
             try
             {
@@ -422,6 +423,22 @@ namespace Pptcom.ComProxy
             }
 
             return result;
+        }
+
+        // A script is one entry of PowerPoint's undo history: the user's Undo takes back one script at a time.
+        // PowerPoint puts all that is done through the object model into one entry until it is told to start another
+        // (or the user does something by hand): without this, one Undo took back every script since the user's last
+        // own edit, those of earlier requests too.
+        private void StartUndoEntry()
+        {
+            try
+            {
+                ((dynamic)_application).StartNewUndoEntry();
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                // an application without it (a test's stand-in), or one that cannot now: the script runs all the same
+            }
         }
 
         private async Task RunLinesAsync(ComScriptParser.ParseResult parsed, ComScriptResult result, int maxFailures)
