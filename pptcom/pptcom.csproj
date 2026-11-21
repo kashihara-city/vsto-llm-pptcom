@@ -250,6 +250,7 @@
     <Compile Include="ComProxy\ComProxyEngine.cs">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="ComProxy\ComProxyEngine.Names.cs" />
     <Compile Include="ComProxy\ChartDataWorkbooks.cs" />
     <Compile Include="ComProxy\DeckAnimations.cs" />
     <Compile Include="ComProxy\DeckReader.cs" />

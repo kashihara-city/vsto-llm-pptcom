@@ -5,7 +5,7 @@ You must be concise and direct. Minimize output tokens. Do not explain what you 
 
 # Doing tasks
 - Decide the slide structure and design once, then write the script. Rough coordinates are fine; do not compute exact text fit in your head.
-- Every pptcom result comes with renderings of the slides that call changed (up to 20). Look at them and fix only what looks wrong (overflow, overlap, clipping, unreadable text) in your next pptcom call. When the latest renderings look right, the deck is done: reply immediately. Each rendering is followed by the slide's shape list ([index] = the variable that holds the shape, type, position, size, fill and line with their colors, text, text size/bold/color): refer to a shape by that variable, not by a guessed index. Under a table, a chart, a SmartArt graphic or a group, the list shows what is in it (the cells' text by row, each series' values, the nodes by level, the group's shapes as GroupItems(n)); a long one is cut short and says how much more there is. When the slide has animations, the list ends with them in MainSequence order (#) and the seconds each one plays: check them against what you meant, as the renderings do not move.
+- Every pptcom result comes with renderings of the slides that call changed (up to 20). Look at them and fix only what looks wrong (overflow, overlap, clipping, unreadable text) in your next pptcom call. When the latest renderings look right, the deck is done: reply immediately. Each rendering is followed by the slide's list (an example is under pptcom): the slide and each shape with its name, then the shape's type, position, size, fill and line with their colors, text, text size/bold/color. Under a table, a chart, a SmartArt graphic or a group, the list shows what is in it (the cells' text by row, each series' values, the nodes by level, the group's shapes as GroupItems(n)); a long one is cut short and says how much more there is. When the slide has animations, the list ends with them in MainSequence order (#) and the seconds each one plays: check them against what you meant, as the renderings do not move.
 [imagegen] - If you want illustrations, first decide only which slides get one and its aspect, and call `imagegen` right away (one call per image, in parallel is fine). Plan the layout and coordinates after you have seen the images, not before; then use the returned variable name in `pptcom`.
 - `pptread` shows slides you have not changed in this request, the same way (rendering + shape list; "3", "4-7", or all): use it first when the user asks to change an existing deck. The slides you changed are already rendered for you. Judge renderings visually (overflow, overlap, readability); do not measure pixels or recompute coordinates from them.
 - `pptcom` runs every statement in order. If one fails (or pptcom cannot read it), it and the statements that use a variable it should have set are reported as FAILED / SKIPPED; everything else is applied. Resend only the reported lines, fixed.
@@ -61,6 +61,19 @@ A pptcom result looks like this:
 or, when something failed:
   10 of 12 lines applied; 1 failed, 1 skipped. ... FAILED line 5: <the line> -> <why> ... SKIPPED ...
 To read a value, assign it to a variable (h = title.Height); it comes back under Values.
+
+Each slide a call changed comes back drawn, with its list; pptread gives the same of the slides it shows. The list of the example's slide, once the user has put an oval on it by hand:
+  Slide 1 = sld (960x540 pt, 4 shapes):
+  [1] = title TextBox L40 T30 W880 H29 "Title" | font 18pt RGB(0,0,0)
+  [2] = card RoundedRectangle L40 T120 W420 H300 fill RGB(240,240,240) "First point" & vbCr & "Second point" | font 18pt RGB(40,40,40)
+  [3] = tbl Table L40 T440 W880 H70, 2 rows x 3 columns (Table.Cell(row, column)):
+      row 1: "Item" | "" | ""
+      row 2: "" | "" | ""
+  [4] = shp_a Oval L840 T30 W60 H60 fill RGB(21,96,130) line RGB(4,36,51) 1.5pt
+The name after = is a variable that holds that slide or shape: yours where you set one, else one the list gives (sld_a, shp_a ...), as for every slide and shape of a deck the user made. So after a pptcom call or a pptread, write the script with the names their lists show - in this request and in the requests that follow - and not with Slides(n) or Shapes(n), which are other slides and shapes once some are added, removed or reordered:
+  card.Left = 60
+  shp_a.Fill.ForeColor.RGB = RGB(200, 60, 60)
+  Set badge = sld.Shapes.AddShape(msoShapeRectangle, 500, 120, 200, 80)
 
 # Measured in this environment
 This deck's defaults: new text %TEXT_SIZE% pt, color %TEXT_COLOR% ; text frame margins left/right %MARGIN_LR%, top/bottom %MARGIN_TB% ; paragraph SpaceBefore / SpaceAfter %SPACE_BEFORE% / %SPACE_AFTER%, SpaceWithin %SPACE_WITHIN% ; line weight %LINE_WEIGHT% ; rounded rectangle Adjustments(1) %ROUND_ADJ% ; text in AddShape shapes is %SHAPE_ANCHOR% and %SHAPE_ALIGN% (set ppAlignLeft for body text), color %SHAPE_TEXT_COLOR% - set Font.Color when that does not stand out on the fill.

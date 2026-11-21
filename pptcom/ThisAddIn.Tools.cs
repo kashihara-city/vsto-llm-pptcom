@@ -29,8 +29,16 @@ namespace Pptcom
 
         private const int MaxAutoRendersPerCall = 20;
 
+        // The variables that hold the deck's slides and shapes, for the lists of these slides: a slide or shape of
+        // them that no variable holds is given a name first (ComProxyEngine.GiveNames), which later scripts may use.
+        private static Dictionary<string, List<string>> NamesFor(ComProxyEngine engine, List<string> knownIds, IEnumerable<int> slides)
+        {
+            knownIds.AddRange(engine.GiveNames(slides));
+            return engine.ShapeVariables();
+        }
+
         // Renders the slides the last pptcom call changed and notes it in the tool result.
-        private static ToolResult WithAutoRenders(ComProxyEngine engine, ToolResult outcome)
+        private static ToolResult WithAutoRenders(ComProxyEngine engine, List<string> knownIds, ToolResult outcome)
         {
             List<int> touched = engine.TakeTouchedSlideIndexes();
             if (touched.Count == 0)
@@ -39,7 +47,7 @@ namespace Pptcom
             }
 
             List<int> rendered = [];
-            Dictionary<string, List<string>> variables = engine.ShapeVariables();
+            Dictionary<string, List<string>> variables = NamesFor(engine, knownIds, touched.Take(MaxAutoRendersPerCall));
             foreach (int n in touched)
             {
                 if (rendered.Count >= MaxAutoRendersPerCall)
@@ -115,7 +123,7 @@ namespace Pptcom
 
             return call.Name switch
             {
-                "pptread" => ReadSlidesTool(engine, args),
+                "pptread" => ReadSlidesTool(engine, knownIds, args),
                 "docread" => await ReadDocumentToolAsync(run, args).ConfigureAwait(true),
                 // not offered without an image model (ToolsFor); an earlier request's call may still be copied
                 AgentTools.ImageTool when run.ImageModel.Length == 0 => new ToolResult("imagegen is not available: no image model is chosen in the settings."),
@@ -126,7 +134,7 @@ namespace Pptcom
         }
 
         // pptread: renderings and shape lists of slides of the open deck.
-        private static ToolResult ReadSlidesTool(ComProxyEngine engine, JObject args)
+        private static ToolResult ReadSlidesTool(ComProxyEngine engine, List<string> knownIds, JObject args)
         {
             // "3", "4-7" or a bare number; missing = all slides.
             JToken? slideArg = args["slide"];
@@ -134,7 +142,7 @@ namespace Pptcom
             try
             {
                 ToolResult o = new(DeckReader.Read(engine.Presentation, slides, out List<int> toRender));
-                Dictionary<string, List<string>> variables = engine.ShapeVariables();
+                Dictionary<string, List<string>> variables = NamesFor(engine, knownIds, toRender);
                 foreach (int n in toRender)
                 {
                     AddRendering(engine, o, n);
@@ -276,7 +284,7 @@ namespace Pptcom
                 string values = engine.DescribeValues(parsed.DefinedIds);
                 string done = Invariant($"OK: {parsed.Lines.Count} lines executed. Defined: {ids}.") + changedText +
                               (values.Length > 0 ? " Values: " + values : "") + roundedText;
-                return WithNote(WithAutoRenders(engine, new ToolResult(done)
+                return WithNote(WithAutoRenders(engine, knownIds, new ToolResult(done)
                 {
                     LinesApplied = applied,
                     Script = scriptTime,
@@ -286,7 +294,7 @@ namespace Pptcom
             string partial = engine.DescribeValues(parsed.DefinedIds.Where(id => !notAssigned.Contains(id)));
             string failed = result.Describe() + (changedText.Length > 0 ? "\n" + changedText.Trim() : "") +
                             (partial.Length > 0 ? "\nValues set: " + partial : "") + roundedText;
-            return WithNote(WithAutoRenders(engine, new ToolResult(failed)
+            return WithNote(WithAutoRenders(engine, knownIds, new ToolResult(failed)
             {
                 LinesApplied = applied,
                 Script = scriptTime,

@@ -251,6 +251,7 @@ namespace ComScriptTests
             AcceptedStatementTests();
             ForLoopTests();
             ArrivingScriptTests();
+            GivenNameTests();
             RejectedStatementTests();
         }
 
@@ -352,6 +353,22 @@ namespace ComScriptTests
             {
                 return Convert.ToDouble(value, CultureInfo.InvariantCulture);
             }
+        }
+
+        // The names the lists give to slides and shapes that no variable holds (ComProxyEngine.GiveNames): letters only
+        // after the prefix, so that none looks like a number; and the keys the lists find a slide's and a shape's names by.
+        private static void GivenNameTests()
+        {
+            Report("given names: a, b ... z, aa, ab ... as the count goes up",
+                   ComProxyEngine.NameLetters(1) == "a" && ComProxyEngine.NameLetters(26) == "z" && ComProxyEngine.NameLetters(27) == "aa" &&
+                   ComProxyEngine.NameLetters(52) == "az" && ComProxyEngine.NameLetters(53) == "ba" && ComProxyEngine.NameLetters(703) == "aaa",
+                   ComProxyEngine.NameLetters(1) + "," + ComProxyEngine.NameLetters(27) + "," + ComProxyEngine.NameLetters(53) + "," + ComProxyEngine.NameLetters(703));
+            Report("given names: a slide's key is not a shape's, whatever the ids",
+                   ComProxyEngine.SlideKey(256) != ComProxyEngine.ShapeKey(256, 0) && ComProxyEngine.SlideKey(25) != ComProxyEngine.ShapeKey(2, 5) &&
+                   ComProxyEngine.SlideNamePrefix + ComProxyEngine.NameLetters(3) == "sld_c" && ComProxyEngine.ShapeNamePrefix + ComProxyEngine.NameLetters(3) == "shp_c",
+                   ComProxyEngine.SlideKey(256) + " / " + ComProxyEngine.ShapeKey(256, 0));
+            // a deck that cannot be read (no presentation bound): nothing is named, and nothing fails
+            Report("given names: none without a deck", new ComProxyEngine(new object()).GiveNames([1, 2]).Count == 0, "");
         }
 
         // For ... Next with numeric bounds is written out before parsing.
@@ -1401,10 +1418,11 @@ namespace ComScriptTests
             {
                 [ComProxyEngine.ShapeKey(256, 2)] = ["tbl"],
                 [ComProxyEngine.ShapeKey(256, 11)] = ["hd"],
+                [ComProxyEngine.SlideKey(256)] = ["sld", "sld_a"],
             };
             ShapeContents.Limits limits = new() { TableRows = 2, TableColumns = 2, TextChars = 5, ChartSeries = 1, ChartPoints = 3, SmartArtNodes = 2, GroupItems = 1, };
             string brief = DeckReader.Brief(new SelDeck(slide), 1, variables, limits);
-            string expected = "Slide 1 (720x540 pt, 4 shapes):\n" +
+            string expected = "Slide 1 = sld, sld_a (720x540 pt, 4 shapes):\n" +
                               "[1] = tbl Table L10 T20 W300 H100, 3 rows x 3 columns (Table.Cell(row, column)):\n" +
                               "    row 1: \"項目\" | \"内容\" | ... and 1 more column\n" +
                               "    row 2: \"署名\" | \"長い文章の\"... (9 characters) | ... and 1 more column\n" +

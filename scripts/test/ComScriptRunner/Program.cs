@@ -386,7 +386,7 @@ namespace ComScriptRunner
                     JObject reply;
                     try
                     {
-                        reply = DeckReply(req, (object)app, engine) ?? ScriptReply(req, engine, knownIds);
+                        reply = DeckReply(req, (object)app, engine, knownIds) ?? ScriptReply(req, engine, knownIds);
                     }
                     catch (Exception ex) when (Guard.IsRecoverable(ex))
                     {
@@ -408,7 +408,7 @@ namespace ComScriptRunner
 
         // The answer to a request about the deck (read, brief, image, export, open, probe,
         // save), or null for a script.
-        private static JObject? DeckReply(JObject req, dynamic app, ComProxyEngine engine)
+        private static JObject? DeckReply(JObject req, dynamic app, ComProxyEngine engine, List<string> knownIds)
         {
             if (req["read"] is JToken read)
             {
@@ -419,7 +419,8 @@ namespace ComScriptRunner
 
             if (req["brief"] is JToken brief)
             {
-                // The shape list the add-in sends with each slide rendering.
+                // The shape list the add-in sends with each slide rendering; as there, what has no name gets one first.
+                knownIds.AddRange(engine.GiveNames([(int)brief]));
                 return new JObject { ["text"] = DeckReader.Brief(engine.Presentation, (int)brief, engine.ShapeVariables()) };
             }
 

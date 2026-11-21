@@ -24,7 +24,7 @@ namespace Pptcom.ComProxy
     // Args/value: numbers/strings/bools are literal; a string starting with "$" refers to a
     // previous op's id; a string matching a known Office/PowerPoint enum member name (e.g.
     // "msoTrue") is resolved to that enum's underlying value.
-    internal sealed class ComProxyEngine
+    internal sealed partial class ComProxyEngine
     {
         private readonly Dictionary<string, object?> _handles = new(StringComparer.OrdinalIgnoreCase); // VBA: names ignore case; a value may be Nothing
         private readonly Func<string, string, Task<byte[]>>? _imageGenerator; // (prompt, "WxH"); null: no image generation
@@ -712,35 +712,18 @@ namespace Pptcom.ComProxy
             return key is null ? null : _shapeKeys.GetValue(value, _ => key);
         }
 
-        // The script's variables that hold a shape (or a table, by its shape), keyed by ShapeKey -
-        // so the slide inventories can say which variable is which shape, and the model need not
-        // guess Shapes(n). Read-only COM calls on objects the script already holds; shapes deleted
-        // since are skipped.
+        // The variables that hold a slide, a shape or a shape's table, keyed by SlideKey and ShapeKey - so the lists
+        // can say which variable is which slide and shape, and the model need not point at them by Slides(n) and
+        // Shapes(n) (the names the lists themselves give are among them: GiveNames). Read-only COM calls on objects
+        // the variables already hold; slides and shapes deleted since are skipped.
         public Dictionary<string, List<string>> ShapeVariables()
         {
             Dictionary<string, List<string>> map = new(StringComparer.Ordinal);
             foreach (KeyValuePair<string, object?> kv in _handles)
             {
-                if (IsSyntheticId(kv.Key) || kv.Value is null || !System.Runtime.InteropServices.Marshal.IsComObject(kv.Value))
+                if (HeldKey(kv.Key, kv.Value, out bool table) is not string key)
                 {
-                    continue;
-                }
-
-                string? type = ComSecurityPolicy.TryGetTypeName(kv.Value);
-                if (type != "Shape" && type != "Table")
-                {
-                    continue;
-                }
-
-                if (_deletedObjects.TryGetValue(kv.Value, out _))
-                {
-                    continue;
-                }
-
-                string? key = ShapeKeyOf(kv.Value, type);
-                if (key is null)
-                {
-                    continue; // deleted since
+                    continue; // another kind of value, or deleted since
                 }
 
                 if (!map.TryGetValue(key, out List<string> names))
@@ -748,7 +731,7 @@ namespace Pptcom.ComProxy
                     map[key] = names = [];
                 }
 
-                names.Add(type == "Table" ? kv.Key + " (its Table)" : kv.Key);
+                names.Add(table ? kv.Key + " (its Table)" : kv.Key);
             }
             foreach (List<string> names in map.Values)
             {
@@ -761,6 +744,11 @@ namespace Pptcom.ComProxy
         public static string ShapeKey(int slideId, int shapeId)
         {
             return Invariant($"{slideId}:{shapeId}");
+        }
+
+        public static string SlideKey(int slideId)
+        {
+            return Invariant($"{slideId}:slide");
         }
 
         // Parser-made names: chain hops (_h1) and With objects (_w1).

@@ -45,7 +45,7 @@ namespace Pptcom
             sb.Append("The deck now has ").Append(slides).Append(" slide(s). ").Append(run.Continues
                 ? "That request is above as it was sent, with its renderings" + (run.EarlierMessages > 0 ? "; the ones before it are shortened" : "") + ".\n\n"
                 : "The earlier requests above keep what was asked, the images made and your replies, not what the pptcom calls did or the renderings, " +
-                  "so they do not tell what the slides are now; their variables still exist. Look at a slide with pptread before you change it.\n\n")
+                  "so they do not tell what the slides are now; their variables still exist, and the lists say which slide and shape each one holds. Look at a slide with pptread before you change it.\n\n")
               .Append(selection).Append("Request:\n");
             return sb.ToString();
         }

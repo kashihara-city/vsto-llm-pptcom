@@ -241,7 +241,7 @@ namespace Pptcom.ComProxy
         // The shape list that goes with a slide rendering - what a VBA `For Each shp In
         // slide.Shapes: Debug.Print ...` loop would show - one line per shape, after the slide's size, and last the
         // shapes that overlap partly (Overlaps), when any do:
-        //   Slide 3 (960x540 pt, 14 shapes):
+        //   Slide 3 = sld_c (960x540 pt, 14 shapes):
         //   [13] = d2 RoundedRectangle L340 T412 W280 H100 fill RGB(255,255,255) line RGB(223,226,229) 1pt "品種は500以上" & vbCr & "..." | font 16pt RGB(40,40,40)
         //   Partly overlapping (fix it unless it is meant): [4] title and [6] badge, 120 x 6 pt
         // then square shapes standing out of a rounded rectangle's corners (CornerBands), text whose color is too close to
@@ -258,7 +258,8 @@ namespace Pptcom.ComProxy
             dynamic slide = pres.Slides(slideIndex);
             int shapeCount = (int)slide.Shapes.Count;
             StringBuilder sb = new();
-            sb.Append("Slide ").Append(slideIndex).Append(" (").Append(SizeText(pres)).Append(", ").Append(shapeCount).Append(" shapes):\n");
+            sb.Append("Slide ").Append(slideIndex).Append(' ').Append(SlideVariables(variables, (object)slide)).Append('(').Append(SizeText(pres)).Append(", ")
+              .Append(shapeCount).Append(" shapes):\n");
             SlideShapes drawn = SlideShapes.Read(pres, slide, variables);
             for (int i = 1; i <= shapeCount; i++)
             {
@@ -816,7 +817,8 @@ namespace Pptcom.ComProxy
             }
             else if (indexes.Count > 0)
             {
-                sb.Append("When the user sent this, PowerPoint showed slide ").Append(s.Slide).Append(" with this selected (as in pptread):\n");
+                sb.Append("When the user sent this, PowerPoint showed slide ").Append(s.Slide).Append(' ').Append(SlideVariables(variables, (object)slide!))
+                  .Append("with this selected (as in pptread):\n");
                 foreach (int i in indexes)
                 {
                     AppendShape(sb, (object)slide!, i, read: null, variables, ShapeContents.Limits.Default);
@@ -856,7 +858,8 @@ namespace Pptcom.ComProxy
             }
             else if (s.Slide > 0)
             {
-                sb.Append("When the user sent this, PowerPoint showed slide ").Append(s.Slide).Append(" (nothing selected).\n");
+                string shown = Guard.Try(() => SlideVariables(variables, (object)((dynamic)Deck(presentation)).Slides(s.Slide)), "");
+                sb.Append("When the user sent this, PowerPoint showed slide ").Append(s.Slide).Append(' ').Append(shown).Append("(nothing selected).\n");
                 summary = "(sent while slide " + s.Slide.ToString(CultureInfo.InvariantCulture) + " was shown)";
                 meaning = "that slide";
             }
@@ -871,6 +874,15 @@ namespace Pptcom.ComProxy
               .Append("; when they do, change only that. If more of the same would look better, suggest it in your reply once you are done. ")
               .Append("Ignore it when the request is about something else.\n\n");
             return sb.ToString();
+        }
+
+        // "= sld_c " when a variable holds this slide (or several: "= sld, sld_c "); "" when none does.
+        private static string SlideVariables(IDictionary<string, List<string>>? variables, dynamic slide)
+        {
+            int? id = Guard.Try<int?>(() => (int)slide.SlideID, fallback: null);
+            return variables is not null && id is int known && variables.TryGetValue(ComProxyEngine.SlideKey(known), out List<string> names) && names.Count > 0
+                ? "= " + string.Join(", ", names) + " "
+                : "";
         }
 
         // "= d2 " when the script holds this shape in a variable (or several: "= card, c1 ").

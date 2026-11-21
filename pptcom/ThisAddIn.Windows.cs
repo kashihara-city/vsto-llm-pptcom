@@ -473,7 +473,7 @@ namespace Pptcom
 
                 DeckReader.UserSelection s = DeckReader.ReadSelection(window);
                 ShowSelection(run.Pane, s);
-                string text = DeckReader.DescribeSelection(c.Engine.Presentation, s, c.Engine.ShapeVariables(), out string summary);
+                string text = DeckReader.DescribeSelection(c.Engine.Presentation, s, NamesFor(c.Engine, c.KnownIds, s.Slide > 0 ? [s.Slide] : []), out string summary);
                 run.Selection = summary.Length > 0 ? summary : null;
                 return text;
             }
