@@ -412,6 +412,9 @@ namespace Pptcom.Agent
                                                      LlmServerFailure.Stalled);
                     }
 
+                    // 中止 may have come while the line, already read, waited for this thread: nothing of it is done then.
+                    // A script's statements that the line completes would otherwise be run after the request was stopped.
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (line is null)
                     {
                         break;
@@ -464,9 +467,16 @@ namespace Pptcom.Agent
         private async Task<string?> NextLineAsync(StreamReader reader, CancellationTokenSource idle)
         {
             idle.CancelAfter(StreamIdleLimit);
-            string? line = await reader.ReadLineAsync().ConfigureAwait(false);
-            idle.CancelAfter(Timeout.InfiniteTimeSpan);
-            return line;
+            try
+            {
+                return await reader.ReadLineAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                // also when the read failed: a connection that broke is told as that, and not as silence because the
+                // limit ran out before the caller's thread heard of it
+                idle.CancelAfter(Timeout.InfiniteTimeSpan);
+            }
         }
 
         // Models the endpoint offers, with their mode when known ("chat", "image_generation", ...) and how many tokens they

@@ -215,31 +215,70 @@ namespace ChatStreamTests
 
             // The limit is for the server's silence, not for how long the thread the chat is awaited on - PowerPoint's
             // own, in the add-in - takes to come back to it: a reply whose rest came in time is read to its end.
-            Exception? free = ChatWhileThreadIsKept(TimeSpan.Zero), kept = ChatWhileThreadIsKept(TimeSpan.FromMilliseconds(800));
+            // The start of each reply is one long line: once the chat has read it there is nothing left that was read
+            // ahead, so the thread's other work begins while the chat waits for the first line of the rest.
+            static string LongLine(string anEvent)
+            {
+                return "data: " + anEvent + new string(' ', 24000) + "\n";
+            }
+
+            const string filler = "\n\n";
+            string start = LongLine(Content("a"));
+            string rest = Sse(Content("b")) + ":" + new string(' ', 40000) + filler + Sse(Finish("stop"), "[DONE]");
+            TimeSpan shortLimit = TimeSpan.FromMilliseconds(300), longer = TimeSpan.FromMilliseconds(800);
+            Exception? free = ChatWhileThreadIsKept(start, rest, TimeSpan.Zero, shortLimit).Ended, kept = ChatWhileThreadIsKept(start, rest, longer, shortLimit).Ended;
             Check("a reply whose rest came in time is read to its end, also when the thread it is awaited on was kept by other work for longer than the idle limit",
                   free is null && kept is null, "the thread free: " + Describe(free) + " / kept: " + Describe(kept));
+
+            // The connection breaks instead: that is what is told, not silence, however late the thread hears of it.
+            string broken = FakeServer.Reset.ToString();
+            Exception? brokenFree = ChatWhileThreadIsKept(start, broken, TimeSpan.Zero, shortLimit).Ended, brokenKept = ChatWhileThreadIsKept(start, broken, longer, shortLimit).Ended;
+            Check("a connection that broke is told as that, also when the thread was kept for longer than the idle limit before it heard of it",
+                  brokenFree is LlmServerException { Failure: LlmServerFailure.Error } && brokenKept is LlmServerException { Failure: LlmServerFailure.Error } &&
+                  brokenKept.Message.Contains("dropped"), "the thread free: " + Describe(brokenFree) + " / kept: " + Describe(brokenKept));
+
+            // 中止 pressed while a line that has come waits for the thread: nothing of that line is done. The line ends
+            // a statement of the first call's script, which would be handed over for running.
+            string scriptStart = LongLine(ToolCallDelta("pptcom", "{\"script\":\"x = 1", first: true));
+            string scriptRest = Sse(ToolCallDelta("pptcom", "\\ny = 2\\n", first: false)) + ":" + new string(' ', 40000) + filler + Sse(Finish("tool_calls"), "[DONE]");
+            KeptChat goesOn = ChatWhileThreadIsKept(scriptStart, scriptRest, TimeSpan.FromMilliseconds(250), idleLimit: null);
+            KeptChat stopped = ChatWhileThreadIsKept(scriptStart, scriptRest, TimeSpan.FromMilliseconds(250), idleLimit: null, stop: true);
+            Check("中止 while a line that has come waits for the thread: nothing of the line is done - no statement is handed over for running after the stop",
+                  goesOn.Ended is null && goesOn.HandedOver == 1 && stopped.Ended is OperationCanceledException && stopped.HandedOver == 0,
+                  Invariant($"not stopped: {Describe(goesOn.Ended)}, handed over {goesOn.HandedOver} time(s) / stopped: {Describe(stopped.Ended)}, handed over {stopped.HandedOver} time(s)"));
+        }
+
+        // How a chat awaited on one thread ended (null: it was read to its end), and how often a line of its first
+        // call's script was handed over for running.
+        private sealed class KeptChat
+        {
+            public Exception? Ended { get; set; }
+
+            public int HandedOver { get; set; }
         }
 
         // A chat awaited on a thread that runs one thing after the other, as a window's thread does. The server sends
-        // the start of the reply and waits; once the chat waits for the next line, the thread tells the server to send
-        // the rest and is then kept for `keptFor` by other work. The idle limit is 300 ms. The rest is longer than what
-        // is read ahead, so that reading on needs the connection. What ended the chat (null: it was read to its end).
-        private static Exception? ChatWhileThreadIsKept(TimeSpan keptFor)
+        // the start of the reply and waits; once the chat waits for the next line, the thread tells the server to go on
+        // - with `rest`, or with the connection reset when that is FakeServer.Reset - and is then kept for `keptFor` by
+        // other work, at whose end 中止 is pressed (`stop`). The parts are longer than what is read ahead, so that
+        // reading on needs the connection. `idleLimit`: null for the client's own.
+        private static KeptChat ChatWhileThreadIsKept(string start, string rest, TimeSpan keptFor, TimeSpan? idleLimit, bool stop = false)
         {
-            string start = Sse(Content("a")) + ":" + new string(' ', 24000) + "\n\n";
-            string rest = Sse(Content("b")) + ":" + new string(' ', 40000) + "\n\n" + Sse(Finish("stop"), "[DONE]");
             string whole = Http(200, start + rest);
             // made on this thread: the server's own work does not wait for the thread below
             using FakeServer server = new(whole.Substring(0, whole.Length - rest.Length) + FakeServer.Pause + rest, stall: false);
-            Exception? ended = null;
+            KeptChat result = new();
             Thread thread = new(() =>
             {
                 OneThreadContext context = new();
                 SynchronizationContext.SetSynchronizationContext(context);
-                OpenAiCompatibleClient client = new(server.Url, "", "test-model")
+                OpenAiCompatibleClient client = new(server.Url, "", "test-model");
+                if (idleLimit is TimeSpan limit)
                 {
-                    StreamIdleLimit = TimeSpan.FromMilliseconds(300),
-                };
+                    client.StreamIdleLimit = limit;
+                }
+
+                using CancellationTokenSource source = new();
                 bool told = false;
                 Task<ChatReply> chat = client.ChatAsync([new ChatMessage("user", "hi")], onProgress: progress =>
                 {
@@ -251,15 +290,23 @@ namespace ChatStreamTests
                         {
                             server.Resume();
                             Thread.Sleep(keptFor);
+                            if (stop)
+                            {
+                                source.Cancel();
+                            }
                         }, state: null);
                     }
-                }, cancellationToken: CancellationToken.None);
+                }, onArriving: progress =>
+                {
+                    result.HandedOver++;
+                    return Task.CompletedTask;
+                }, cancellationToken: source.Token);
                 context.RunUntil(chat);
-                ended = chat.Exception?.GetBaseException();
+                result.Ended = chat.IsCanceled ? new OperationCanceledException() : chat.Exception?.GetBaseException();
             });
             thread.Start();
             thread.Join();
-            return ended;
+            return result;
         }
 
         // A thread's work as a window's thread takes it: what is posted is run on the thread that calls RunUntil, one
@@ -1554,10 +1601,11 @@ namespace ChatStreamTests
 
         // HTTP exchanges on the loopback address, one connection each: reads a request, writes the next response,
         // and closes the connection - or, with `stall`, keeps the last one open and sends nothing more until the
-        // test is over. A response with Pause in it is sent up to there, and its rest once Resume is called.
+        // test is over. A response with Pause in it is sent up to there, and its rest once Resume is called; a rest
+        // that begins with Reset is not sent: the connection is reset instead.
         private sealed class FakeServer : IDisposable
         {
-            public const char Pause = '\u0001';
+            public const char Pause = '\u0001', Reset = '\u0002';
 
             private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
             private readonly TaskCompletionSource<bool> _release = new();
@@ -1599,6 +1647,14 @@ namespace ChatStreamTests
                         if (part > 0)
                         {
                             await _resume.Task.ConfigureAwait(true);
+                        }
+
+                        if (parts[part].Length > 0 && parts[part][0] == Reset)
+                        {
+                            // closed with nothing waited for: the peer gets a reset
+                            peer.Client.LingerState = new LingerOption(enable: true, seconds: 0);
+                            peer.Close();
+                            break;
                         }
 
                         byte[] bytes = Encoding.UTF8.GetBytes(parts[part]);
