@@ -444,6 +444,71 @@ namespace ComScriptTests
                    ComProxyEngine.SlideKey(256) + " / " + ComProxyEngine.ShapeKey(256, 0));
             // a deck that cannot be read (no presentation bound): nothing is named, and nothing fails
             Report("given names: none without a deck", new ComProxyEngine(new object()).GiveNames([1, 2]).Count == 0, "");
+
+            // A variable with the key of a listed shape is asked whether its shape is still there. PowerPoint's "the
+            // object does not exist" means it is gone: the variable is taken for deleted. Another failure - PowerPoint
+            // busy for a moment - says nothing about the shape: the variable is left out this once, and is asked again.
+            const int gone = unchecked((int)0x80048010), busy = unchecked((int)0x8001010A), noParent = unchecked((int)0x800A01A8);
+            ShapeStandIn there = new(failures: 0, code: 0), deleted = new(failures: int.MaxValue, gone), busyOnce = new(failures: 1, busy);
+            Report("given names: a shape is there, gone (PowerPoint says it does not exist; a Table's shape: object required), or could not be asked",
+                   ComProxyEngine.PresenceOf(there, table: false) == ComProxyEngine.Presence.There &&
+                   ComProxyEngine.PresenceOf(deleted, table: false) == ComProxyEngine.Presence.Gone &&
+                   ComProxyEngine.PresenceOf(new TableStandIn(noParent), table: true) == ComProxyEngine.Presence.Gone &&
+                   ComProxyEngine.PresenceOf(new ShapeStandIn(failures: 1, busy), table: false) == ComProxyEngine.Presence.NotKnown &&
+                   ComProxyEngine.PresenceOf(new TableStandIn(busy), table: true) == ComProxyEngine.Presence.NotKnown,
+                   ComProxyEngine.PresenceOf(deleted, table: false) + " / " + ComProxyEngine.PresenceOf(new TableStandIn(noParent), table: true));
+            ComProxyEngine names = new(new object());
+            static Dictionary<string, List<(object Value, bool Table)>> Holders(object shape)
+            {
+                return new(StringComparer.Ordinal) { ["256:2"] = [(shape, false)] };
+            }
+
+            bool heldThere = names.StillHeld(Holders(there), "256:2"), heldDeleted = names.StillHeld(Holders(deleted), "256:2");
+            bool heldBusy = names.StillHeld(Holders(busyOnce), "256:2"), heldAfter = names.StillHeld(Holders(busyOnce), "256:2");
+            Report("given names: a variable whose shape is gone is taken for deleted; one whose shape could not be asked this once is left out this once only",
+                   heldThere && !heldDeleted && names.TakenForDeleted(deleted) && !heldBusy && heldAfter && !names.TakenForDeleted(busyOnce) && !names.TakenForDeleted(there),
+                   Invariant($"there {heldThere}; deleted {heldDeleted}, taken for deleted {names.TakenForDeleted(deleted)}; busy once {heldBusy} then {heldAfter}, taken for deleted {names.TakenForDeleted(busyOnce)}"));
+            Report("given names: a variable that holds a shape's Table does not name the shape",
+                   !names.StillHeld(new(StringComparer.Ordinal) { ["256:2"] = [(new TableStandIn(0), true)] }, "256:2"), "");
+        }
+
+        // A shape as a variable holds it, for PresenceOf: reading its Id fails the first `failures` times with this
+        // HRESULT, as PowerPoint's object does when the shape is gone, or when PowerPoint is busy.
+        internal sealed class ShapeStandIn(int failures, int code)
+        {
+            private int _asked;
+
+            public int Id
+            {
+                get
+                {
+                    Answer();
+                    return 2;
+                }
+            }
+
+            // Fails the first `failures` times: with the exception COM interop makes of the HRESULT (no error object of
+            // the thread is looked at).
+            private void Answer()
+            {
+                if (++_asked <= failures)
+                {
+                    System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(code, new IntPtr(-1));
+                }
+            }
+        }
+
+        // A shape's Table: asked for the shape it is in, it fails with this HRESULT (0: it gives the shape).
+        internal sealed class TableStandIn(int code)
+        {
+            public object Parent
+            {
+                get
+                {
+                    System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(code, new IntPtr(-1));
+                    return new ShapeStandIn(failures: 0, code: 0);
+                }
+            }
         }
 
         // For ... Next with numeric bounds is written out before parsing.

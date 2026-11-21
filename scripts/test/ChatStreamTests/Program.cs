@@ -1114,6 +1114,9 @@ namespace ChatStreamTests
 
             public int Retries { get; private set; }
 
+            // How long showing the first status takes (a pane slow to take it).
+            public TimeSpan FirstStatusTakes { get; set; }
+
             public void Log(string code, params object[] args)
             {
                 Codes.Add(code);
@@ -1125,6 +1128,11 @@ namespace ChatStreamTests
 
             public void SetStatus(string code, params object[] args)
             {
+                if (FirstStatusTakes > TimeSpan.Zero)
+                {
+                    Thread.Sleep(FirstStatusTakes);
+                    FirstStatusTakes = TimeSpan.Zero;
+                }
             }
 
             public async Task WaitForRetryAsync(CancellationToken ct)
@@ -1332,6 +1340,11 @@ namespace ChatStreamTests
             Check("lines that take longer to run here than the idle limit do not end the reply: it is read to its end, with no 再試行",
                   string.Join(",", slow.Tools.Order) == "arrived,arrived,run pptcom" && slow.View.Retries == 0 && !slow.View.Codes.Contains("AI_SERVER_ERROR") && slow.Error is null,
                   string.Join(",", slow.Tools.Order) + " / " + slow.Describe());
+            Run slowStatus = await RunRequestAsync([slowLines, Reply("done")], view: new FakeView(cancelRetry: false) { FirstStatusTakes = TimeSpan.FromMilliseconds(700) },
+                                                   idleLimit: TimeSpan.FromMilliseconds(300)).ConfigureAwait(true);
+            Check("nor does showing the progress, when that takes longer than the idle limit",
+                  string.Join(",", slowStatus.Tools.Order) == "arrived,arrived,run pptcom" && slowStatus.View.Retries == 0 && !slowStatus.View.Codes.Contains("AI_SERVER_ERROR") &&
+                  slowStatus.Error is null, string.Join(",", slowStatus.Tools.Order) + " / " + slowStatus.Describe());
         }
 
         // A streamed reply that calls one tool, its arguments coming in pieces. `cut`: it ends without saying so.

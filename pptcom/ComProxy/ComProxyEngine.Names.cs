@@ -86,17 +86,30 @@ namespace Pptcom.ComProxy
         // before them: a shape made where one was deleted - by hand, by its slide's Delete, through another variable -
         // then has the key of a variable whose shape is gone. Such a variable named the new shape in the list, and a
         // script that used the name failed. So each variable with the key of a listed shape is asked whether its shape
-        // is still there; one whose shape is gone is taken for deleted from here on (the lists leave it out).
-        private bool StillHeld(Dictionary<string, List<(object Value, bool Table)>> holders, string key)
+        // is still there (PresenceOf). One whose shape is gone is taken for deleted from here on: the lists leave it
+        // out. One that could not be asked this time - PowerPoint answered with something else than "gone" - is left
+        // out of this list only: the key remembered for it is forgotten, so that it is read again when it is next asked
+        // for (ShapeKeyOf), and the variable is back in the lists once that works.
+        internal bool StillHeld(Dictionary<string, List<(object Value, bool Table)>> holders, string key)
         {
             if (!holders.TryGetValue(key, out List<(object Value, bool Table)> values))
             {
                 return false;
             }
 
-            foreach ((object value, bool table) in values.FindAll(static v => IsGone(v.Value, v.Table)))
+            foreach ((object value, bool table) in values.ToArray())
             {
-                if (!_deletedObjects.TryGetValue(value, out _))
+                Presence presence = PresenceOf(value, table);
+                if (presence == Presence.There)
+                {
+                    continue;
+                }
+
+                if (presence == Presence.NotKnown)
+                {
+                    _shapeKeys.Remove(value);
+                }
+                else if (!_deletedObjects.TryGetValue(value, out _))
                 {
                     _deletedObjects.Add(value, value);
                 }
@@ -107,16 +120,41 @@ namespace Pptcom.ComProxy
             return values.Exists(static v => !v.Table);
         }
 
-        // The shape a variable holds (for a Table: the shape it is in) is gone: PowerPoint refuses whatever is asked
-        // of its object.
-        private static bool IsGone(object value, bool table)
+        // Whether a variable's object is taken for deleted (the lists leave it out for good).
+        internal bool TakenForDeleted(object value)
         {
-            return Guard.Try(() =>
+            return _deletedObjects.TryGetValue(value, out _);
+        }
+
+        // PowerPoint's answers for an object that is no more: a deleted shape, or a shape of a deleted slide, asked for
+        // anything ("the object does not exist"), and a Table of such a shape asked for the shape it is in ("object
+        // required").
+        private const int ObjectDoesNotExist = unchecked((int)0x80048010), ObjectRequired = unchecked((int)0x800A01A8);
+
+        internal enum Presence
+        {
+            There,
+            Gone,
+            NotKnown, // it could not be asked now: another failure than PowerPoint's "gone"
+        }
+
+        // Whether the shape a variable holds (for a Table: the shape it is in) is still there.
+        internal static Presence PresenceOf(object value, bool table)
+        {
+            try
             {
                 dynamic shape = table ? ((dynamic)value).Parent : value;
                 _ = (int)shape.Id;
-                return false;
-            }, fallback: true);
+                return Presence.There;
+            }
+            catch (COMException ex) when (ex.ErrorCode is ObjectDoesNotExist or ObjectRequired)
+            {
+                return Presence.Gone;
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                return Presence.NotKnown;
+            }
         }
 
         // The key (SlideKey, ShapeKey) of the slide or shape a variable holds; null for any other value, and for a

@@ -369,8 +369,9 @@ namespace Pptcom.Agent
             }
         }
 
-        // The reply, read as it streams. 中止 (the token) and a stream that sends nothing for StreamIdleLimit both
-        // close the response, which ends the read: .NET Framework's ReadLineAsync takes no token. A stream that
+        // The reply, read as it streams. 中止 (the token) and a stream that sends nothing for StreamIdleLimit - while
+        // its next line is waited for - both close the response, which ends the read: .NET Framework's ReadLineAsync
+        // takes no token. A stream that
         // ends with neither [DONE] nor a finish_reason was cut off on the way, and is not a reply.
         private async Task<ChatReply> ReadChatAsync(HttpRequestMessage request, Func<HttpRequestMessage> makeRequest, JObject payload,
             StreamedReply streamed, Func<StreamProgress, Task>? onArriving, CancellationToken cancellationToken)
@@ -412,6 +413,11 @@ namespace Pptcom.Agent
                                                      LlmServerFailure.Stalled);
                     }
 
+                    // The idle limit is for the server's silence: it runs only while a line is waited for. What is done
+                    // here with a line that has come takes its own time - the progress shown, a script's statements run
+                    // as they arrive - and when that took longer than the limit, the response was closed and a reply the
+                    // server had sent whole was asked for again.
+                    idle.CancelAfter(Timeout.InfiniteTimeSpan);
                     if (line is null)
                     {
                         break;
@@ -441,10 +447,6 @@ namespace Pptcom.Agent
 
                     if (streamed.Add(chunk) && onArriving is not null)
                     {
-                        // The idle limit is for the server's silence: it does not run while the lines that have come
-                        // are run here. A script's statement that took longer than the limit closed the response, and
-                        // a reply the server had sent whole was asked for again.
-                        idle.CancelAfter(Timeout.InfiniteTimeSpan);
                         await onArriving(streamed.Progress).ConfigureAwait(true);
                     }
                 }
