@@ -127,14 +127,20 @@ namespace Pptcom.Agent
         // arguments arrive as fragments per call index and StreamedReply reassembles them. `onProgress`
         // is invoked on the calling thread's context as chunks arrive (reasoning chars count
         // too, so the UI can show life during the silent thinking phase).
+        // `onArriving`: waited for after each report of progress, with the reply as far as it has come: its tool calls
+        // can be run while they still arrive (RequestRunner). The stream is not read on meanwhile.
         public async Task<ChatReply> ChatAsync(
             List<ChatMessage> messages,
             JArray? tools = null,
             Action<StreamProgress>? onProgress = null,
+            Func<StreamProgress, Task>? onArriving = null,
             CancellationToken cancellationToken = default)
         {
-            return await StreamChatAsync(messages, tools, "auto", onProgress, cancellationToken).ConfigureAwait(true);
+            return await StreamChatAsync(messages, tools, "auto", onProgress, onArriving, cancellationToken).ConfigureAwait(true);
         }
+
+        // How long at least between two reports of a reply's progress (onProgress, onArriving).
+        public TimeSpan ProgressInterval { get; set; } = TimeSpan.FromMilliseconds(500);
 
         // The same, but the model may not call the tools (tool_choice "none"). They are sent all the same: they are part
         // of the prompt the server has cached, and a request without them would be read again from the start.
@@ -144,11 +150,11 @@ namespace Pptcom.Agent
             Action<StreamProgress>? onProgress = null,
             CancellationToken cancellationToken = default)
         {
-            return await StreamChatAsync(messages, tools, "none", onProgress, cancellationToken).ConfigureAwait(true);
+            return await StreamChatAsync(messages, tools, "none", onProgress, onArriving: null, cancellationToken).ConfigureAwait(true);
         }
 
         private async Task<ChatReply> StreamChatAsync(List<ChatMessage> messages, JArray? tools, string toolChoice, Action<StreamProgress>? onProgress,
-                                                      CancellationToken cancellationToken)
+                                                      Func<StreamProgress, Task>? onArriving, CancellationToken cancellationToken)
         {
             JObject payload = Payload(MessagesJson(messages), tools, toolChoice);
             HttpRequestMessage makeRequest()
@@ -157,11 +163,11 @@ namespace Pptcom.Agent
                 new StringContent(payload.ToString(Newtonsoft.Json.Formatting.None), Encoding.UTF8, "application/json"));
             }
 
-            StreamedReply streamed = new(onProgress);
+            StreamedReply streamed = new(onProgress, ProgressInterval);
             using HttpRequestMessage request = makeRequest();
             try
             {
-                return await ReadChatAsync(request, makeRequest, payload, streamed, cancellationToken).ConfigureAwait(true);
+                return await ReadChatAsync(request, makeRequest, payload, streamed, onArriving, cancellationToken).ConfigureAwait(true);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -366,7 +372,7 @@ namespace Pptcom.Agent
         // close the response, which ends the read: .NET Framework's ReadLineAsync takes no token. A stream that
         // ends with neither [DONE] nor a finish_reason was cut off on the way, and is not a reply.
         private async Task<ChatReply> ReadChatAsync(HttpRequestMessage request, Func<HttpRequestMessage> makeRequest, JObject payload,
-            StreamedReply streamed, CancellationToken cancellationToken)
+            StreamedReply streamed, Func<StreamProgress, Task>? onArriving, CancellationToken cancellationToken)
         {
             using (HttpResponseMessage resp = await SendAsync(request, makeRequest, payload, cancellationToken).ConfigureAwait(true))
             {
@@ -432,7 +438,10 @@ namespace Pptcom.Agent
                         continue;
                     }
 
-                    streamed.Add(chunk);
+                    if (streamed.Add(chunk) && onArriving is not null)
+                    {
+                        await onArriving(streamed.Progress).ConfigureAwait(true);
+                    }
                 }
 
                 if (!done && !streamed.HasFinishReason)

@@ -85,6 +85,8 @@ namespace Pptcom.UI
         public event EventHandler<SwitchEventArgs>? SaveProgressChanged;
         // Whether each window opens with its pane shown (AddinSettings.OpenPane).
         public event EventHandler<SwitchEventArgs>? OpenPaneChanged;
+        // Whether a script is run while the model still writes it (AddinSettings.RunAsArrives).
+        public event EventHandler<SwitchEventArgs>? RunAsArrivesChanged;
         // The context limit as typed (AddinSettings.ContextLimit), checked by the add-in.
         public event EventHandler<TextEventArgs>? ContextLimitChanged;
         // The image prompt chosen (AddinSettings.ImagePrompt), checked by the add-in.
@@ -375,6 +377,9 @@ namespace Pptcom.UI
                 case "openPane":
                     OpenPaneChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
                     break;
+                case "runAsArrives":
+                    RunAsArrivesChanged?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
+                    break;
                 case "contextLimit":
                     ContextLimitChanged?.Invoke(this, new TextEventArgs(value.Trim()));
                     break;
@@ -544,7 +549,7 @@ namespace Pptcom.UI
             Post(new JObject { ["type"] = "proxy", ["on"] = inUse });
         }
 
-        public void SetOptions(bool externalControl, bool saveProgress, bool openPane, int contextLimit, string imagePrompt)
+        public void SetOptions(bool externalControl, bool saveProgress, bool openPane, bool runAsArrives, int contextLimit, string imagePrompt)
         {
             Post(new JObject
             {
@@ -552,6 +557,7 @@ namespace Pptcom.UI
                 ["externalControl"] = externalControl,
                 ["saveProgress"] = saveProgress,
                 ["openPane"] = openPane,
+                ["runAsArrives"] = runAsArrives,
                 ["contextLimit"] = contextLimit,
                 ["imagePrompt"] = imagePrompt,
             });

@@ -38,6 +38,7 @@
     <Compile Include="..\..\..\pptcom\Agent\Compaction.cs" />
     <Compile Include="..\..\..\pptcom\Agent\ImageColors.cs" />
     <Compile Include="..\..\..\pptcom\Agent\ModelInfo.cs" />
+    <Compile Include="..\..\..\pptcom\Agent\PartialArguments.cs" />
     <Compile Include="..\..\..\pptcom\Agent\ToolCall.cs" />
     <Compile Include="..\..\..\pptcom\Agent\SlideImage.cs" />
     <Compile Include="..\..\..\pptcom\Agent\StreamProgress.cs" />

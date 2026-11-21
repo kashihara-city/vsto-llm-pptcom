@@ -97,6 +97,7 @@ namespace Pptcom
             control.ExternalControlChanged += (s, e) => OnExternalControlChanged(pane, e.On);
             control.SaveProgressChanged += (s, e) => OnSaveProgressChanged(pane, e.On);
             control.OpenPaneChanged += (s, e) => OnOpenPaneChanged(pane, e.On);
+            control.RunAsArrivesChanged += (s, e) => OnRunAsArrivesChanged(pane, e.On);
             control.ContextLimitChanged += (s, e) => OnContextLimitChanged(pane, e.Text);
             control.EndpointSubmitted += (s, e) => _ = RefreshModelsAsync(e.Text, pane);
             control.ChatModelSelected += (s, e) => OnChatModelSelected(pane, e.Text);
@@ -116,7 +117,7 @@ namespace Pptcom
             control.DocumentRemoved += (s, e) => OnDocumentRemoved(pane, e.Text);
             control.SetEndpoint(_settings.Endpoint);
             control.SetApiKeyState(_settings.HasApiKey);
-            control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit, _settings.ImagePrompt);
+            control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.RunAsArrives, _settings.ContextLimit, _settings.ImagePrompt);
             control.SetAbout(PaneText.Of("ABOUT_VERSION", BuildInfo.Version,
                                          PaneText.Join("DETAIL_SEPARATOR", BuildInfo.IsDebug ? [BuildInfo.Commit, "Debug"] : [BuildInfo.Commit])));
             control.SetModelChoices(_chatModels, _settings.ChatModel, _imageModels, _settings.ImageModel);

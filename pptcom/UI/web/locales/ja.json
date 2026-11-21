@@ -31,6 +31,8 @@
   "SETTINGS_OTHER": "その他",
   "SETTINGS_OPEN_PANE": "スライドを開いたらAIアシスタントを表示する",
   "SETTINGS_OPEN_PANE_HINT": "オフにすると、ホームタブの「AIアシスタント」ボタンで開くまで表示しません（これから開くウィンドウから）",
+  "SETTINGS_RUN_AS_ARRIVES": "AIが書いている途中から、スライドに反映する",
+  "SETTINGS_RUN_AS_ARRIVES_HINT": "オフにすると、AIが一連の操作を書き終えてから、まとめて反映します。オンのときに途中で中止すると、その回に反映した分はスライドに残ります（「元に戻す」で戻せます）",
   "SETTINGS_SAVE_PROGRESS": "途中経過を保存する",
   "SETTINGS_EXTERNAL_CONTROL": "他のプログラムからの操作を許可する",
   "SETTINGS_EXTERNAL_CONTROL_HINT": "同じユーザーで動く他のプログラムが、このアドインに依頼を送れるようになります（テスト用）",
@@ -103,6 +105,8 @@
   "EXTERNAL_CONTROL_OFF": "他のプログラムからの操作を止めました",
   "OPEN_PANE_ON": "これから開くウィンドウでは、AIアシスタントを自動で表示します",
   "OPEN_PANE_OFF": "これから開くウィンドウでは、AIアシスタントを自動で表示しません。ホームタブの「AIアシスタント」で開けます",
+  "RUN_AS_ARRIVES_ON": "次の依頼から、AIが書いている途中からスライドに反映します",
+  "RUN_AS_ARRIVES_OFF": "次の依頼から、AIが一連の操作を書き終えてから、まとめてスライドに反映します",
   "SAVE_PROGRESS_ON": "途中経過を {0} に保存します",
   "SAVE_PROGRESS_OFF": "途中経過の保存を止めました",
 
@@ -129,6 +133,7 @@
   "STATUS_SERVER_UNREACHABLE": "ターン{0}: 接続先に届きません。再試行を待っています",
   "STATUS_BUSY_ELSEWHERE": "別のウィンドウで依頼を実行しています",
   "SLIDES_LOCKED": "作業が終わるまで、このプレゼンテーションのスライドは直接操作できません",
+  "SCRIPT_PART_KEPT": "このターンで途中まで反映した分は、スライドに残っています（不要なら「元に戻す」で戻せます）",
   "STATUS_CANCELLING": "中止しています...",
   "STATUS_RESENDING": "同じ内容を送り直しています...",
 

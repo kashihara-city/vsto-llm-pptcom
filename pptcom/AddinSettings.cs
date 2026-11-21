@@ -8,7 +8,7 @@ namespace Pptcom
     //
     //   HKCU\Software\KashiharaCity\pptcom  endpoint, chat_model, image_model (REG_SZ; image_model empty: no images);
     //                                        image_prompt (REG_SZ, one of ImagePrompts, add-in only);
-    //                                        external_control, save_progress, open_pane (REG_DWORD 0/1, add-in only);
+    //                                        external_control, save_progress, open_pane, run_as_arrives (REG_DWORD 0/1, add-in only);
     //                                        context_limit (REG_DWORD, tokens, add-in only);
     //                                        AppVersion (REG_SZ, the installed version, written by the MSI) and
     //                                        LatestVersion (REG_SZ, the version an administrator hands out by group
@@ -46,6 +46,10 @@ namespace Pptcom
         // OpenPane: each presentation window opens with its task pane shown (on unless the user turns it off: the
         // pane always opened before this setting). Off, the pane waits hidden for the ribbon's AIアシスタント button.
         public bool OpenPane = true;
+        // RunAsArrives: a pptcom script is run line by line while the model still writes it, and taken back when its
+        // reply does not arrive whole (ThisAddIn.Streaming.cs). On unless the user turns it off; off, every script is
+        // run when its reply is whole.
+        public bool RunAsArrives = true;
         // ContextLimit: when a turn's prompt passes this many tokens, the request's conversation is shortened after it
         // (ThisAddIn.CompactAsync). Set to three quarters of what the chat model takes in when the model is chosen
         // (ThisAddIn.SetContextLimitFromModel), DefaultContextLimit when the endpoint does not say; the user may change it.
@@ -89,6 +93,7 @@ namespace Pptcom
                     s.ExternalControl = key.GetValue("external_control") is int ec && ec != 0;
                     s.SaveProgress = key.GetValue("save_progress") is int sp && sp != 0;
                     s.OpenPane = key.GetValue("open_pane") is not int op || op != 0;
+                    s.RunAsArrives = key.GetValue("run_as_arrives") is not int ra || ra != 0;
                     if (key.GetValue("context_limit") is int cl && cl >= MinContextLimit && cl <= MaxContextLimit)
                     {
                         s.ContextLimit = cl;
@@ -117,6 +122,7 @@ namespace Pptcom
                 key.SetValue("external_control", ExternalControl ? 1 : 0, RegistryValueKind.DWord);
                 key.SetValue("save_progress", SaveProgress ? 1 : 0, RegistryValueKind.DWord);
                 key.SetValue("open_pane", OpenPane ? 1 : 0, RegistryValueKind.DWord);
+                key.SetValue("run_as_arrives", RunAsArrives ? 1 : 0, RegistryValueKind.DWord);
                 if (ContextLimitSaved)
                 {
                     key.SetValue("context_limit", ContextLimit, RegistryValueKind.DWord);

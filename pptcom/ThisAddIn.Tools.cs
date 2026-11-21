@@ -250,10 +250,17 @@ namespace Pptcom
             // The text it writes gets the language the call names; a call that names none (or no language) runs all the
             // same, its text left as PowerPoint tagged it, and its result ends with a note on what was missing
             // (MissingArgumentsNote), as it does for a call without its notice to the user.
-            string notGiven = ComProxyEngine.MissingArgumentsNote(TextOf(args[RequestRunner.NoticeArgument]), TextOf(args["language"]));
             Stopwatch watch = Stopwatch.StartNew();
             ComScriptResult result = await engine.ExecuteScriptAsync(parsed, textLanguage: ComProxyEngine.TextLanguageOfTag(TextOf(args["language"]))).ConfigureAwait(true);
-            TimeSpan scriptTime = watch.Elapsed;
+            return ScriptOutcome(engine, knownIds, args, parsed, result, watch.Elapsed);
+        }
+
+        // What a pptcom call that ran - at once, or as it arrived (DeckTools.StreamAsync) - tells the model, with the
+        // renderings of the slides it changed.
+        private static ToolResult ScriptOutcome(ComProxyEngine engine, List<string> knownIds, JObject args, ComScriptParser.ParseResult parsed,
+                                                ComScriptResult result, TimeSpan scriptTime)
+        {
+            string notGiven = ComProxyEngine.MissingArgumentsNote(TextOf(args[RequestRunner.NoticeArgument]), TextOf(args["language"]));
             knownIds.AddRange(parsed.DefinedIds.Where(id => !knownIds.Contains(id) && engine.TryGetHandle(id, out _)));
             int applied = result.Count(ComLineStatus.Applied);
             // Defined: what this call made; Changed: what it did to objects from earlier calls (or

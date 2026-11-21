@@ -465,7 +465,7 @@ namespace Pptcom
             if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int limit) ||
                 limit < AddinSettings.MinContextLimit || limit > AddinSettings.MaxContextLimit)
             {
-                pane.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit, _settings.ImagePrompt);
+                pane.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.RunAsArrives, _settings.ContextLimit, _settings.ImagePrompt);
                 pane.Control.Log("CONTEXT_LIMIT_INVALID", RequestRunner.Tokens(AddinSettings.MinContextLimit), RequestRunner.Tokens(AddinSettings.MaxContextLimit));
                 return;
             }
@@ -613,7 +613,7 @@ namespace Pptcom
         {
             foreach (WindowPane p in _panes.Values.Where(p => !ReferenceEquals(p, except)))
             {
-                p.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.ContextLimit, _settings.ImagePrompt);
+                p.Control.SetOptions(_settings.ExternalControl, _settings.SaveProgress, _settings.OpenPane, _settings.RunAsArrives, _settings.ContextLimit, _settings.ImagePrompt);
             }
         }
 
@@ -624,6 +624,15 @@ namespace Pptcom
             _settings.Save();
             ShowOptions(except: pane);
             pane.Control.Log(on ? "OPEN_PANE_ON" : "OPEN_PANE_OFF");
+        }
+
+        // Applies to the requests sent from now on (the settings cannot be changed while one runs).
+        private void OnRunAsArrivesChanged(WindowPane pane, bool on)
+        {
+            _settings.RunAsArrives = on;
+            _settings.Save();
+            ShowOptions(except: pane);
+            pane.Control.Log(on ? "RUN_AS_ARRIVES_ON" : "RUN_AS_ARRIVES_OFF");
         }
 
         private void OnExternalControlChanged(WindowPane pane, bool on)

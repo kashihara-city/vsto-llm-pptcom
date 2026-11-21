@@ -403,26 +403,66 @@ namespace Pptcom.ComProxy
         // text gets it once the script has run (ApplyTextLanguage). Without one, the text stays as PowerPoint tagged it.
         public async Task<ComScriptResult> ExecuteScriptAsync(ComScriptParser.ParseResult parsed, int maxFailures = DefaultMaxFailures, int? textLanguage = null)
         {
-            ComScriptResult result = new()
-            {
-                MaxFailures = maxFailures,
-            };
-            StartUndoEntry();
-            _callTextLanguage = textLanguage;
+            ScriptRun run = BeginScript(maxFailures, textLanguage);
             try
             {
-                await RunLinesAsync(parsed, result, maxFailures).ConfigureAwait(true);
+                await RunAsync(run, parsed).ConfigureAwait(true);
             }
             finally
             {
-                // The text the script wrote gets its language before the slides are rendered.
-                ApplyTextLanguage();
-                // A chart's data the script opened does not stay open in Excel after it (ChartDataWorkbooks).
-                await CloseChartDataAsync().ConfigureAwait(true);
-                FlushUsage();
+                await EndScriptAsync(run, textLanguage).ConfigureAwait(true);
             }
 
-            return result;
+            return run.Result;
+        }
+
+        // A script on its way: what its statements came to so far, and what the ones still to come must know of them.
+        // One made by BeginScript is run with RunAsync - once with the whole script, or again and again with a longer
+        // part of it while the model still writes it (ComScriptParser.RunnablePrefix) - and ended with EndScriptAsync.
+        internal sealed class ScriptRun(int maxFailures)
+        {
+            public ComScriptResult Result { get; } = new() { MaxFailures = maxFailures };
+
+            // Statements dealt with: run, failed, skipped or left out.
+            public int Done => Result.Lines.Count;
+
+            internal int MaxFailures { get; } = maxFailures;
+
+            internal HashSet<string> Poisoned { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+            internal HashSet<string> Causes { get; } = new(StringComparer.Ordinal);
+
+            internal int Failures { get; set; }
+        }
+
+        // `allText`: the text the script writes is noted whatever language is named now: one that arrives with the
+        // script may be named only at its end (EndScriptAsync).
+        public ScriptRun BeginScript(int maxFailures = DefaultMaxFailures, int? textLanguage = null, bool allText = false)
+        {
+            StartUndoEntry();
+            _callTextLanguage = textLanguage;
+            _noteAllText = allText;
+            _lastTouched = null;
+            return new ScriptRun(maxFailures);
+        }
+
+        // Runs the statements of `parsed` that the run has not come to: all of them, or those after the ones a shorter
+        // part of the same script had.
+        public async Task RunAsync(ScriptRun run, ComScriptParser.ParseResult parsed)
+        {
+            await RunLinesAsync(parsed, run).ConfigureAwait(true);
+        }
+
+        public async Task<ComScriptResult> EndScriptAsync(ScriptRun run, int? textLanguage)
+        {
+            _callTextLanguage = textLanguage;
+            // The text the script wrote gets its language before the slides are rendered.
+            ApplyTextLanguage();
+            _noteAllText = false;
+            // A chart's data the script opened does not stay open in Excel after it (ChartDataWorkbooks).
+            await CloseChartDataAsync().ConfigureAwait(true);
+            FlushUsage();
+            return run.Result;
         }
 
         // A script is one entry of PowerPoint's undo history: the user's Undo takes back one script at a time.
@@ -441,14 +481,14 @@ namespace Pptcom.ComProxy
             }
         }
 
-        private async Task RunLinesAsync(ComScriptParser.ParseResult parsed, ComScriptResult result, int maxFailures)
+        private async Task RunLinesAsync(ComScriptParser.ParseResult parsed, ScriptRun run)
         {
-            HashSet<string> poisoned = new(StringComparer.OrdinalIgnoreCase);
-            HashSet<string> causes = new(StringComparer.Ordinal);
-            int failures = 0;
+            ComScriptResult result = run.Result;
+            HashSet<string> poisoned = run.Poisoned, causes = run.Causes;
+            int maxFailures = run.MaxFailures;
 
             Dictionary<int, List<JObject>> opsByLine = OpsByLine(parsed);
-            for (int line = 1; line <= parsed.Lines.Count; line++)
+            for (int line = run.Done + 1; line <= parsed.Lines.Count; line++)
             {
                 if (!opsByLine.TryGetValue(line, out List<JObject> lineOps))
                 {
@@ -471,7 +511,7 @@ namespace Pptcom.ComProxy
                 lr.Assigns.AddRange(writes.Where(static x => !IsSyntheticId(x)).Distinct(StringComparer.OrdinalIgnoreCase));
                 result.Lines.Add(lr);
 
-                if (causes.Count >= maxFailures || failures >= maxFailures * 5)
+                if (causes.Count >= maxFailures || run.Failures >= maxFailures * 5)
                 {
                     lr.Status = ComLineStatus.NotRun;
                     poisoned.UnionWith(writes);
@@ -485,7 +525,7 @@ namespace Pptcom.ComProxy
                     lr.NotParsed = true;
                     lr.Error = "not run (could not be read): " + parseError.Message;
                     lr.Cause = parseError.Cause;
-                    failures++;
+                    run.Failures++;
                     causes.Add(parseError.Cause);
                     poisoned.UnionWith(writes);
                     continue;
@@ -503,7 +543,7 @@ namespace Pptcom.ComProxy
                 string? cause = await RunLineAsync(lr, lineOps).ConfigureAwait(true);
                 if (cause is not null)
                 {
-                    failures++;
+                    run.Failures++;
                     causes.Add(cause);
                     poisoned.UnionWith(writes);
                 }
@@ -1590,6 +1630,9 @@ namespace Pptcom.ComProxy
         // The language of the text the call running writes, as its caller named it; null: none named.
         private int? _callTextLanguage;
 
+        // The text written is noted even while no language is named: the call's end may name one (BeginScript).
+        private bool _noteAllText;
+
         // The language a call names for the text it writes, from its tag ("ja-JP", "zh-TW", "en-US"; "ja" and "en" stand
         // for their usual regions): PowerPoint's id of it (an LCID), or null for what names no one language - no tag, a
         // name that is none ("Japanese"), a tag Windows does not know, and "zh" alone, as Traditional and Simplified
@@ -1667,7 +1710,7 @@ namespace Pptcom.ComProxy
         // `typeName`: the COM type name of the op's target, as the caller has it.
         private void NoteTextWrite(string? action, string? member, object targetObj, string? typeName)
         {
-            if (_callTextLanguage is null || !WritesText(action, typeName, member))
+            if ((_callTextLanguage is null && !_noteAllText) || !WritesText(action, typeName, member))
             {
                 return;
             }
@@ -1739,6 +1782,7 @@ namespace Pptcom.ComProxy
                 _changedSlides.Add(slide);
             }
 
+            _lastTouched = slide;
             foreach (object s in _touchedSlides)
             {
                 if (ReferenceEquals(s, slide))
@@ -1748,6 +1792,27 @@ namespace Pptcom.ComProxy
             }
 
             _touchedSlides.Add(slide);
+        }
+
+        // The slide the script running changed last, by its place in the deck now; null when it has changed none yet,
+        // or that slide is gone. For showing the user the slide being worked on.
+        private object? _lastTouched;
+
+        public int? LastTouchedSlideIndex()
+        {
+            if (_lastTouched is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return (int)((dynamic)_lastTouched).SlideIndex;
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                return null; // the slide was deleted
+            }
         }
 
         // The SlideIDs of the slides changed since the last call (one deleted since is left out), forgetting them; null

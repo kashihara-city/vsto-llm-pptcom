@@ -18,19 +18,25 @@ namespace Pptcom.Agent
         private readonly StringBuilder _reasoning = new();
         private readonly SortedDictionary<int, ToolCall> _toolSlots = [];
         private readonly Dictionary<int, StringBuilder> _toolArgs = [];
-        private readonly StreamProgress _progress = new();
         private readonly DateTime _started = DateTime.UtcNow;
         private readonly Action<StreamProgress>? _onProgress;
+        private readonly TimeSpan _reportEvery;
         private DateTime _lastReport = DateTime.MinValue;
 
-        public StreamedReply(Action<StreamProgress>? onProgress)
+        // `reportEvery`: how long at least between two reports of how far the reply has come (Add).
+        public StreamedReply(Action<StreamProgress>? onProgress, TimeSpan reportEvery)
         {
             _onProgress = onProgress;
-            _progress.PartialToolCalls = () => [.. _toolSlots.Select(kv => new ToolCall { Id = kv.Value.Id, Name = kv.Value.Name, Arguments = _toolArgs[kv.Key].ToString() })];
+            _reportEvery = reportEvery;
+            Progress.PartialToolCalls = () => [.. _toolSlots.Select(kv => new ToolCall { Id = kv.Value.Id, Name = kv.Value.Name, Arguments = _toolArgs[kv.Key].ToString() })];
         }
 
-        // One event (the JSON of a "data:" line). `onProgress` hears of it at most every 500 ms.
-        public void Add(JObject chunk)
+        // How far the reply has come, as the last report had it.
+        public StreamProgress Progress { get; } = new();
+
+        // One event (the JSON of a "data:" line). `onProgress` hears of it at most every `reportEvery`; true when this
+        // event was reported (the reader then lets what runs the reply's tool calls as they arrive have its turn).
+        public bool Add(JObject chunk)
         {
             // LiteLLM reports a backend failure after the 200 header as an error event.
             if (chunk["error"] is JObject error)
@@ -52,7 +58,7 @@ namespace Pptcom.Agent
 
             if (chunk["choices"] is not JArray choices)
             {
-                return;
+                return false;
             }
 
             foreach (JToken choice in choices)
@@ -69,12 +75,15 @@ namespace Pptcom.Agent
                 }
             }
 
-            if (_onProgress is not null && (DateTime.UtcNow - _lastReport).TotalMilliseconds > 500)
+            if (DateTime.UtcNow - _lastReport < _reportEvery)
             {
-                _progress.Elapsed = DateTime.UtcNow - _started;
-                _onProgress(_progress);
-                _lastReport = DateTime.UtcNow;
+                return false;
             }
+
+            Progress.Elapsed = DateTime.UtcNow - _started;
+            _onProgress?.Invoke(Progress);
+            _lastReport = DateTime.UtcNow;
+            return true;
         }
 
         // Whether the server said why the reply ended ("stop", "tool_calls", "length"): the reply is complete.
@@ -83,12 +92,12 @@ namespace Pptcom.Agent
         // The reply once the stream has ended.
         public ChatReply Finish()
         {
-            _progress.Elapsed = DateTime.UtcNow - _started;
-            _onProgress?.Invoke(_progress);
+            Progress.Elapsed = DateTime.UtcNow - _started;
+            _onProgress?.Invoke(Progress);
 
             _reply.Content = _content.ToString();
             _reply.Reasoning = _reasoning.ToString();
-            _reply.Elapsed = _progress.Elapsed;
+            _reply.Elapsed = Progress.Elapsed;
             foreach (KeyValuePair<int, ToolCall> kv in _toolSlots)
             {
                 ToolCall tc = kv.Value;
@@ -148,13 +157,13 @@ namespace Pptcom.Agent
             if (piece.Length > 0)
             {
                 _content.Append(piece);
-                _progress.ContentChars += piece.Length;
+                Progress.ContentChars += piece.Length;
             }
 
             if (r.Length > 0)
             {
                 _reasoning.Append(r);
-                _progress.ReasoningChars += r.Length;
+                Progress.ReasoningChars += r.Length;
             }
 
             if (delta["tool_calls"] is JArray calls)
@@ -194,7 +203,7 @@ namespace Pptcom.Agent
                 if (args.Length > 0)
                 {
                     _toolArgs[index].Append(args);
-                    _progress.ToolArgChars += args.Length;
+                    Progress.ToolArgChars += args.Length;
                 }
             }
         }

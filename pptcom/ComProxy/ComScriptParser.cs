@@ -649,9 +649,7 @@ namespace Pptcom.ComProxy
             foreach (string raw in rawLines)
             {
                 string code = StripComment(raw).TrimEnd();
-                bool continues = code.Length >= 2 && code[code.Length - 1] == '_' && char.IsWhiteSpace(code[code.Length - 2])
-                                 && code.Count(static c => c == '"') % 2 == 0;
-                if (continues)
+                if (Continues(code))
                 {
                     pending = (pending ?? "") + code.Substring(0, code.Length - 1);
                     continue;
@@ -663,6 +661,60 @@ namespace Pptcom.ComProxy
             {
                 yield return pending + "_";
             }
+        }
+
+        // A line's code (its comment removed, trimmed at the end) goes on in the next line.
+        private static bool Continues(string code)
+        {
+            return code.Length >= 2 && code[code.Length - 1] == '_' && char.IsWhiteSpace(code[code.Length - 2])
+                   && code.Count(static c => c == '"') % 2 == 0;
+        }
+
+        // Of a script still being written, the leading lines that can be run now, as text: whole lines only (the last
+        // one counts when `complete` says the script is all there), none that goes on in a line still to come, and
+        // nothing from a For on whose Next has not come - a loop is written out whole before any of it runs. Parsed by
+        // itself, this part gives the statements the whole script begins with (a With left open at its end goes on
+        // into what follows), so they need not run again when more of it is parsed.
+        public static string RunnablePrefix(string scriptSoFar, bool complete)
+        {
+            string[] lines = scriptSoFar.Replace("\r\n", "\n").Split('\n');
+            int whole = complete ? lines.Length : lines.Length - 1;
+            int runnable = 0, depth = 0;
+            string? pending = null;
+            for (int i = 0; i < whole; i++)
+            {
+                string code = StripComment(lines[i]).TrimEnd();
+                if (Continues(code))
+                {
+                    pending = (pending ?? "") + code.Substring(0, code.Length - 1);
+                    continue;
+                }
+
+                string logical = ((pending ?? "") + code).Trim();
+                pending = null;
+                if (logical.Length > 0 && !logical.StartsWith("//", StringComparison.Ordinal) && !RemPattern.IsMatch(logical))
+                {
+                    foreach (string statement in SplitStatements(logical))
+                    {
+                        string st = statement.Trim();
+                        if (ForPattern.IsMatch(st))
+                        {
+                            depth++;
+                        }
+                        else if (depth > 0 && NextPattern.Match(st) is { Success: true } next)
+                        {
+                            depth = Math.Max(0, depth - (next.Groups[1].Success ? next.Groups[1].Value.Split(',').Length : 1));
+                        }
+                    }
+                }
+
+                if (depth == 0)
+                {
+                    runnable = i + 1;
+                }
+            }
+
+            return string.Join("\n", lines.Take(runnable));
         }
 
         // Splits `a = 1: b = 2` at top-level ':' (outside strings and parentheses; ':=' is left alone).

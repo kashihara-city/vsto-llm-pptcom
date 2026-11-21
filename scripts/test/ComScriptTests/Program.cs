@@ -251,6 +251,7 @@ namespace ComScriptTests
             Console.WriteLine("== statements");
             AcceptedStatementTests();
             ForLoopTests();
+            ArrivingScriptTests();
             RejectedStatementTests();
         }
 
@@ -295,6 +296,63 @@ namespace ComScriptTests
             Accept("img = Image(\"a cat\", \"1024x768\")", static ops =>
                 (string?)ops.Last?["action"] == "image" ? null : "expected an image op: " + ops.Last, allowImage: true);
 
+        }
+
+        // A script still being written: which of its lines can be run already (ComScriptParser.RunnablePrefix), and
+        // that running it part by part comes to what running it at once does (ComProxyEngine.ScriptRun), with what an
+        // earlier part's failure means for a later one carried over.
+        private static void ArrivingScriptTests()
+        {
+            static string Part(string soFar, bool complete = false)
+            {
+                return ComScriptParser.RunnablePrefix(soFar, complete);
+            }
+
+            Report("arriving: whole lines only, the last one when the script is all there",
+                   Part("a = 1\nb = 2\nc") == "a = 1\nb = 2" && Part("a = 1\nb = 2\nc", complete: true) == "a = 1\nb = 2\nc" && Part("a = 1").Length == 0 && Part("a = 1\n") == "a = 1",
+                   Part("a = 1\nb = 2\nc") + " | " + Part("a = 1\n"));
+            Report("arriving: a line that goes on in the next waits for it",
+                   Part("x = Foo(1, _\n").Length == 0 && Part("a = 1\nx = Foo(1, _\n  2)\ny") == "a = 1\nx = Foo(1, _\n  2)", Part("a = 1\nx = Foo(1, _\n  2)\ny"));
+            Report("arriving: nothing of a For before its Next, of nested ones before the outermost's",
+                   Part("a = 1\nFor i = 1 To 3\n  b = i\n") == "a = 1" && Part("a = 1\nFor i = 1 To 3\n  b = i\nNext\nc = 2\n") == "a = 1\nFor i = 1 To 3\n  b = i\nNext\nc = 2" &&
+                   Part("For i = 1 To 2\nFor j = 1 To 2\nx = j\nNext j\ny = i\n").Length == 0 && Part("For i = 1 To 2\nFor j = 1 To 2\nx = j\nNext j, i\nz = 1\n").EndsWith("z = 1", StringComparison.Ordinal) &&
+                   Part("For i = 1 To 2: x = i: Next\ny = 1\n") == "For i = 1 To 2: x = i: Next\ny = 1",
+                   Part("a = 1\nFor i = 1 To 3\n  b = i\n") + " | " + Part("For i = 1 To 2\nFor j = 1 To 2\nx = j\nNext j, i\nz = 1\n"));
+            Report("arriving: a comment that names For or Next is no loop", Part("' For each of them\na = 1\nRem Next\nb = 2\n") == "' For each of them\na = 1\nRem Next\nb = 2",
+                   Part("' For each of them\na = 1\nRem Next\nb = 2\n"));
+
+            // b fails to parse (an unknown variable), c needs b, d does not; the For is written out once it is whole
+            const string script = "a = 1\nb = nosuch.Value\nc = b + 1\nFor i = 1 To 2\nd = a + i\nNext\ne = d * 2";
+            ComProxyEngine whole = new(new object());
+            ComScriptResult atOnce = whole.ExecuteScriptAsync(ComScriptParser.Parse(script, priorKnownIds: null, 2000)).GetAwaiter().GetResult();
+
+            ComProxyEngine engine = new(new object());
+            ComProxyEngine.ScriptRun run = engine.BeginScript();
+            List<int> done = [];
+            for (int cut = 1; cut <= script.Length; cut++)
+            {
+                string part = Part(script.Substring(0, cut), complete: cut == script.Length);
+                if (part.Length > 0)
+                {
+                    engine.RunAsync(run, ComScriptParser.Parse(part, priorKnownIds: null, 2000)).GetAwaiter().GetResult();
+                }
+
+                if (done.Count == 0 || done[done.Count - 1] != run.Done)
+                {
+                    done.Add(run.Done);
+                }
+            }
+
+            ComScriptResult inParts = engine.EndScriptAsync(run, textLanguage: null).GetAwaiter().GetResult();
+            engine.TryGetHandle("e", out object? e);
+            Report("arriving: run part by part, a script comes to what it does run at once",
+                   inParts.Describe() == atOnce.Describe() && inParts.Lines.Count == atOnce.Lines.Count && Number(e) == 6 && string.Join(",", done) == "0,1,2,3,8,9",
+                   Invariant($"statements done after each part: {string.Join(",", done)}; e = {e}\nin parts:\n{inParts.Describe()}\nat once:\n{atOnce.Describe()}"));
+
+            static double Number(object? value)
+            {
+                return Convert.ToDouble(value, CultureInfo.InvariantCulture);
+            }
         }
 
         // For ... Next with numeric bounds is written out before parsing.

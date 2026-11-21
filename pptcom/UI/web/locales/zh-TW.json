@@ -31,6 +31,8 @@
   "SETTINGS_OTHER": "其他",
   "SETTINGS_OPEN_PANE": "開啟簡報時顯示 AI 助理",
   "SETTINGS_OPEN_PANE_HINT": "關閉後，需按［常用］索引標籤的「AI 助理」按鈕才會顯示（從之後開啟的視窗起）",
+  "SETTINGS_RUN_AS_ARRIVES": "AI 撰寫途中就套用到投影片",
+  "SETTINGS_RUN_AS_ARRIVES_HINT": "關閉後，會等 AI 寫完一組操作再一次套用。開啟時若中途停止，該回合已套用的部分會留在投影片上（可用「復原」取消）",
   "SETTINGS_SAVE_PROGRESS": "儲存每個要求的記錄",
   "SETTINGS_EXTERNAL_CONTROL": "允許其他程式操作",
   "SETTINGS_EXTERNAL_CONTROL_HINT": "以同一使用者執行的其他程式可以向此增益集傳送要求（測試用）",
@@ -103,6 +105,8 @@
   "EXTERNAL_CONTROL_OFF": "已不再允許其他程式操作此增益集",
   "OPEN_PANE_ON": "之後開啟的視窗會自動顯示 AI 助理",
   "OPEN_PANE_OFF": "之後開啟的視窗不會自動顯示 AI 助理，可用［常用］索引標籤的「AI 助理」開啟",
+  "RUN_AS_ARRIVES_ON": "從下一個要求起，AI 撰寫途中就會套用到投影片",
+  "RUN_AS_ARRIVES_OFF": "從下一個要求起，會等 AI 寫完一組操作再一次套用到投影片",
   "SAVE_PROGRESS_ON": "將每個要求的記錄儲存到 {0}",
   "SAVE_PROGRESS_OFF": "已停止儲存要求的記錄",
 
@@ -129,6 +133,7 @@
   "STATUS_SERVER_UNREACHABLE": "第 {0} 回合：無法連到端點。等待重試",
   "STATUS_BUSY_ELSEWHERE": "另一個視窗正在執行要求",
   "SLIDES_LOCKED": "作業完成前，無法直接操作這份簡報的投影片",
+  "SCRIPT_PART_KEPT": "這一輪已套用的部分會留在投影片上（不需要的話，可以用「復原」取消）",
   "STATUS_CANCELLING": "正在停止...",
   "STATUS_RESENDING": "正在重新傳送相同的內容...",
 

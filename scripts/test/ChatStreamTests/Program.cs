@@ -49,11 +49,13 @@ namespace ChatStreamTests
             await ToolChoiceAsync().ConfigureAwait(true);
             await ModelListAsync().ConfigureAwait(true);
             await RequestRunnerAsync().ConfigureAwait(true);
+            await ArrivingCallsAsync().ConfigureAwait(true);
             await RefusingProxyAsync().ConfigureAwait(true);
             CompactionTests();
             OfferedTests();
             ImageColorsTests();
             UserLocaleTests();
+            PartialArgumentsTests();
             PendingDocumentTests();
             AttachmentRoomTests();
             SlideLockTests();
@@ -783,11 +785,13 @@ namespace ChatStreamTests
             Check("a pptcom call's notice is shown once, before its result; a call without one shows none",
                   noticed.Shows("AI_STEP,TOOL_RESULT,AI_REPLY,REQUEST_DONE") && noticed.View.Steps.SequenceEqual(["表紙を作ります"], StringComparer.Ordinal) &&
                   !tool.Shows("AI_STEP"), noticed.Describe() + " / " + string.Join("|", noticed.View.Steps));
-            Check("the notice is read from arguments still being written when it comes first and is closed, and from whole ones wherever it is",
+            Check("the notice is read from arguments still being written once it is closed, wherever it comes in them",
                   RequestRunner.NoticeOf("{\"notice\":\"表紙を作ります\",\"language\":\"ja-JP\",\"script\":\"Set s = ") == "表紙を作ります" &&
                   RequestRunner.NoticeOf("{\"notice\":\"表紙を作") is null && RequestRunner.NoticeOf("{ \"notice\" : \"a \\\"quoted\\\" word\", \"scr") == "a \"quoted\" word" &&
                   RequestRunner.NoticeOf("{\"notice\":\"\\u8868\\u7d19\"") == "表紙" && RequestRunner.NoticeOf("{\"script\":\"x = 1\",\"notice\":\"after\"}") == "after" &&
                   RequestRunner.NoticeOf("{\"script\":\"x = 1\"") is null && RequestRunner.NoticeOf("{\"script\":\"x = 1\"}") is null &&
+                  RequestRunner.NoticeOf("{\"language\":\"ja-JP\",\"notice\":\"表紙を作ります\",\"script\":\"Set s = ") == "表紙を作ります" &&
+                  RequestRunner.NoticeOf("{\"language\":\"ja-JP\",\"notice\":\"表紙を作") is null && RequestRunner.NoticeOf("{\"language\":\"ja-JP\",\"not") is null &&
                   RequestRunner.NoticeOf("{\"notice\":\"  \",\"script\":\"x\"}") is null && RequestRunner.NoticeOf("{\"notice\":3,\"script\":\"x\"}") is null &&
                   RequestRunner.NoticeOf("not json") is null && RequestRunner.NoticeOf("") is null,
                   RequestRunner.NoticeOf("{\"notice\":\"表紙を作ります\",\"language\":\"ja-JP\",\"script\":\"Set s = ") ?? "-");
@@ -817,9 +821,11 @@ namespace ChatStreamTests
                   stopped.Error is OperationCanceledException && stopped.Shows("AI_SERVER_ERROR") && !stopped.Shows("REQUEST_DONE"),
                   retried.Describe() + " | " + stopped.Describe());
             // A reply that broke off after its call's notice was shown; the reply that 再試行 brings makes another call.
+            // (With nothing run as it arrives: a call whose script had begun to run is kept, see ArrivingCallsAsync.)
             Run again = await RunRequestAsync(
                 [CallsTool("pptcom", arguments: "{\"notice\":\"表紙を作ります\",\"language\":\"ja-JP\",\"script\":\"x = 1\"}", cut: true),
-                 CallsTool("pptcom", arguments: "{\"notice\":\"表を直します\",\"language\":\"ja-JP\",\"script\":\"y = 2\"}"), Reply("ok")]).ConfigureAwait(true);
+                 CallsTool("pptcom", arguments: "{\"notice\":\"表を直します\",\"language\":\"ja-JP\",\"script\":\"y = 2\"}"), Reply("ok")],
+                tools: new FakeTools { RunsNothingEarly = true }).ConfigureAwait(true);
             Check("after 再試行 the turn's new reply shows its own call's notice, once, and that call is the one run",
                   again.View.Retries == 1 && again.Tools.Calls.Count == 1 && again.View.Steps.SequenceEqual(["表紙を作ります", "表を直します"], StringComparer.Ordinal) &&
                   again.Shows("AI_STEP,AI_SERVER_ERROR,AI_STEP,TOOL_RESULT,AI_REPLY,REQUEST_DONE"),
@@ -1047,13 +1053,15 @@ namespace ChatStreamTests
             }
         }
 
+        // `everyEvent`: the reply's progress is reported at each of its events, not twice a second: its calls are then
+        // handed to the tools at each step of their arrival (IRequestTools.StreamAsync).
         private static async Task<Run> RunRequestAsync(string[] responses, int maxTurns = 20, int contextLimit = 100000, FakeView? view = null, FakeTools? tools = null,
-                                                       string? url = null)
+                                                       string? url = null, bool everyEvent = false)
         {
             using FakeServer server = new(responses, stall: false);
             RequestSettings settings = new()
             {
-                Llm = new OpenAiCompatibleClient(url ?? server.Url, "", "test-model"),
+                Llm = new OpenAiCompatibleClient(url ?? server.Url, "", "test-model") { ProgressInterval = everyEvent ? TimeSpan.Zero : TimeSpan.FromMilliseconds(500) },
                 Tools = [],
                 ContextLimit = contextLimit,
                 MaxTurns = maxTurns,
@@ -1121,13 +1129,55 @@ namespace ChatStreamTests
 
             public List<string> Calls { get; } = [];
 
+            // The script of the reply's first pptcom call each time it was handed over while the reply arrived, as far
+            // as it had come; what happened in order ("arrived", "ended early", "run pptcom"); why a call was ended early.
+            public List<string> Arrived { get; } = [];
+
+            public List<string> Order { get; } = [];
+
+            public List<string> NotRun { get; } = [];
+
+            // Nothing is run as it arrives (the user's setting): StreamAsync hears of the calls and does nothing.
+            public bool RunsNothingEarly { get; set; }
+
+            private bool _arriving;
+
             public bool DeckClosed()
             {
                 return closed;
             }
 
+            public Task StreamAsync(IReadOnlyList<ToolCall> arriving)
+            {
+                // as the add-in's tools do, only what has grown since the last time counts
+                if (!RunsNothingEarly && arriving.Count > 0 && arriving[0].Name == "pptcom" && PartialArguments.StringSoFar(arriving[0].Arguments, "script", out _) is string script &&
+                    (!_arriving || Arrived[Arrived.Count - 1] != script))
+                {
+                    Arrived.Add(script);
+                    Order.Add("arrived");
+                    _arriving = true;
+                }
+
+                return Task.CompletedTask;
+            }
+
+            public ToolCall? ArrivedCall(string notRun)
+            {
+                if (!_arriving)
+                {
+                    return null;
+                }
+
+                _arriving = false;
+                Order.Add("ended early");
+                NotRun.Add(notRun);
+                return new ToolCall { Id = "call_pptcom", Name = "pptcom", Arguments = new JObject { ["script"] = Arrived[Arrived.Count - 1] }.ToString(Newtonsoft.Json.Formatting.None) };
+            }
+
             public Task<ToolResult> RunAsync(ToolCall call)
             {
+                _arriving = false;
+                Order.Add("run " + call.Name);
                 Calls.Add(call.Name);
                 ToolResult result = new("ran " + call.Name)
                 {
@@ -1157,6 +1207,98 @@ namespace ChatStreamTests
         private static string Reply(string text, int promptTokens = 0)
         {
             return Http(200, Sse([.. Usage(promptTokens), Content(text), Finish("stop"), "[DONE]"]));
+        }
+
+        // A tool call's arguments read while they still arrive (PartialArguments): the script as far as it has come,
+        // decoded, never with half an escape; nothing before the member has begun or when it cannot be reached.
+        private static void PartialArgumentsTests()
+        {
+            Console.WriteLine("== a call's arguments as they arrive");
+            static string? Script(string arguments, out bool closed)
+            {
+                return PartialArguments.StringSoFar(arguments, "script", out closed);
+            }
+
+            string? text = Script("{\"notice\":\"a\",\"language\":\"ja-JP\",\"script\":\"x = 1\\ny", out bool closed);
+            Check("the script as far as it has come, after the members before it", text == "x = 1\ny" && !closed, text + " " + closed);
+            text = Script("{\"script\":\"x\"}", out closed);
+            Check("its closing quote says it is whole", text == "x" && closed, text + " " + closed);
+            Check("escapes are decoded, and one cut in half is left out until it is whole",
+                  Script("{\"script\":\"a\\\"b\\\\c\\n\\u3042", out _) == "a\"b\\c\nあ" && Script("{\"script\":\"ab\\", out _) == "ab" &&
+                  Script("{\"script\":\"ab\\u30", out _) == "ab" && Script("{ \"script\" : \"\\t/\\/", out _) == "\t//",
+                  Script("{\"script\":\"a\\\"b\\\\c\\n\\u3042", out _) + " | " + Script("{\"script\":\"ab\\u30", out _));
+            Check("nothing before the member has begun",
+                  Script("", out _) is null && Script("{", out _) is null && Script("{\"notice\":\"abc", out _) is null && Script("{\"notice\":\"a\",\"scr", out _) is null &&
+                  Script("{\"notice\":\"a\",\"script\":", out _) is null && Script("{\"notice\":\"a\"}", out _) is null, "");
+            Check("members of other kinds before it are read past; arguments that are no object, or a script that is no string, give nothing",
+                  Script("{\"n\":12,\"o\":{\"a\":\"}\",\"b\":[1,\"]\"]},\"t\":true,\"script\":\"s", out _) == "s" && Script("{\"n\":12", out _) is null &&
+                  Script("[1]", out _) is null && Script("{\"script\":5}", out _) is null && Script("{\"o\":{\"script\":\"inner\"", out _) is null, "");
+        }
+
+        // A reply's first pptcom call is handed to the tools while it still arrives (IRequestTools.StreamAsync), as far
+        // as its script has come each time; when the reply is whole the call is run as ever. A reply that does not
+        // arrive whole has the call ended as far as it ran (IRequestTools.ArrivedCall): the call and its result join
+        // the conversation - once - before the user is asked for 再試行, and the reply asked for again goes on from
+        // there; so has one that fails for good.
+        private static async Task ArrivingCallsAsync()
+        {
+            Console.WriteLine("== a reply's call run as it arrives");
+            string[] pieces = ["{\"notice\":\"n\",\"language\":\"ja-JP\",\"script\":\"x = 1\\n", "y = 2\\n", "z = 3\"}"];
+            Run whole = await RunRequestAsync([CallsToolInPieces("pptcom", pieces), Reply("done")], everyEvent: true).ConfigureAwait(true);
+            Check("the script is handed over as it grows, then the call is run; nothing is ended early",
+                  string.Join("|", whole.Tools.Arrived) == "x = 1\n|x = 1\ny = 2\n|x = 1\ny = 2\nz = 3" && string.Join(",", whole.Tools.Order) == "arrived,arrived,arrived,run pptcom" &&
+                  !whole.View.Codes.Contains("SCRIPT_PART_KEPT") && whole.Error is null,
+                  string.Join("|", whole.Tools.Arrived).Replace("\n", "\\n") + " / " + string.Join(",", whole.Tools.Order) + " / " + whole.Describe());
+
+            Run cut = await RunRequestAsync([CallsToolInPieces("pptcom", [pieces[0], pieces[1]], cut: true), Reply("done")], everyEvent: true).ConfigureAwait(true);
+            int call = cut.Messages.FindIndex(static m => m.ToolCalls is { Count: 1 });
+            Check("a reply cut off on the way: the call is ended as far as it ran before 再試行 is offered, and the reply asked for again follows it and its result",
+                  string.Join(",", cut.Tools.Order) == "arrived,arrived,ended early,run pptcom" && cut.Shows("TOOL_RESULT,SCRIPT_PART_KEPT,AI_SERVER_ERROR,AI_REPLY") &&
+                  cut.View.Retries == 1 && cut.Tools.NotRun.Count == 1 && cut.Tools.NotRun[0].Contains("cut off") && cut.State.ScriptLines == 3 && cut.Error is null &&
+                  call == 2 && cut.Messages.Count == 5 && cut.Messages[call].ToolCalls![0].Arguments.Contains("y = 2") && cut.Messages[call + 1].Role == "tool" &&
+                  cut.Messages[call + 1].ToolCallId == "call_pptcom" && cut.Messages[call + 1].Content == "ran pptcom" && cut.Messages[call + 2].Content == "done",
+                  string.Join(",", cut.Tools.Order) + " / " + cut.Describe() + " / " + string.Join(",", cut.Messages.Select(static m => m.Role)) + " / " + string.Join("|", cut.Tools.NotRun));
+
+            Run stopped = await RunRequestAsync([CallsToolInPieces("pptcom", [pieces[0]], cut: true)], view: new FakeView(cancelRetry: true), everyEvent: true).ConfigureAwait(true);
+            Check("中止 at 再試行 after it: ended once, and the user was told that the slides keep it",
+                  string.Join(",", stopped.Tools.Order) == "arrived,ended early,run pptcom" && stopped.View.Codes.FindAll(static c => c == "SCRIPT_PART_KEPT").Count == 1 &&
+                  stopped.Error is OperationCanceledException, string.Join(",", stopped.Tools.Order) + " / " + stopped.Describe());
+
+            string failing = Http(200, Sse(ToolCallDelta("pptcom", pieces[0], first: true), "{\"error\":{\"code\":\"400\",\"message\":\"bad request\"}}"));
+            Run failed = await RunRequestAsync([failing], everyEvent: true).ConfigureAwait(true);
+            Check("a reply that fails for good while its call arrives: the call is ended as far as it ran, and the request ends with the failure",
+                  string.Join(",", failed.Tools.Order) == "arrived,ended early,run pptcom" && failed.Shows("TOOL_RESULT,SCRIPT_PART_KEPT") && failed.Tools.NotRun[0].Contains("stopped") &&
+                  failed.Messages[failed.Messages.Count - 1].Role == "tool" && failed.Error is InvalidOperationException,
+                  string.Join(",", failed.Tools.Order) + " / " + failed.Describe());
+
+            Run plain = await RunRequestAsync([CallsTool("imagegen"), Reply("done")], everyEvent: true).ConfigureAwait(true);
+            Check("a call that is no pptcom script is only run when the reply is whole", plain.Tools.Arrived.Count == 0 && string.Join(",", plain.Tools.Order) == "run imagegen",
+                  string.Join(",", plain.Tools.Order));
+        }
+
+        // A streamed reply that calls one tool, its arguments coming in pieces. `cut`: it ends without saying so.
+        private static string CallsToolInPieces(string name, string[] pieces, bool cut = false)
+        {
+            List<string> events = [.. pieces.Select((piece, i) => ToolCallDelta(name, piece, first: i == 0))];
+            if (!cut)
+            {
+                events.Add(Finish("tool_calls"));
+                events.Add("[DONE]");
+            }
+
+            return Http(200, Sse([.. events]));
+        }
+
+        private static string ToolCallDelta(string name, string argumentsPiece, bool first)
+        {
+            JObject call = new() { ["index"] = 0, ["function"] = new JObject { ["arguments"] = argumentsPiece } };
+            if (first)
+            {
+                call["id"] = "call_" + name;
+                call["function"]!["name"] = name;
+            }
+
+            return new JObject { ["choices"] = new JArray(new JObject { ["delta"] = new JObject { ["tool_calls"] = new JArray(call) } }) }.ToString(Newtonsoft.Json.Formatting.None);
         }
 
         // A streamed reply that calls one tool. `cut`: it ends after the call, without saying that it has ended.

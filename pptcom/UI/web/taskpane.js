@@ -1,7 +1,7 @@
 "use strict";
 // The add-in (AiTaskPaneControl.cs) and this page talk only through WebView2 web messages:
 //   page -> add-in: {type: "ready" | "send" | "cancel" | "retry" | "continue" | "newChat" | "endpoint" | "chatModel" | "imageModel" | "apiKey", ...}
-//   page -> add-in also: {type: "openPane" | "saveProgress" | "externalControl", value: bool}, {type: "contextLimit", value: "<digits>"},
+//   page -> add-in also: {type: "openPane" | "runAsArrives" | "saveProgress" | "externalControl", value: bool}, {type: "contextLimit", value: "<digits>"},
 //   {type: "imagePrompt", value: "<name>"}, {type: "apiKey", value: "<the key typed>"}, {type: "apiKeyDelete"};
 //   "imageModel" may be "" (（使わない）); {type: "probed"} answers the add-in's {type: "proxy", probe: "<address>"}
 //   add-in -> page: {type: "log" | "status" | "busy" | "retry" | "continue" | "endpoint" | "models" | "apiKeyState" | "options" | "selection" | "about" | "proxy", ...}
@@ -84,6 +84,9 @@ const logKinds = {
   NO_ENDPOINT_OR_MODEL: "stopped", DOC_STILL_CONVERTING: "stopped", HTTP_WITH_API_KEY: "stopped",
   HAND_EDITS: "handEdits", NEW_CONVERSATION: "reset",
   READY: "plain", NO_ENDPOINT_HELP: "plain",
+  // what ran of a script whose reply was cut off or stopped stays on the slides: said where it is seen, not as a row
+  // of the progress block
+  SCRIPT_PART_KEPT: "plain",
   // a file that was not attached, with the reason
   DOC_NOT_ATTACHED: "notAttached", DOC_DISCARDED: "notAttached",
 };
@@ -240,6 +243,7 @@ $("apikey-delete-yes").addEventListener("click", () => {
   if (apiKeySet && !busy) post({ type: "apiKeyDelete" });
 });
 $("open-pane").addEventListener("change", e => post({ type: "openPane", value: e.target.checked }));
+$("run-as-arrives").addEventListener("change", e => post({ type: "runAsArrives", value: e.target.checked }));
 $("save-progress").addEventListener("change", e => post({ type: "saveProgress", value: e.target.checked }));
 $("external-control").addEventListener("change", e => post({ type: "externalControl", value: e.target.checked }));
 // The add-in checks the number; one it refuses is replaced by the limit in use (options).
@@ -285,7 +289,7 @@ function setBusy(on, elsewhere, locked) {
   action.disabled = waiting;
   action.title = i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND_TITLE");
   action.setAttribute("aria-label", i18n.t(waiting ? "STATUS_BUSY_ELSEWHERE" : on ? "STOP" : "SEND"));
-  for (const el of [endpoint, $("fetch"), chatModel, imageModel, apiKey, $("apikey"), $("new-chat"), $("open-pane"), $("save-progress"), $("external-control"), $("context-limit"), $("image-prompt")]) el.disabled = on;
+  for (const el of [endpoint, $("fetch"), chatModel, imageModel, apiKey, $("apikey"), $("new-chat"), $("open-pane"), $("run-as-arrives"), $("save-progress"), $("external-control"), $("context-limit"), $("image-prompt")]) el.disabled = on;
   $("apikey-delete").disabled = on || !apiKeySet;
   if (on) askDelete(false);
   if (waiting) $("status").textContent = i18n.t("STATUS_BUSY_ELSEWHERE");
@@ -316,6 +320,7 @@ const handlers = {
   },
   options: m => {
     $("open-pane").checked = !!m.openPane;
+    $("run-as-arrives").checked = !!m.runAsArrives;
     $("save-progress").checked = !!m.saveProgress;
     $("external-control").checked = !!m.externalControl;
     if (m.contextLimit) $("context-limit").value = String(m.contextLimit);

@@ -1,7 +1,9 @@
 // How the task pane's page (pptcom/UI/web/taskpane.js) sends a request and shows how it ends: one request at a
 // time, also before the add-in's busy state arrives and while another window's pane runs one; a refused send does
 // not leave the page waiting; a request that stops (the deck was closed, 中止, an error) closes its block as stopped,
-// one that finishes as done; 続ける shows last after a request that stopped at the turn limit, and sends like
+// one that finishes as done; that what ran of a stopped script stays on the slides is told below the block, where it
+// is seen;
+// 続ける shows last after a request that stopped at the turn limit, and sends like
 // a request; the line above the input shows what is selected in PowerPoint, and the settings the version, whether
 // the browser uses the add-in's refusing proxy, the context limit, the models (none chosen yet, 使わない), the image
 // prompt and the API key (typed in, deleted).
@@ -205,13 +207,13 @@ async function proxyState() {
 // locked while a request runs, and free again once it has ended (削除 of the API key has rules of its own: apiKeyDelete).
 function options() {
   const p = page();
-  p.host({ type: "options", openPane: false, saveProgress: true, externalControl: false, contextLimit: 196608, imagePrompt: "zimage" });
-  const open = p.element("open-pane"), save = p.element("save-progress"), ext = p.element("external-control");
+  p.host({ type: "options", openPane: false, runAsArrives: true, saveProgress: true, externalControl: false, contextLimit: 196608, imagePrompt: "zimage" });
+  const open = p.element("open-pane"), arrives = p.element("run-as-arrives"), save = p.element("save-progress"), ext = p.element("external-control");
   const limit = p.element("context-limit"), prompt = p.element("image-prompt");
   check("the settings show the add-in's values",
-        open.checked === false && save.checked === true && ext.checked === false && limit.value === "196608" && prompt.value === "zimage",
-        `openPane=${open.checked} saveProgress=${save.checked} externalControl=${ext.checked} contextLimit=${limit.value} imagePrompt=${prompt.value}`);
-  const ids = ["endpoint", "fetch", "chat-model", "image-model", "apikey-input", "apikey", "new-chat", "open-pane", "save-progress",
+        open.checked === false && arrives.checked === true && save.checked === true && ext.checked === false && limit.value === "196608" && prompt.value === "zimage",
+        `openPane=${open.checked} runAsArrives=${arrives.checked} saveProgress=${save.checked} externalControl=${ext.checked} contextLimit=${limit.value} imagePrompt=${prompt.value}`);
+  const ids = ["endpoint", "fetch", "chat-model", "image-model", "apikey-input", "apikey", "new-chat", "open-pane", "run-as-arrives", "save-progress",
                "external-control", "context-limit", "image-prompt"];
   p.host({ type: "busy", value: true });
   const unlocked = ids.filter(id => p.element(id).disabled !== true);
@@ -392,6 +394,22 @@ function slidesLocked() {
         !waiting && p.bodyHas("locked"), "waiting=" + waiting + " same deck=" + p.bodyHas("locked"));
 }
 
+// A script whose reply was stopped after part of it ran: that the part stays on the slides is said below the request's
+// block, not as one of its rows (the block may be folded), before how the request ended.
+function partKept() {
+  const p = page();
+  const log = p.element("log");
+  p.submit("request");
+  p.log("USER_REQUEST", "request");
+  p.host({ type: "busy", value: true });
+  p.log("SCRIPT_PART_KEPT");
+  p.log("AI_CANCELLED");
+  p.host({ type: "busy", value: false });
+  const shown = log.children.map(e => (e.className.startsWith("work") ? "work" : e.className.split(" ")[0] + ":" + e.textContent)).join(", ");
+  check("what stays of a stopped script is told below the request's block, before how the request ended",
+        shown === "msg:USER_REQUEST, work, note:SCRIPT_PART_KEPT, msg:AI_CANCELLED", shown);
+}
+
 // A file that was not attached shows in red (alert), with the reason: as a note between requests, as a row of the
 // request's block while one runs. One that was attached is a side note like any other.
 function notAttached() {
@@ -446,6 +464,7 @@ newChat();
 continueButton();
 ends();
 notAttached();
+partKept();
 slidesLocked();
 readyWaitsForDocs().then(proxyState).then(() => {
   console.log();

@@ -693,7 +693,7 @@ namespace Pptcom
                 MaxTurns = MaxTurns,
                 CompactionPrompt = CompactionPrompt,
             };
-            RequestRunner runner = new(settings, run.State, new PaneView(this, run.Pane), new DeckTools(run, engine, conversation.KnownIds), LogToFile);
+            RequestRunner runner = new(settings, run.State, new PaneView(this, run.Pane), new DeckTools(this, run, engine, conversation.KnownIds), LogToFile);
             await runner.RunAsync(messages, _cancel.Token).ConfigureAwait(true);
         }
 
@@ -716,8 +716,9 @@ namespace Pptcom
             }
         }
 
-        // What RequestRunner does in PowerPoint: the conversation's engine and the deck it works on.
-        private sealed class DeckTools(RunRecord run, ComProxyEngine engine, List<string> knownIds) : IRequestTools
+        // What RequestRunner does in PowerPoint: the conversation's engine and the deck it works on. The part that runs a
+        // pptcom script while it still arrives is in ThisAddIn.Streaming.cs.
+        private sealed partial class DeckTools(ThisAddIn addin, RunRecord run, ComProxyEngine engine, List<string> knownIds) : IRequestTools
         {
             public bool DeckClosed()
             {
@@ -726,7 +727,17 @@ namespace Pptcom
 
             public async Task<ToolResult> RunAsync(ToolCall call)
             {
-                return await RunToolAsync(run, engine, knownIds, call).ConfigureAwait(true);
+                StreamedScript? streamed = _streamed;
+                _streamed = null;
+                ToolResult result = streamed is not null
+                    ? await FinishAsync(streamed, call).ConfigureAwait(true)
+                    : await RunToolAsync(run, engine, knownIds, call).ConfigureAwait(true);
+                if (call.Name == "pptcom")
+                {
+                    addin.ShowSlideWorkedOn(run.Pane, engine);
+                }
+
+                return result;
             }
         }
 

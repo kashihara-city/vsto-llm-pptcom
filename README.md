@@ -69,6 +69,7 @@ PowerPointで開いているプレゼンテーションを、LLMが作ったり�
 - 画像生成プロンプト: AIが画像を頼むときの指示の書き方と大きさ（現在は、Z-Image用とMOSS-Image用のみです。）
 - APIキー（必要な場合。設定すると、接続先URLにはhttpsしか設定できません。）
 - スライドを開いたらAIアシスタントを表示する: アドインを自動で表示するかどうか（既定でオン）
+- AIが書いている途中から、スライドに反映する: AIが操作を書いている途中から、順にスライドへ反映するかどうか（既定でオン）。オフにすると、書き終えてからまとめて反映する
 - 途中経過を保存する: 記録を`%LOCALAPPDATA%\KashiharaCity\pptcom\`に残すかどうか（既定でオフ）
 - 他のプログラムからの操作を許可する: 他のプログラムからの操作を受け付けるか（既定でオフ）
 
@@ -96,7 +97,7 @@ HKEY_CURRENT_USER\Software\
 │  ├─ endpoint                         ＊接続先（アドインが保存）
 │  ├─ chat_model, context_limit        ＊LLMモデルとコンテキスト上限（アドインが保存）
 │  ├─ image_model, image_prompt        ＊画像生成モデルと画像生成プロンプト（アドインが保存）
-│  ├─ open_pane, save_progress, external_control   ＊3つのスイッチ（アドインが保存）
+│  ├─ open_pane, run_as_arrives, save_progress, external_control   ＊4つのスイッチ（アドインが保存）
 │  ├─ AppVersion                       入っているバージョン（インストーラが保存）
 │  ├─ LatestVersion                    ＊配布するバージョン（管理者がグループポリシーで設定）
 │  └─ Installer\                        インストーラの参照情報（インストーラが保存）
@@ -126,6 +127,7 @@ HKEY_CURRENT_USER\Software\
 | `image_model` | REG_SZ | `z-image-turbo` | 接続先のモデル一覧に出る、画像生成（`/v1/images/generations`）のモデル。空なら画像を作らない |
 | `image_prompt` | REG_SZ | `zimage` | 画像生成プロンプト。無いときや知らない値は`zimage`になる |
 | `open_pane` | REG_DWORD | `1` | 1でスライドを開いたらAIアシスタントを表示する。無ければ1 |
+| `run_as_arrives` | REG_DWORD | `1` | 1でAIが書いている途中からスライドに反映する。無ければ1 |
 | `save_progress` | REG_DWORD | `0` | 1で途中経過を保存する。無ければ0 |
 | `external_control` | REG_DWORD | `0` | 1で他のプログラムからの操作を許可する。無ければ0 |
 | `LatestVersion` | REG_SZ | `0.0.7` | 配布するバージョン。`AppVersion`と同じ書き方 |
@@ -161,7 +163,7 @@ vsto-llm-pptcomの主な機能を担うpptcom.dllは、以下のような構造�
 PowerPoint
 └─ pptcom.dll
    ├─ C#のコード
-   │   ├─ ThisAddIn             ウィンドウごとの作業ウィンドウと会話（添付資料も会話に属す）、エージェントのループ
+   │   ├─ ThisAddIn             ウィンドウごとの作業ウィンドウと会話（添付資料も会話に属す）、エージェントのループ、pptcomのスクリプトを届いた行から実行する処理
    │   ├─ AddinSettings         設定（レジストリ）とAPIキー（資格情報マネージャー）
    │   ├─ AddinAutomation       他のプログラムからの操作（「他のプログラムからの操作を許可する」がオンのときだけ）
    │   ├─ Agent                 LLMとの通信（OpenAI互換のAPI、ストリーミング）、会話を短くする処理、依頼ごとに渡すツールと指示の組み立て
@@ -223,10 +225,10 @@ C#のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.N
 
 | 実行するもの | 調べること |
 |---|---|
-| `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcomスクリプトの解析と実行（式の値はVBScriptとVBAの値と照らす）。断る文とメンバー、依頼のプレゼンテーションの固定、グラフのデータで使えるもの、書いた文字に入れる言語とその対象。モデルへの報告（エラーの案内、引数の丸め、図形一覧の中身とアニメーション、背景に対して見えにくい文字、角丸の角からはみ出す四角い図形） |
-| `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMとの通信（応答の読み取り、失敗の見分け、中止と待ち時間、APIキーの扱い）。依頼のターン（作業ウィンドウとPowerPointは偽物で、ツールの実行、pptcomの呼び出しの案内の表示、ターンの上限、再試行と中止、文脈の上限での会話の短縮）。モデルに渡すもの（ツールとシステムプロンプト、会話の短縮、表示言語と日付、画像の色）。添付の受け付けと、添付できる量の見積もり。作業ウィンドウのWebView2に指定するプロキシ（来た通信を断る） |
+| `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcomスクリプトの解析と実行（式の値はVBScriptとVBAの値と照らす）。断る文とメンバー、依頼のプレゼンテーションの固定、グラフのデータで使えるもの、書いた文字に入れる言語とその対象。届いている途中のスクリプト（実行してよい行の範囲、分けて実行しても一度に実行したときと同じ結果になること）。モデルへの報告（エラーの案内、引数の丸め、図形一覧の中身とアニメーション、背景に対して見えにくい文字、角丸の角からはみ出す四角い図形） |
+| `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMとの通信（応答の読み取り、失敗の見分け、中止と待ち時間、APIキーの扱い）。依頼のターン（作業ウィンドウとPowerPointは偽物で、ツールの実行、pptcomの呼び出しの案内の表示、ターンの上限、再試行と中止、文脈の上限での会話の短縮、届いている途中のpptcomの呼び出しの受け渡しと、応答が切れたときに実行済みの分を会話に残すこと）。モデルに渡すもの（ツールとシステムプロンプト、会話の短縮、表示言語と日付、画像の色）。添付の受け付けと、添付できる量の見積もり。作業ウィンドウのWebView2に指定するプロキシ（来た通信を断る） |
 | `node scripts/test/docs-queue.cjs` | 作業ウィンドウの添付（`docs.js`）。どこで失敗しても後のファイルが続くこと、画像と貼り付けの扱い |
-| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼の送り方と終わり方、「続ける」、設定欄、通信遮断プロキシの状態の表示、APIキーの入力と削除 |
+| `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼の送り方と終わり方、途中まで反映した分が残っていることの表示、「続ける」、設定欄、通信遮断プロキシの状態の表示、APIキーの入力と削除 |
 | `python -X utf8 scripts/test/js-syntax.py` | 作業ウィンドウのJavaScriptが構文として読めること |
 | `python -X utf8 scripts/test/i18n.py` | 文言のコードと言語ファイルがそろい、コードに日本語の文が無いこと |
 | `python -X utf8 scripts/test/no-secrets.py` | Gitが追跡するファイルに、私有IP、社内のホスト名、APIキー、開発機のパス、鍵や証明書が無いこと |

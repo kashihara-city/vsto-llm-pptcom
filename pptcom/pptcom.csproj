@@ -169,6 +169,9 @@
     <Compile Include="ThisAddIn.Requests.cs">
       <DependentUpon>ThisAddIn.cs</DependentUpon>
     </Compile>
+    <Compile Include="ThisAddIn.Streaming.cs">
+      <DependentUpon>ThisAddIn.cs</DependentUpon>
+    </Compile>
     <Compile Include="ThisAddIn.Tools.cs">
       <DependentUpon>ThisAddIn.cs</DependentUpon>
     </Compile>
@@ -203,6 +206,7 @@
     <Compile Include="Agent\LlmServerException.cs" />
     <Compile Include="Agent\LlmServerFailure.cs" />
     <Compile Include="Agent\ModelInfo.cs" />
+    <Compile Include="Agent\PartialArguments.cs" />
     <Compile Include="Agent\SlideImage.cs" />
     <Compile Include="Agent\StreamProgress.cs" />
     <Compile Include="Agent\StreamedReply.cs" />

@@ -3,10 +3,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using Newtonsoft.Json.Linq;
 using Pptcom.ComProxy;
 using Pptcom.UI;
 using static System.FormattableString;
@@ -102,14 +100,54 @@ namespace Pptcom.Agent
                         {
                             ShowNotices(turn, p.PartialToolCalls());
                         }
+                    }, async p =>
+                    {
+                        // a pptcom script runs while the model still writes it (IRequestTools.StreamAsync)
+                        if (p.ToolArgChars > 0)
+                        {
+                            await tools.StreamAsync(p.PartialToolCalls()).ConfigureAwait(true);
+                        }
                     }, ct).ConfigureAwait(true);
                 }
                 catch (LlmServerException ex)
                 {
+                    // the reply asked for again goes on from what ran of this one's script
+                    await KeepArrivedAsync(turn, messages, "the reply was cut off before the call was whole").ConfigureAwait(true);
                     ShowServerFailure(ex, turn, Invariant($"at turn {turn}"));
                     await view.WaitForRetryAsync(ct).ConfigureAwait(true); // throws OperationCanceledException on 中止
                     log(Invariant($"(retry requested by the user, turn {turn})"));
                 }
+                catch (Exception)
+                {
+                    // 中止, or a failure that ends the request
+                    await KeepArrivedAsync(turn, messages, Stopped).ConfigureAwait(true);
+                    throw;
+                }
+            }
+        }
+
+        // Why the rest of a script is not run when the request ends first, as the call's result tells the model.
+        private const string Stopped = "the request was stopped before the rest was run";
+
+        // The reply of this turn does not arrive whole, but lines of its first call's script ran while it arrived
+        // (IRequestTools.StreamAsync). They stay on the slides: the call is ended as far as it ran and joins the
+        // conversation with its result, which says what ran and that the rest did not (`notRun`: why) - the model then
+        // knows of it in the turns and the requests to come. The user is told that the slides keep it.
+        private async Task KeepArrivedAsync(int turn, List<ChatMessage> messages, string notRun)
+        {
+            try
+            {
+                if (tools.ArrivedCall(notRun) is ToolCall call)
+                {
+                    ChatReply ran = new() { ToolCalls = [call] };
+                    messages.Add(ran.AsMessage());
+                    await RunToolCallsAsync(ran, turn, messages, CancellationToken.None).ConfigureAwait(true);
+                    view.Log("SCRIPT_PART_KEPT");
+                }
+            }
+            catch (Exception ex) when (Guard.IsRecoverable(ex))
+            {
+                log("!!! the call whose script ran in part while its reply arrived could not be ended: " + Guard.MessagesOf(ex));
             }
         }
 
@@ -145,8 +183,8 @@ namespace Pptcom.Agent
 
         // A pptcom call tells the user in `notice` what it is meant to do (tools.json): they are shown it as the
         // model's words, once per call - as soon as it has come, while the script after it is still being written (the
-        // model gives it first), or else when the call is run. The calls are those of one reply: when a turn's reply is
-        // asked for again, what was shown of the one before is forgotten (ChatTurnAsync).
+        // model gives it before the script), or else when the call is run. The calls are those of one reply: when a
+        // turn's reply is asked for again, what was shown of the one before is forgotten (ChatTurnAsync).
         private readonly HashSet<(int Turn, int Call)> _noticesShown = [];
 
         // The name of that argument.
@@ -164,32 +202,14 @@ namespace Pptcom.Agent
             }
         }
 
-        // A call's arguments open with the notice and its text is closed: the part of them that has come is enough.
-        private static readonly Regex NoticeFirst = new(@"^\s*\{\s*""" + NoticeArgument + @"""\s*:\s*(""(?:[^""\\]|\\.)*"")", RegexOptions.CultureInvariant, Guard.RegexTimeout);
-
         // The notice to the user in a pptcom call's arguments - all of them, or as much as has come of them - or null:
-        // none yet, none at all, or an empty one.
+        // none yet (its text is not closed), none at all, or an empty one. It is read wherever it comes in them: the
+        // model does not always give it first (the language may come before it), and one read only once the arguments
+        // are whole would show after the script, which is run as it arrives, had done its work.
         internal static string? NoticeOf(string arguments)
         {
-            string? notice = null;
-            try
-            {
-                Match first = NoticeFirst.Match(arguments);
-                if (first.Success)
-                {
-                    notice = (string?)JToken.Parse(first.Groups[1].Value);
-                }
-                else if (JObject.Parse(arguments)[NoticeArgument] is JValue { Type: JTokenType.String } given)
-                {
-                    notice = (string?)given;
-                }
-            }
-            catch (Exception ex) when (ex is Newtonsoft.Json.JsonException or RegexMatchTimeoutException)
-            {
-                // arguments still being written, or no JSON object
-            }
-
-            notice = notice?.Trim();
+            string? notice = PartialArguments.StringSoFar(arguments, NoticeArgument, out bool closed);
+            notice = closed ? notice?.Trim() : null;
             return string.IsNullOrEmpty(notice) ? null : notice;
         }
 
@@ -200,7 +220,18 @@ namespace Pptcom.Agent
             ShowNotices(turn, reply.ToolCalls);
             foreach (ToolCall call in reply.ToolCalls)
             {
-                ct.ThrowIfCancellationRequested();
+                if (ct.IsCancellationRequested)
+                {
+                    // 中止 ends the turn here - but a call whose script began to run as it arrived is first ended as far as
+                    // it ran: it is run for its result, which says that the rest was not run
+                    if (tools.ArrivedCall(Stopped) is null)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                    }
+
+                    view.Log("SCRIPT_PART_KEPT");
+                }
+
                 view.SetStatus("STATUS_TOOL_RUNNING", turn, call.Name);
                 ToolResult result = await tools.RunAsync(call).ConfigureAwait(true);
                 state.ScriptLines += result.LinesApplied; // kept current: a cancelled request's summary says whether anything ran
