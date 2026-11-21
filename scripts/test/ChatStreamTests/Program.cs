@@ -1067,12 +1067,18 @@ namespace ChatStreamTests
         }
 
         private static async Task<Run> RunRequestAsync(string[] responses, int maxTurns = 20, int contextLimit = 100000, FakeView? view = null, FakeTools? tools = null,
-                                                       string? url = null)
+                                                       string? url = null, TimeSpan? idleLimit = null)
         {
             using FakeServer server = new(responses, stall: false);
+            OpenAiCompatibleClient llm = new(url ?? server.Url, "", "test-model");
+            if (idleLimit is TimeSpan limit)
+            {
+                llm.StreamIdleLimit = limit;
+            }
+
             RequestSettings settings = new()
             {
-                Llm = new OpenAiCompatibleClient(url ?? server.Url, "", "test-model"),
+                Llm = llm,
                 Tools = [],
                 ContextLimit = contextLimit,
                 MaxTurns = maxTurns,
@@ -1151,6 +1157,9 @@ namespace ChatStreamTests
             // Nothing is run as it arrives (the user's setting): StreamAsync hears of the calls and does nothing.
             public bool RunsNothingEarly { get; set; }
 
+            // How long running what has arrived takes each time (a slow statement).
+            public TimeSpan ArrivingTakes { get; set; }
+
             private bool _arriving;
 
             public bool DeckClosed()
@@ -1158,18 +1167,20 @@ namespace ChatStreamTests
                 return closed;
             }
 
-            public Task StreamAsync(IReadOnlyList<ToolCall> arriving)
+            public async Task StreamAsync(IReadOnlyList<ToolCall> arriving)
             {
-                // as the add-in's tools do, only what has grown since the last time counts
-                if (!RunsNothingEarly && arriving.Count > 0 && arriving[0].Name == "pptcom" && PartialArguments.StringSoFar(arriving[0].Arguments, "script", out _) is string script &&
-                    (!_arriving || Arrived[Arrived.Count - 1] != script))
+                // as the add-in's tools do: the reply's call number 0, and only what has grown since the last time counts
+                if (!RunsNothingEarly && arriving.Count > 0 && arriving[0].Index == 0 && arriving[0].Name == "pptcom" &&
+                    PartialArguments.StringSoFar(arriving[0].Arguments, "script", out _) is string script && (!_arriving || Arrived[Arrived.Count - 1] != script))
                 {
                     Arrived.Add(script);
                     Order.Add("arrived");
                     _arriving = true;
+                    if (ArrivingTakes > TimeSpan.Zero)
+                    {
+                        await Task.Delay(ArrivingTakes, CancellationToken.None).ConfigureAwait(true);
+                    }
                 }
-
-                return Task.CompletedTask;
             }
 
             public ToolCall? ArrivedCall(string notRun)
@@ -1264,7 +1275,8 @@ namespace ChatStreamTests
 
             Check("a line's end in the first call's arguments is told as it comes, whole or in two pieces",
                   Ends((0, "{\"script\":\"x = 1"), (0, "\\ny = 2"), (0, "\\"), (0, "nz"), (0, " = 3\"}")) == "01010" &&
-                  Ends((0, "{\"script\":\"a\\\\"), (0, "n = 1"), (0, "\\\\n\\n")) == "001" && Ends((0, "{\"notice\":\"a"), (1, "{\"script\":\"x\\ny")) == "00",
+                  Ends((0, "{\"script\":\"a\\\\"), (0, "n = 1"), (0, "\\\\n\\n")) == "001" && Ends((0, "{\"notice\":\"a"), (1, "{\"script\":\"x\\ny")) == "00" &&
+                  Ends((1, "{\"script\":\"x\\ny"), (0, "{\"script\":\"a\\nb")) == "01",
                   Ends((0, "{\"script\":\"x = 1"), (0, "\\ny = 2"), (0, "\\"), (0, "nz"), (0, " = 3\"}")) + " / " + Ends((0, "{\"script\":\"a\\\\"), (0, "n = 1"), (0, "\\\\n\\n")) +
                   " / " + Ends((0, "{\"notice\":\"a"), (1, "{\"script\":\"x\\ny")));
             string[] pieces = ["{\"notice\":\"n\",\"language\":\"ja-JP\",\"script\":\"x = 1\\n", "y = 2\\n", "z = 3\"}"];
@@ -1298,6 +1310,28 @@ namespace ChatStreamTests
             Run plain = await RunRequestAsync([CallsTool("imagegen"), Reply("done")]).ConfigureAwait(true);
             Check("a call that is no pptcom script is only run when the reply is whole", plain.Tools.Arrived.Count == 0 && string.Join(",", plain.Tools.Order) == "run imagegen",
                   string.Join(",", plain.Tools.Order));
+
+            // The stream numbers a reply's calls, and the numbers need not come in order. A pptcom call numbered 1 that
+            // comes before the call numbered 0 is not the reply's first: taken for it, its script ran as it arrived, the
+            // call numbered 0 was then given its result, and the script ran again when its own turn came.
+            string swappedCalls = Http(200, Sse(ToolCallDelta("pptcom", "{\"notice\":\"作ります\",\"language\":\"ja-JP\",\"script\":\"x = 1\\ny = 2\"}", first: true, index: 1),
+                                                ToolCallDelta("docread", "{\"doc\":\"d1\"}", first: true, index: 0), Finish("tool_calls"), "[DONE]"));
+            Run swapped = await RunRequestAsync([swappedCalls, Reply("done")]).ConfigureAwait(true);
+            Check("a call with a higher number that comes first is not taken for the reply's first: nothing of it runs early, each call is run once in the reply's order, its notice shows once",
+                  swapped.Tools.Arrived.Count == 0 && string.Join(",", swapped.Tools.Order) == "run docread,run pptcom" &&
+                  swapped.View.Steps.SequenceEqual(["作ります"], StringComparer.Ordinal) && swapped.Error is null,
+                  string.Join(",", swapped.Tools.Order) + " / " + string.Join("|", swapped.View.Steps) + " / " + swapped.Describe());
+
+            // The idle limit is for the server's silence. Lines that take longer to run here than the limit (a slow
+            // statement) are not that: the reply, which the server sent whole, is read to its end. The filler makes the
+            // rest of the response more than was read ahead, so that reading on needs the connection.
+            string slowLines = Http(200, Sse(ToolCallDelta("pptcom", pieces[0], first: true)) + ":" + new string(' ', 24000) + "\n\n" +
+                                         Sse(ToolCallDelta("pptcom", pieces[1], first: false), ToolCallDelta("pptcom", pieces[2], first: false), Finish("tool_calls"), "[DONE]"));
+            Run slow = await RunRequestAsync([slowLines, Reply("done")], tools: new FakeTools { ArrivingTakes = TimeSpan.FromMilliseconds(700) },
+                                             idleLimit: TimeSpan.FromMilliseconds(300)).ConfigureAwait(true);
+            Check("lines that take longer to run here than the idle limit do not end the reply: it is read to its end, with no 再試行",
+                  string.Join(",", slow.Tools.Order) == "arrived,arrived,run pptcom" && slow.View.Retries == 0 && !slow.View.Codes.Contains("AI_SERVER_ERROR") && slow.Error is null,
+                  string.Join(",", slow.Tools.Order) + " / " + slow.Describe());
         }
 
         // A streamed reply that calls one tool, its arguments coming in pieces. `cut`: it ends without saying so.

@@ -227,8 +227,17 @@ namespace Pptcom
         {
             foreach (WindowPane pane in _panes.Values)
             {
-                pane.Control.SetBusy(busy: running is not null, elsewhere: running is not null && !ReferenceEquals(pane, running),
-                                     locked: running is not null && _slideLock.Holds(new IntPtr(pane.Hwnd)));
+                // a pane that cannot be told (its page's browser failed) does not keep the others from hearing it, nor
+                // the request from starting and ending
+                try
+                {
+                    pane.Control.SetBusy(busy: running is not null, elsewhere: running is not null && !ReferenceEquals(pane, running),
+                                         locked: running is not null && _slideLock.Holds(new IntPtr(pane.Hwnd)));
+                }
+                catch (Exception ex) when (Guard.IsRecoverable(ex))
+                {
+                    LogToFile("(a pane could not be told whether a request runs: " + ex.Message + ")");
+                }
             }
         }
 

@@ -195,10 +195,11 @@ namespace Pptcom.Agent
         {
             for (int i = 0; i < calls.Count; i++)
             {
+                // by the call's number, not its place among those that have come: a call with a lower number may come later
                 bool tells = calls[i].Name == "pptcom" || calls[i].Name == AgentTools.ImageTool;
-                if (tells && !_noticesShown.Contains((turn, i)) && NoticeOf(calls[i].Arguments) is string notice)
+                if (tells && !_noticesShown.Contains((turn, calls[i].Index)) && NoticeOf(calls[i].Arguments) is string notice)
                 {
-                    _noticesShown.Add((turn, i));
+                    _noticesShown.Add((turn, calls[i].Index));
                     view.Log("AI_STEP", notice);
                 }
             }

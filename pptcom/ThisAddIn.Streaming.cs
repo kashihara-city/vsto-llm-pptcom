@@ -75,7 +75,10 @@ namespace Pptcom
 
             private async Task RunArrivedAsync(IReadOnlyList<ToolCall> arriving)
             {
-                if (!addin._settings.RunAsArrives || arriving.Count == 0 || arriving[0].Name != "pptcom" || _stuck)
+                // the reply's first call is the one the stream numbers 0: a call with a higher number that comes before
+                // it is not taken for it (it would be run again when its own turn came, and the first call's result
+                // would be this one's)
+                if (!addin._settings.RunAsArrives || arriving.Count == 0 || arriving[0].Index != 0 || arriving[0].Name != "pptcom" || _stuck)
                 {
                     return;
                 }

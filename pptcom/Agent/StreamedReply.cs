@@ -23,9 +23,9 @@ namespace Pptcom.Agent
         private readonly TimeSpan _reportEvery;
         private DateTime _lastReport = DateTime.MinValue;
 
-        // The reply's first tool call (its index), whether its arguments so far end in a backslash that begins an
-        // escape, and whether a line has ended in them since Add last said so (NoteLineEnds).
-        private int _firstCall = int.MaxValue;
+        // Of the reply's first tool call - the one the stream numbers 0, whichever call's fragments come first -
+        // whether its arguments so far end in a backslash that begins an escape, and whether a line has ended in them
+        // since Add last said so (NoteLineEnds).
         private bool _escape;
         private bool _lineEnded;
 
@@ -34,7 +34,7 @@ namespace Pptcom.Agent
         {
             _onProgress = onProgress;
             _reportEvery = reportEvery;
-            Progress.PartialToolCalls = () => [.. _toolSlots.Select(kv => new ToolCall { Id = kv.Value.Id, Name = kv.Value.Name, Arguments = _toolArgs[kv.Key].ToString() })];
+            Progress.PartialToolCalls = () => [.. _toolSlots.Select(kv => new ToolCall { Id = kv.Value.Id, Name = kv.Value.Name, Arguments = _toolArgs[kv.Key].ToString(), Index = kv.Key })];
         }
 
         // How far the reply has come, as the last report had it.
@@ -189,10 +189,9 @@ namespace Pptcom.Agent
             int index = (int?)tc["index"] ?? 0;
             if (!_toolSlots.TryGetValue(index, out ToolCall slot))
             {
-                slot = new ToolCall();
+                slot = new ToolCall { Index = index };
                 _toolSlots[index] = slot;
                 _toolArgs[index] = new StringBuilder();
-                _firstCall = Math.Min(_firstCall, index);
             }
             string id = (string?)tc["id"] ?? "";
             if (id.Length > 0)
@@ -213,7 +212,7 @@ namespace Pptcom.Agent
                 {
                     _toolArgs[index].Append(args);
                     Progress.ToolArgChars += args.Length;
-                    if (index == _firstCall)
+                    if (index == 0)
                     {
                         NoteLineEnds(args);
                     }

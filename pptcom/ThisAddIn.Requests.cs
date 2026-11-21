@@ -139,12 +139,13 @@ namespace Pptcom
             }
             IsBusy = true;
             _runPane = pane;
-            HoldSlides(pane);
-            ShowBusy(pane);
             _cancel = new CancellationTokenSource();
             _windowGone = new CancellationTokenSource();
             try
             {
+                // inside the try: whatever fails from here on, the slides are released and the busy state is taken back
+                HoldSlides(pane);
+                ShowBusy(pane);
                 await HandleDeckEditRequestAsync(pane, userMessage, continues).ConfigureAwait(true);
             }
             catch (OperationCanceledException)
@@ -697,8 +698,13 @@ namespace Pptcom
 
             public async Task<ToolResult> RunAsync(ToolCall call)
             {
-                StreamedScript? streamed = _streamed;
-                _streamed = null;
+                // the script that began to run as it arrived is that of the reply's call number 0, and is ended with it
+                StreamedScript? streamed = call.Index == 0 ? _streamed : null;
+                if (streamed is not null)
+                {
+                    _streamed = null;
+                }
+
                 ToolResult result;
                 try
                 {

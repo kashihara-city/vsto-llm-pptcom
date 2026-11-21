@@ -441,6 +441,10 @@ namespace Pptcom.Agent
 
                     if (streamed.Add(chunk) && onArriving is not null)
                     {
+                        // The idle limit is for the server's silence: it does not run while the lines that have come
+                        // are run here. A script's statement that took longer than the limit closed the response, and
+                        // a reply the server had sent whole was asked for again.
+                        idle.CancelAfter(Timeout.InfiniteTimeSpan);
                         await onArriving(streamed.Progress).ConfigureAwait(true);
                     }
                 }

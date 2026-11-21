@@ -33,12 +33,18 @@ namespace Pptcom.ComProxy
                     return given;
                 }
 
-                HashSet<string> held = new(StringComparer.Ordinal);
+                // what the variables hold, by key (for a shape's Table, with a mark)
+                Dictionary<string, List<(object Value, bool Table)>> holders = new(StringComparer.Ordinal);
                 foreach (KeyValuePair<string, object?> kv in _handles)
                 {
-                    if (HeldKey(kv.Key, kv.Value, out bool table) is string key && !table)
+                    if (HeldKey(kv.Key, kv.Value, out bool table) is string key)
                     {
-                        held.Add(key);
+                        if (!holders.TryGetValue(key, out List<(object Value, bool Table)> values))
+                        {
+                            holders[key] = values = [];
+                        }
+
+                        values.Add((kv.Value!, table));
                     }
                 }
 
@@ -47,9 +53,10 @@ namespace Pptcom.ComProxy
                 {
                     object slide = slides[n];
                     int slideId = (int)((dynamic)slide).SlideID;
-                    if (held.Add(SlideKey(slideId)))
+                    if (!holders.ContainsKey(SlideKey(slideId)))
                     {
                         given.Add(GiveName(SlideNamePrefix, ref _givenSlides, slide, slide));
+                        holders[SlideKey(slideId)] = [(slide, false)];
                     }
 
                     dynamic shapes = ((dynamic)slide).Shapes;
@@ -57,9 +64,11 @@ namespace Pptcom.ComProxy
                     for (int i = 1; i <= count; i++)
                     {
                         object shape = shapes[i];
-                        if (held.Add(ShapeKey(slideId, (int)((dynamic)shape).Id)))
+                        string key = ShapeKey(slideId, (int)((dynamic)shape).Id);
+                        if (!StillHeld(holders, key))
                         {
                             given.Add(GiveName(ShapeNamePrefix, ref _givenShapes, shape, slide));
+                            holders[key] = [(shape, false)];
                         }
                     }
                 }
@@ -72,8 +81,47 @@ namespace Pptcom.ComProxy
             return given;
         }
 
+        // Whether a variable still holds the shape with this key. A shape's key is remembered for the object the
+        // variable holds (ShapeKeyOf), and PowerPoint gives a new slide and a new shape the ids of ones deleted just
+        // before them: a shape made where one was deleted - by hand, by its slide's Delete, through another variable -
+        // then has the key of a variable whose shape is gone. Such a variable named the new shape in the list, and a
+        // script that used the name failed. So each variable with the key of a listed shape is asked whether its shape
+        // is still there; one whose shape is gone is taken for deleted from here on (the lists leave it out).
+        private bool StillHeld(Dictionary<string, List<(object Value, bool Table)>> holders, string key)
+        {
+            if (!holders.TryGetValue(key, out List<(object Value, bool Table)> values))
+            {
+                return false;
+            }
+
+            foreach ((object value, bool table) in values.FindAll(static v => IsGone(v.Value, v.Table)))
+            {
+                if (!_deletedObjects.TryGetValue(value, out _))
+                {
+                    _deletedObjects.Add(value, value);
+                }
+
+                values.Remove((value, table));
+            }
+
+            return values.Exists(static v => !v.Table);
+        }
+
+        // The shape a variable holds (for a Table: the shape it is in) is gone: PowerPoint refuses whatever is asked
+        // of its object.
+        private static bool IsGone(object value, bool table)
+        {
+            return Guard.Try(() =>
+            {
+                dynamic shape = table ? ((dynamic)value).Parent : value;
+                _ = (int)shape.Id;
+                return false;
+            }, fallback: true);
+        }
+
         // The key (SlideKey, ShapeKey) of the slide or shape a variable holds; null for any other value, and for a
-        // slide or shape that is gone. `table`: the variable holds a shape's Table, not the shape.
+        // slide or shape known to be gone (a shape's key may be that of a shape gone since: StillHeld). `table`: the
+        // variable holds a shape's Table, not the shape.
         private string? HeldKey(string id, object? value, out bool table)
         {
             table = false;

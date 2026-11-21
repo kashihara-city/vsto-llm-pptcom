@@ -46,9 +46,9 @@ namespace Pptcom
         // OpenPane: each presentation window opens with its task pane shown (on unless the user turns it off: the
         // pane always opened before this setting). Off, the pane waits hidden for the ribbon's AIアシスタント button.
         public bool OpenPane = true;
-        // RunAsArrives: a pptcom script is run line by line while the model still writes it, and taken back when its
-        // reply does not arrive whole (ThisAddIn.Streaming.cs). On unless the user turns it off; off, every script is
-        // run when its reply is whole.
+        // RunAsArrives: a pptcom script is run line by line while the model still writes it; what ran stays on the
+        // slides when its reply does not arrive whole, and the model is told (ThisAddIn.Streaming.cs). On unless the
+        // user turns it off; off, every script is run when its reply is whole.
         public bool RunAsArrives = true;
         // ContextLimit: when a turn's prompt passes this many tokens, the request's conversation is shortened after it
         // (ThisAddIn.CompactAsync). Set to three quarters of what the chat model takes in when the model is chosen
