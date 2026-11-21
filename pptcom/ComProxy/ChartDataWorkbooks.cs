@@ -596,7 +596,8 @@ namespace Pptcom.ComProxy
 
         // The data of every chart on the deck's slides, in groups and placeholders too; the number of charts. Reading a
         // chart's Workbook opens its data when it is closed, so this takes a moment for each chart: it is only for when
-        // AddChart2 failed on a deck with charts.
+        // AddChart2 failed on a deck with charts. A chart linked to a workbook outside the presentation is left alone:
+        // that workbook is not the deck's to refresh from or to close (ComSecurityPolicy.KeepsItsData).
         public static int CloseEveryChart(object presentation)
         {
             int charts = 0;
@@ -619,7 +620,8 @@ namespace Pptcom.ComProxy
         {
             if (Guard.Try(() => (int)shape.HasChart != 0, fallback: false))
             {
-                object? workbook = Guard.Try<object?>(() => shape.Chart.ChartData.Workbook, fallback: null);
+                object? data = Guard.Try<object?>(() => shape.Chart.ChartData, fallback: null);
+                object? workbook = data is not null && ComSecurityPolicy.KeepsItsData(data) ? Guard.Try<object?>(() => ((dynamic)data).Workbook, fallback: null) : null;
                 if (workbook is not null)
                 {
                     Refresh(Guard.Try<object?>(() => shape.Chart, fallback: null));

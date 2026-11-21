@@ -58,6 +58,7 @@ namespace ChatStreamTests
             PartialArgumentsTests();
             PendingDocumentTests();
             AttachmentRoomTests();
+            FilesAndFoldersTests();
             SlideLockTests();
             Console.WriteLine();
             Console.WriteLine(_fail == 0 ? Invariant($"ALL PASSED ({_pass})") : Invariant($"{_fail} FAILED, {_pass} passed"));
@@ -801,6 +802,32 @@ namespace ChatStreamTests
                   counted.ReadingFor(first) == 2 && counted.ReadingFor(second) == 1 && counted.ReadingFor(conversation: null) == 0 &&
                   counted.Taken("p1") && !counted.Taken("p4") && !counted.Taken("p9"),
                   Invariant($"{counted.ReadingFor(first)} {counted.ReadingFor(second)} {counted.ReadingFor(conversation: null)} {counted.Taken("p1")} {counted.Taken("p4")}"));
+        }
+
+        // A file attached from outside is read through one handle, and refused by what it holds then
+        // (AttachedDocument.ReadWithin); a request's records get a folder that is not there yet (FreeFolder).
+        private static void FilesAndFoldersTests()
+        {
+            string folder = Path.Combine(Path.GetTempPath(), "pptcom_tests_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            try
+            {
+                string file = Path.Combine(folder, "a.bin");
+                System.IO.File.WriteAllBytes(file, [1, 2, 3, 4, 5]);
+                Check("a file within the limit is read whole; one over it is not read",
+                      AttachedDocument.ReadWithin(file, limit: 5) is { Length: 5 } read && read[4] == 5 && AttachedDocument.ReadWithin(file, limit: 4) is null, "");
+                string run = Path.Combine(folder, "addin_20260101_000000");
+                string first = AttachedDocument.FreeFolder(run);
+                Directory.CreateDirectory(first);
+                string second = AttachedDocument.FreeFolder(run);
+                Directory.CreateDirectory(second);
+                Check("a folder that is there already is not given again: the next free name is",
+                      first == run && second == run + "_2" && AttachedDocument.FreeFolder(run) == run + "_3", first + " / " + second + " / " + AttachedDocument.FreeFolder(run));
+            }
+            finally
+            {
+                Directory.Delete(folder, recursive: true);
+            }
         }
 
         // What a conversation may have attached (AttachmentRoom). A document's size is estimated as it is attached

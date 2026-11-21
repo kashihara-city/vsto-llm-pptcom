@@ -313,7 +313,10 @@ namespace Pptcom
             string ticket = Invariant($"a{++_attachTickets}");
             try
             {
-                byte[] bytes = File.ReadAllBytes(info.FullName);
+                // through one handle, and by what it holds then: a file replaced after its size was looked at above
+                // could be longer than the limit
+                byte[] bytes = AttachedDocument.ReadWithin(info.FullName, MaxDocumentBytes)
+                    ?? throw new InvalidOperationException("50MB を超えるファイルは添付できません: " + path);
                 pane.Pending.Start(ticket, info.Name, refused: false, () => ConversationOf(pane));
                 pane.Control.ConvertDocument(ticket, info.Name, bytes);
             }

@@ -238,6 +238,68 @@ namespace Pptcom.ComProxy
             return ((int)Math.Round((double)v, MidpointRounding.AwayFromZero)).ToString(CultureInfo.InvariantCulture);
         }
 
+        // The one slide of a presentation that was made in PowerPoint's own window and not touched since: the empty
+        // title slide such a presentation starts with (one made through COM starts with none), which a request takes
+        // away before the model works. Null for any other deck - and whenever the slide or the file may hold something
+        // of the user's that its shapes do not show: a presentation that was ever saved is the user's document, and
+        // none of its slides is removed; notes, a background of the slide's own and comments are work too (a saved
+        // presentation's only slide, its title still empty, was removed with its notes and its background). What
+        // cannot be read counts as the user's. `placeholders`: how many empty placeholders the slide has.
+        public static object? UntouchedStarterSlide(object presentation, out int placeholders)
+        {
+            int count = 0;
+            object? found = Guard.Try<object?>(() =>
+            {
+                dynamic pres = presentation;
+                if ((int)pres.Slides.Count != 1 || ((string?)pres.Path ?? "").Length > 0)
+                {
+                    return null;
+                }
+
+                dynamic slide = pres.Slides.Item(1);
+                if ((int)slide.FollowMasterBackground == 0 || (int)slide.Comments.Count > 0 || HasNotes(slide))
+                {
+                    return null;
+                }
+
+                dynamic shapes = slide.Shapes;
+                count = (int)shapes.Count;
+                for (int i = 1; i <= count; i++)
+                {
+                    dynamic shape = shapes.Item(i);
+                    if ((int)shape.Type != MsoPlaceholder || ((int)shape.HasTextFrame != 0 && (int)shape.TextFrame.HasText != 0))
+                    {
+                        return null;
+                    }
+                }
+
+                return slide;
+            }, fallback: null);
+            placeholders = found is null ? 0 : count;
+            return found;
+        }
+
+        private const int MsoPlaceholder = 14, PpPlaceholderBody = 2;
+
+        // Whether the slide's notes have text: the notes page's body placeholder (its other placeholders are the
+        // slide's picture, the page number and the like).
+        private static bool HasNotes(dynamic slide)
+        {
+            dynamic shapes = slide.NotesPage.Shapes;
+            int count = (int)shapes.Count;
+            for (int i = 1; i <= count; i++)
+            {
+                dynamic shape = shapes.Item(i);
+                if ((int)shape.Type == MsoPlaceholder && (int)shape.PlaceholderFormat.Type == PpPlaceholderBody &&
+                    (int)shape.HasTextFrame != 0 && (int)shape.TextFrame.HasText != 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         // The shape list that goes with a slide rendering - what a VBA `For Each shp In
         // slide.Shapes: Debug.Print ...` loop would show - one line per shape, after the slide's size, and last the
         // shapes that overlap partly (Overlaps), when any do:

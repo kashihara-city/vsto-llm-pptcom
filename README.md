@@ -228,6 +228,7 @@ C#のコードは、ビルドのたびに静的解析（Microsoft.CodeAnalysis.N
 | `temp\build\ComScriptTests\bin\Debug\ComScriptTests.exe` | pptcomスクリプトの解析と実行（式の値はVBScriptとVBAの値と照らす）。断る文とメンバー、依頼のプレゼンテーションの固定、グラフのデータで使えるもの、書いた文字に入れる言語とその対象。届いている途中のスクリプト（実行してよい行の範囲、分けて実行しても一度に実行したときと同じ結果になること）。モデルへの報告（エラーの案内、引数の丸め、図形一覧の中身とアニメーション、一覧がスライドと図形に付ける名前、背景に対して見えにくい文字、角丸の角からはみ出す四角い図形） |
 | `temp\build\ChatStreamTests\bin\Debug\ChatStreamTests.exe` | LLMとの通信（応答の読み取り、失敗の見分け、中止と待ち時間、APIキーの扱い）。依頼のターン（作業ウィンドウとPowerPointは偽物で、ツールの実行、pptcomの呼び出しの案内の表示、ターンの上限、再試行と中止、文脈の上限での会話の短縮、届いている途中のpptcomの呼び出しの受け渡しと、応答が切れたときに実行済みの分を会話に残すこと）。モデルに渡すもの（ツールとシステムプロンプト、会話の短縮、表示言語と日付、画像の色）。添付の受け付けと、添付できる量の見積もり。作業ウィンドウのWebView2に指定するプロキシ（来た通信を断る） |
 | `node scripts/test/docs-queue.cjs` | 作業ウィンドウの添付（`docs.js`）。どこで失敗しても後のファイルが続くこと、画像と貼り付けの扱い |
+| `node scripts/test/pdf-images.cjs` | 添付したPDFの画像（`pdfdoc.js`）。採る枚数を超えて変換しないこと、同じ画像は1回だけ採ること、大きすぎる画像は縮めて採ること |
 | `node scripts/test/taskpane.cjs` | 作業ウィンドウの送信と表示（`taskpane.js`）。依頼の送り方と終わり方、途中まで反映した分が残っていることの表示、「続ける」、設定欄、通信遮断プロキシの状態の表示、APIキーの入力と削除 |
 | `python -X utf8 scripts/test/js-syntax.py` | 作業ウィンドウのJavaScriptが構文として読めること |
 | `python -X utf8 scripts/test/i18n.py` | 文言のコードと言語ファイルがそろい、コードに日本語の文が無いこと |

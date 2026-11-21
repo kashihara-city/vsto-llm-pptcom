@@ -23,7 +23,10 @@
   <Package Name="vsto-llm-pptcom" Manufacturer="Kashihara City" Version="$(var.Version)" Scope="perUser"
            UpgradeCode="79570C7A-CBF7-4EBF-9EBA-50A23AAC6154" Language="0">
     <SummaryInformation Description="vsto-llm-pptcom - an LLM edits the open PowerPoint presentation through pptcom" />
-    <MajorUpgrade IgnoreLanguage="yes" DowngradeErrorMessage="A newer version of vsto-llm-pptcom is already installed." />
+    <!-- The version installed before is removed inside the installation's transaction (after InstallInitialize): when
+         putting the new one in fails, the rollback brings the old one back. Scheduled as it is by default (before the
+         transaction begins), a failed update left the user with neither. -->
+    <MajorUpgrade Schedule="afterInstallInitialize" IgnoreLanguage="yes" DowngradeErrorMessage="A newer version of vsto-llm-pptcom is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <StandardDirectory Id="LocalAppDataFolder">

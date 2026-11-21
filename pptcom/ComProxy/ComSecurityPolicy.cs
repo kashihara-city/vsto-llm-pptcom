@@ -337,7 +337,35 @@ namespace Pptcom.ComProxy
                 return null;
             }
 
+            if (string.Equals(member, "Workbook", StringComparison.OrdinalIgnoreCase) && Array.Exists(NameForms(TryGetTypeName(target) ?? ""), IsChartDataName) &&
+                !KeepsItsData(target))
+            {
+                return LinkedChartData;
+            }
+
             return TryGetTypeLibGuid(target) == ExcelTypeLib ? CheckChartDataMember(TryGetTypeName(target), member, set: false) : CheckMemberOnType(TryGetTypeName(target), member);
+        }
+
+        private static bool IsChartDataName(string name)
+        {
+            return string.Equals(name, "ChartData", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private const string LinkedChartData =
+            "ChartData.Workbook (this chart's data is not kept in the presentation: the chart is linked to a workbook outside it, which pptcom " +
+            "neither reads nor changes. Tell the user that the chart is linked; its look can still be changed through Chart)";
+
+        // Whether a chart's data is the presentation's own: kept in it, not in a workbook the chart is linked to
+        // (ChartData.IsLinked). Of a linked chart PowerPoint gives that workbook as the chart's data - another file of
+        // the user's, where a script could read and write cells and which the engine would close with the rest. A chart
+        // that cannot say counts as linked.
+        internal static bool KeepsItsData(object chartData)
+        {
+            return Guard.Try(() =>
+            {
+                object linked = ((dynamic)chartData).IsLinked;
+                return !Convert.ToBoolean(linked, System.Globalization.CultureInfo.InvariantCulture);
+            }, fallback: false);
         }
 
         // The rule for `member` on an object of `typeName` (either form, NameForms), as CheckMemberOnTarget and the

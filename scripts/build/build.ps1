@@ -7,7 +7,10 @@
      (the key belongs to this machine's certificate, so it is never committed).
   3. Builds the WiX v5 project (WixToolset.Sdk is restored from nuget.org) and copies the MSI to release\.
 
-  -NoRestore: nothing is fetched; the packages NuGet restored before are used.
+  -NoRestore: NuGet restores nothing; the packages it restored before are used. Only NuGet: the page's third-party
+              parts (PDF.js, anydoc) are still made from the archives under deps\ when their copies under temp\ are
+              missing or older than those, and making them downloads the tools that are not cached (wasm-bindgen,
+              wasm-opt) and lets cargo fetch. For a build with no network, have an earlier build make them.
 
   Version: <ApplicationVersion> in pptcom.csproj (e.g. 0.0.1.0 -> MSI 0.0.1).
 

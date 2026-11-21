@@ -81,6 +81,14 @@ jobs:
           node scripts/test/docs-queue.cjs
           if ($LASTEXITCODE -ne 0) { throw "attachment tests failed" }
 
+      - name: Run the PDF image tests
+        shell: pwsh
+        run: |
+          # The task pane's pdfdoc.js, with stand-ins for PDF.js and the canvas: an attached PDF's images are made into
+          # PNGs only up to the number kept, one that comes twice counts once, and a very large one is taken smaller.
+          node scripts/test/pdf-images.cjs
+          if ($LASTEXITCODE -ne 0) { throw "PDF image tests failed" }
+
       - name: Run the task pane tests
         shell: pwsh
         run: |

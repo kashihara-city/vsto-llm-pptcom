@@ -89,7 +89,9 @@ namespace Pptcom
                 LogToFile("(a request came while one runs; dropped: " + userMessage + ")");
                 if (!ReferenceEquals(pane, _runPane))
                 {
-                    pane.Control.SetBusy(busy: true, elsewhere: true); // its page waits for an answer to its send
+                    // its page waits for an answer to its send; its window may show the deck the request holds, and the
+                    // note that the slides cannot be edited then stays (it went, with the slides still held)
+                    pane.Control.SetBusy(busy: true, elsewhere: true, locked: _slideLock.Holds(new IntPtr(pane.Hwnd)));
                 }
 
                 return;
@@ -311,33 +313,17 @@ namespace Pptcom
         // A presentation created from PowerPoint's UI starts with one empty title slide (two
         // empty placeholders); one created via COM starts with none. The model otherwise has to
         // discover and delete it (carrot run, generated-pptx/addin_20261004_223624). Removed
-        // only when it is the deck's single slide and holds nothing but empty placeholders.
+        // only from a presentation that is new and holds nothing of the user's (DeckReader.UntouchedStarterSlide).
         private static void RemoveUntouchedStarterSlide(RunRecord run)
         {
             try
             {
-                dynamic pres = run.Pane.Presentation;
-                if ((int)pres.Slides.Count != 1)
+                if (DeckReader.UntouchedStarterSlide(run.Pane.Presentation, out int shapeCount) is not object slide)
                 {
                     return;
                 }
 
-                dynamic slide = pres.Slides(1);
-                int shapeCount = (int)slide.Shapes.Count;
-                for (int i = 1; i <= shapeCount; i++)
-                {
-                    dynamic shape = slide.Shapes(i);
-                    if ((int)shape.Type != 14)
-                    {
-                        return;                       // not msoPlaceholder
-                    }
-
-                    if ((int)shape.HasTextFrame != 0 && (int)shape.TextFrame.HasText != 0)
-                    {
-                        return;
-                    }
-                }
-                slide.Delete();
+                ((dynamic)slide).Delete();
                 LogToFile(Invariant($"(removed the untouched starter slide: 1 slide with {shapeCount} empty placeholder(s))"));
                 run.Pane.Control.Log("STARTER_SLIDE_REMOVED");
             }
@@ -367,7 +353,7 @@ namespace Pptcom
             }
             try
             {
-                string dir = Path.Combine(OutputRoot(), "addin_" + run.Started.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture));
+                string dir = AttachedDocument.FreeFolder(Path.Combine(OutputRoot(), "addin_" + run.Started.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture)));
                 Directory.CreateDirectory(dir);
                 summary["run_folder"] = dir;
 

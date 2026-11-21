@@ -253,6 +253,7 @@ namespace ComScriptTests
             ArrivingScriptTests();
             ReadInPartsTests();
             GivenNameTests();
+            StarterSlideTests();
             RejectedStatementTests();
         }
 
@@ -470,6 +471,95 @@ namespace ComScriptTests
                    Invariant($"there {heldThere}; deleted {heldDeleted}, taken for deleted {names.TakenForDeleted(deleted)}; busy once {heldBusy} then {heldAfter}, taken for deleted {names.TakenForDeleted(busyOnce)}"));
             Report("given names: a variable that holds a shape's Table does not name the shape",
                    !names.StillHeld(new(StringComparer.Ordinal) { ["256:2"] = [(new TableStandIn(0), true)] }, "256:2"), "");
+        }
+
+        // The empty title slide a presentation made in PowerPoint's window starts with is taken away at a request's
+        // start - only from a presentation that is new and has nothing of the user's (DeckReader.UntouchedStarterSlide).
+        // A presentation that was saved, notes, a background of the slide's own and comments are the user's.
+        private static void StarterSlideTests()
+        {
+            static string Found(DeckLike deck)
+            {
+                return DeckReader.UntouchedStarterSlide(deck, out int placeholders) is null ? "kept" : Invariant($"removed ({placeholders})");
+            }
+
+            ShapeLike empty = new(type: 14, text: false), written = new(type: 14, text: true), picture = new(type: 13, text: false);
+            Report("starter slide: a new presentation's one slide with empty placeholders only is the one to remove; with none at all too",
+                   Found(new DeckLike("", new SlideLike([empty, empty]))) == "removed (2)" && Found(new DeckLike("", new SlideLike([]))) == "removed (0)",
+                   Found(new DeckLike("", new SlideLike([empty, empty]))) + " / " + Found(new DeckLike("", new SlideLike([]))));
+            Report("starter slide: text in a placeholder, another kind of shape, a second slide: kept",
+                   Found(new DeckLike("", new SlideLike([written, empty]))) == "kept" && Found(new DeckLike("", new SlideLike([empty, picture]))) == "kept" &&
+                   Found(new DeckLike("", new SlideLike([empty]), new SlideLike([empty]))) == "kept", "");
+            Report("starter slide: a presentation that was saved keeps its slide, whatever is on it",
+                   Found(new DeckLike("the folder it was saved to", new SlideLike([empty, empty]))) == "kept",
+                   Found(new DeckLike("the folder it was saved to", new SlideLike([empty, empty]))));
+            Report("starter slide: notes, a background of the slide's own, a comment: kept",
+                   Found(new DeckLike("", new SlideLike([empty, empty]) { Notes = "what to say" })) == "kept" &&
+                   Found(new DeckLike("", new SlideLike([empty, empty]) { FollowMasterBackground = 0 })) == "kept" &&
+                   Found(new DeckLike("", new SlideLike([empty, empty]) { CommentCount = 1 })) == "kept",
+                   Found(new DeckLike("", new SlideLike([empty, empty]) { Notes = "what to say" })) + " / " +
+                   Found(new DeckLike("", new SlideLike([empty, empty]) { FollowMasterBackground = 0 })));
+            Report("starter slide: the notes page's other placeholders (the page number) are no notes; what cannot be read keeps the slide",
+                   Found(new DeckLike("", new SlideLike([empty, empty]) { PageNumber = true })) == "removed (2)" &&
+                   Found(new DeckLike("", new SlideLike([empty, empty]) { NotesUnreadable = true })) == "kept", "");
+        }
+
+        // A presentation as UntouchedStarterSlide reads it: its path ("" when it was never saved) and its slides.
+        internal sealed class DeckLike(string path, params SlideLike[] slides)
+        {
+            public string Path { get; } = path;
+
+            public ItemsLike Slides { get; } = new([.. slides]);
+        }
+
+        internal sealed class SlideLike(ShapeLike[] shapes)
+        {
+            public int FollowMasterBackground { get; set; } = -1;
+
+            public int CommentCount { get; set; }
+
+            public string Notes { get; set; } = "";
+
+            // the notes page has a page number with text in it
+            public bool PageNumber { get; set; }
+
+            public bool NotesUnreadable { get; set; }
+
+            public ItemsLike Shapes { get; } = new([.. shapes]);
+
+            public ItemsLike Comments => new([.. Enumerable.Repeat<object>("a comment", CommentCount)]);
+
+            public SlideLike NotesPage => NotesUnreadable
+                ? throw new InvalidOperationException("the notes page cannot be read")
+                : new SlideLike([new ShapeLike(type: 14, text: false) { Placeholder = 1 }, new ShapeLike(type: 14, text: Notes.Length > 0) { Placeholder = 2 },
+                                 new ShapeLike(type: 14, text: PageNumber) { Placeholder = 13 }]);
+        }
+
+        // A shape: its type (14: a placeholder), whether it has text, and what kind of placeholder it is (2: body).
+        internal sealed class ShapeLike(int type, bool text)
+        {
+            public int Type { get; } = type;
+
+            public int HasTextFrame { get; } = -1;
+
+            public ShapeLike TextFrame => this;
+
+            public int HasText { get; } = text ? -1 : 0;
+
+            public int Placeholder { get; set; } = 1;
+
+            public ShapeLike PlaceholderFormat => new(Placeholder, text: false);
+        }
+
+        // A collection as PowerPoint's: Count and Item(n) from 1.
+        internal sealed class ItemsLike(object[] items)
+        {
+            public int Count => items.Length;
+
+            public object Item(int n)
+            {
+                return items[n - 1];
+            }
         }
 
         // A shape as a variable holds it, for PresenceOf: reading its Id fails the first `failures` times with this
@@ -830,6 +920,12 @@ namespace ComScriptTests
         // chart's data sheet are open (ComSecurityPolicy.ChartDataMembers), and no formula goes into them.
         private static void ChartDataPolicyTests()
         {
+            // a chart linked to a workbook outside the presentation does not keep its data: that workbook is not given
+            // to scripts, nor closed by the engine; a chart that cannot say counts as linked
+            Report("chart data: a chart's data is the presentation's own unless the chart is linked, or cannot say",
+                   ComSecurityPolicy.KeepsItsData(new ChartDataLike(linked: false)) && !ComSecurityPolicy.KeepsItsData(new ChartDataLike(linked: true)) &&
+                   !ComSecurityPolicy.KeepsItsData(new object()), "");
+
             Guid excel = ComSecurityPolicy.ExcelTypeLib;
             Report("chart data: its workbook, sheets, sheet and ranges are kept, nothing else of Excel",
                    Array.TrueForAll(["_Workbook", "Sheets", "_Worksheet", "Range"], t => ComSecurityPolicy.IsReturnKindAllowed(excel, t)) &&
@@ -997,6 +1093,12 @@ namespace ComScriptTests
             {
                 HResult = unchecked((int)0x80004005);
             }
+        }
+
+        // A chart's ChartData, as far as KeepsItsData asks it.
+        internal sealed class ChartDataLike(bool linked)
+        {
+            public bool IsLinked { get; } = linked;
         }
 
         // An Application whose Color is a number, as a chart's Font.Color is.

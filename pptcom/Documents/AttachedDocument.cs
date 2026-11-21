@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
@@ -34,6 +35,44 @@ namespace Pptcom.Documents
 
         // docread page draws a page with its long side at most this many pixels (ThisAddIn.ReadPdfPagesAsync).
         public const int PageMaxSide = 1600;
+
+        // A file's bytes, or null when it holds more than `limit`: opened once, and its length taken from the open file,
+        // which nobody can write to meanwhile.
+        public static byte[]? ReadWithin(string path, long limit)
+        {
+            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (stream.Length > limit)
+            {
+                return null;
+            }
+
+            byte[] bytes = new byte[stream.Length];
+            for (int read = 0; read < bytes.Length;)
+            {
+                int n = stream.Read(bytes, read, bytes.Length - read);
+                if (n == 0)
+                {
+                    throw new EndOfStreamException("the file ended before its length: " + path);
+                }
+
+                read += n;
+            }
+
+            return bytes;
+        }
+
+        // `folder`, or the first of `folder`_2, `folder`_3 ... that is not there yet: a request's records get a folder
+        // of their own also when another request began in the same second (its log and summary were replaced).
+        public static string FreeFolder(string folder)
+        {
+            string free = folder;
+            for (int n = 2; Directory.Exists(free) || File.Exists(free); n++)
+            {
+                free = folder + "_" + n.ToString(CultureInfo.InvariantCulture);
+            }
+
+            return free;
+        }
         // Pictures: a small PNG the page drew for the chip (a data: URL, "" when it could not), and whether a
         // request has shown the picture to the model yet.
         public string Thumbnail = "";

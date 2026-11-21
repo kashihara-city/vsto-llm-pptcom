@@ -15,8 +15,10 @@ import * as pdfjs from "./vendor/pdfjs/pdf.mjs";
 pdfjs.GlobalWorkerOptions.workerSrc = new URL("vendor/pdfjs/pdf.worker.mjs", import.meta.url).href;
 const assets = new URL("vendor/pdfjs/", import.meta.url).href;
 
-// Images smaller than this (icons, rules, pieces of a layout) are left out, and at most MaxImages are kept.
-const MinSide = 64, MinArea = 120 * 120, MaxImages = 60;
+// Images smaller than this (icons, rules, pieces of a layout) are left out, and at most MaxImages are kept. One whose
+// long side is over MaxSide is taken smaller: a scan at a printer's resolution has tens of megapixels, and as a PNG
+// of its own size it took the page's memory and the user's time, for a picture that is shown far smaller.
+const MinSide = 64, MinArea = 120 * 120, MaxImages = 60, MaxSide = 4000;
 
 function open(bytes) {
   // PDF.js takes ownership of the buffer it is given: pass a copy.
@@ -49,13 +51,15 @@ export async function convertPdf(bytes) {
       }
       for (const l of lines) out.push(l);
       if (images.length < MaxImages) {
-        for (const img of await pageImages(page)) {
-          if (images.length >= MaxImages) break;
+        // one at a time: once the document has as many images as it keeps, no further one is made into a PNG (a
+        // page's images were all made first, and those over the number thrown away)
+        for await (const img of pageImages(page)) {
           const key = await digest(img.data);
           if (seen.has(key)) continue;
           seen.add(key);
           out.push(`[[img:${images.length}]] (page ${p}, ${img.where})`);
           images.push({ index: images.length, mediaType: "image/png", data: img.data, textlessPage: textless });
+          if (images.length >= MaxImages) break;
         }
       }
       page.cleanup();
@@ -86,13 +90,13 @@ function textLines(content) {
 }
 
 // The images painted on the page, as PNG bytes, with where they sit (from the transform in effect when
-// each is painted). The same image painted twice on a page counts once.
-async function pageImages(page) {
+// each is painted), one after the other as they are asked for. The same image painted twice on a page counts once.
+async function* pageImages(page) {
   const ops = await page.getOperatorList();
   const O = pdfjs.OPS;
   const view = page.view;   // [x0, y0, x1, y1] in PDF units
   const pw = view[2] - view[0], ph = view[3] - view[1];
-  const found = [], ids = new Set();
+  const ids = new Set();
   const stack = [];
   let ctm = [1, 0, 0, 1, 0, 0];
   const mul = (a, b) => [a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1], a[0] * b[2] + a[2] * b[3],
@@ -111,10 +115,9 @@ async function pageImages(page) {
       // the unit square mapped by the transform: its center, relative to the page
       const cx = (ctm[4] + (ctm[0] + ctm[2]) / 2 - view[0]) / pw;
       const cy = 1 - (ctm[5] + (ctm[1] + ctm[3]) / 2 - view[1]) / ph;
-      found.push({ data, where: describe(cx, cy, Math.abs(ctm[0] * ctm[3]) / (pw * ph)) });
+      yield { data, where: describe(cx, cy, Math.abs(ctm[0] * ctm[3]) / (pw * ph)) };
     }
   }
-  return found;
 }
 
 function objectOf(page, id) {
@@ -132,31 +135,49 @@ function describe(cx, cy, area) {
   return `${v === "middle" && !h ? "center" : v + h}, ${size}`;
 }
 
-// PDF.js hands decoded images either as an ImageBitmap or as raw pixels (kind 1: 1 bit gray, 2: RGB, 3: RGBA).
+// PDF.js hands decoded images either as an ImageBitmap or as raw pixels (kind 1: 1 bit gray, 2: RGB, 3: RGBA). The
+// PNG's long side is at most MaxSide: a larger image is made smaller.
 async function toPng(img) {
-  const canvas = new OffscreenCanvas(img.width, img.height);
+  const scale = Math.min(1, MaxSide / Math.max(img.width, img.height));
+  const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
+  const canvas = new OffscreenCanvas(w, h);
   const ctx = canvas.getContext("2d");
   ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, img.width, img.height);
-  if (img.bitmap) ctx.drawImage(img.bitmap, 0, 0);
+  ctx.fillRect(0, 0, w, h);
+  if (img.bitmap) ctx.drawImage(img.bitmap, 0, 0, w, h);
   else if (img.data) {
-    const rgba = new Uint8ClampedArray(img.width * img.height * 4);
-    const src = img.data, n = img.width * img.height;
-    if (img.kind === 3) rgba.set(src.subarray(0, rgba.length));
-    else if (img.kind === 2) for (let i = 0, j = 0; i < n; i++, j += 3) { rgba[i * 4] = src[j]; rgba[i * 4 + 1] = src[j + 1]; rgba[i * 4 + 2] = src[j + 2]; rgba[i * 4 + 3] = 255; }
-    else if (img.kind === 1) {
-      const rowBytes = (img.width + 7) >> 3;
-      for (let y = 0; y < img.height; y++) for (let x = 0; x < img.width; x++) {
-        const v = (src[y * rowBytes + (x >> 3)] >> (7 - (x & 7))) & 1 ? 255 : 0, k = (y * img.width + x) * 4;
-        rgba[k] = rgba[k + 1] = rgba[k + 2] = v; rgba[k + 3] = 255;
-      }
-    }
-    else return null;
-    ctx.putImageData(new ImageData(rgba, img.width, img.height), 0, 0);
+    const rgba = pixels(img, w, h);
+    if (!rgba) return null;
+    ctx.putImageData(new ImageData(rgba, w, h), 0, 0);
   }
   else return null;
   const blob = await canvas.convertToBlob({ type: "image/png" });
   return new Uint8Array(await blob.arrayBuffer());
+}
+
+// An image's raw pixels as RGBA, w x h: its own size, or smaller - each pixel is then the average of the pixels of
+// the image it stands for, so that nothing as large as the image is made on the way. Null for a kind of raw data
+// that is none of PDF.js's three.
+function pixels(img, w, h) {
+  const src = img.data, sw = img.width, sh = img.height, kind = img.kind;
+  if (kind !== 1 && kind !== 2 && kind !== 3) return null;
+  const out = new Uint8ClampedArray(w * h * 4), rowBytes = (sw + 7) >> 3;
+  if (kind === 3 && w === sw && h === sh) { out.set(src.subarray(0, out.length)); return out; }
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.floor(y * sh / h), y1 = Math.max(y0 + 1, Math.floor((y + 1) * sh / h));
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.floor(x * sw / w), x1 = Math.max(x0 + 1, Math.floor((x + 1) * sw / w));
+      let r = 0, g = 0, b = 0, a = 0;
+      for (let sy = y0; sy < y1; sy++) for (let sx = x0; sx < x1; sx++) {
+        if (kind === 3) { const k = (sy * sw + sx) * 4; r += src[k]; g += src[k + 1]; b += src[k + 2]; a += src[k + 3]; }
+        else if (kind === 2) { const k = (sy * sw + sx) * 3; r += src[k]; g += src[k + 1]; b += src[k + 2]; a += 255; }
+        else { const v = (src[sy * rowBytes + (sx >> 3)] >> (7 - (sx & 7))) & 1 ? 255 : 0; r += v; g += v; b += v; a += 255; }
+      }
+      const n = (y1 - y0) * (x1 - x0), k = (y * w + x) * 4;
+      out[k] = r / n; out[k + 1] = g / n; out[k + 2] = b / n; out[k + 3] = a / n;
+    }
+  }
+  return out;
 }
 
 async function digest(bytes) {
