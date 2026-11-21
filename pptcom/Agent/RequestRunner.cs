@@ -102,11 +102,11 @@ namespace Pptcom.Agent
                         }
                     }, async p =>
                     {
-                        // a pptcom script runs while the model still writes it (IRequestTools.StreamAsync)
-                        if (p.ToolArgChars > 0)
-                        {
-                            await tools.StreamAsync(p.PartialToolCalls()).ConfigureAwait(true);
-                        }
+                        // a line of the first call's script has come: a pptcom script runs while the model still writes
+                        // it (IRequestTools.StreamAsync), after the call's notice has been shown
+                        List<ToolCall> arriving = p.PartialToolCalls();
+                        ShowNotices(turn, arriving);
+                        await tools.StreamAsync(arriving).ConfigureAwait(true);
                     }, ct).ConfigureAwait(true);
                 }
                 catch (LlmServerException ex)

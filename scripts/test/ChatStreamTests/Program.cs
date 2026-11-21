@@ -1053,15 +1053,13 @@ namespace ChatStreamTests
             }
         }
 
-        // `everyEvent`: the reply's progress is reported at each of its events, not twice a second: its calls are then
-        // handed to the tools at each step of their arrival (IRequestTools.StreamAsync).
         private static async Task<Run> RunRequestAsync(string[] responses, int maxTurns = 20, int contextLimit = 100000, FakeView? view = null, FakeTools? tools = null,
-                                                       string? url = null, bool everyEvent = false)
+                                                       string? url = null)
         {
             using FakeServer server = new(responses, stall: false);
             RequestSettings settings = new()
             {
-                Llm = new OpenAiCompatibleClient(url ?? server.Url, "", "test-model") { ProgressInterval = everyEvent ? TimeSpan.Zero : TimeSpan.FromMilliseconds(500) },
+                Llm = new OpenAiCompatibleClient(url ?? server.Url, "", "test-model"),
                 Tools = [],
                 ContextLimit = contextLimit,
                 MaxTurns = maxTurns,
@@ -1235,22 +1233,35 @@ namespace ChatStreamTests
                   Script("[1]", out _) is null && Script("{\"script\":5}", out _) is null && Script("{\"o\":{\"script\":\"inner\"", out _) is null, "");
         }
 
-        // A reply's first pptcom call is handed to the tools while it still arrives (IRequestTools.StreamAsync), as far
-        // as its script has come each time; when the reply is whole the call is run as ever. A reply that does not
+        // A reply's first pptcom call is handed to the tools while it still arrives (IRequestTools.StreamAsync), each time
+        // a line of its script has come, as far as it has come; when the reply is whole the call is run as ever. A reply that does not
         // arrive whole has the call ended as far as it ran (IRequestTools.ArrivedCall): the call and its result join
         // the conversation - once - before the user is asked for 再試行, and the reply asked for again goes on from
         // there; so has one that fails for good.
         private static async Task ArrivingCallsAsync()
         {
             Console.WriteLine("== a reply's call run as it arrives");
+            // the reader is told when a line has ended in the first call's arguments: the two characters \n of the JSON,
+            // also when they come in two pieces; an n after an escaped backslash is no line's end, nor is another call's
+            static string Ends(params (int Call, string Piece)[] pieces)
+            {
+                StreamedReply reply = new(onProgress: null, TimeSpan.FromHours(1));
+                return string.Concat(pieces.Select(p => reply.Add(JObject.Parse(ToolCallDelta("pptcom", p.Piece, first: false, index: p.Call))) ? "1" : "0"));
+            }
+
+            Check("a line's end in the first call's arguments is told as it comes, whole or in two pieces",
+                  Ends((0, "{\"script\":\"x = 1"), (0, "\\ny = 2"), (0, "\\"), (0, "nz"), (0, " = 3\"}")) == "01010" &&
+                  Ends((0, "{\"script\":\"a\\\\"), (0, "n = 1"), (0, "\\\\n\\n")) == "001" && Ends((0, "{\"notice\":\"a"), (1, "{\"script\":\"x\\ny")) == "00",
+                  Ends((0, "{\"script\":\"x = 1"), (0, "\\ny = 2"), (0, "\\"), (0, "nz"), (0, " = 3\"}")) + " / " + Ends((0, "{\"script\":\"a\\\\"), (0, "n = 1"), (0, "\\\\n\\n")) +
+                  " / " + Ends((0, "{\"notice\":\"a"), (1, "{\"script\":\"x\\ny")));
             string[] pieces = ["{\"notice\":\"n\",\"language\":\"ja-JP\",\"script\":\"x = 1\\n", "y = 2\\n", "z = 3\"}"];
-            Run whole = await RunRequestAsync([CallsToolInPieces("pptcom", pieces), Reply("done")], everyEvent: true).ConfigureAwait(true);
-            Check("the script is handed over as it grows, then the call is run; nothing is ended early",
-                  string.Join("|", whole.Tools.Arrived) == "x = 1\n|x = 1\ny = 2\n|x = 1\ny = 2\nz = 3" && string.Join(",", whole.Tools.Order) == "arrived,arrived,arrived,run pptcom" &&
+            Run whole = await RunRequestAsync([CallsToolInPieces("pptcom", pieces), Reply("done")]).ConfigureAwait(true);
+            Check("the script is handed over each time a line of it has come (not for its last line, which ends with the call), then the call is run; nothing is ended early",
+                  string.Join("|", whole.Tools.Arrived) == "x = 1\n|x = 1\ny = 2\n" && string.Join(",", whole.Tools.Order) == "arrived,arrived,run pptcom" &&
                   !whole.View.Codes.Contains("SCRIPT_PART_KEPT") && whole.Error is null,
                   string.Join("|", whole.Tools.Arrived).Replace("\n", "\\n") + " / " + string.Join(",", whole.Tools.Order) + " / " + whole.Describe());
 
-            Run cut = await RunRequestAsync([CallsToolInPieces("pptcom", [pieces[0], pieces[1]], cut: true), Reply("done")], everyEvent: true).ConfigureAwait(true);
+            Run cut = await RunRequestAsync([CallsToolInPieces("pptcom", [pieces[0], pieces[1]], cut: true), Reply("done")]).ConfigureAwait(true);
             int call = cut.Messages.FindIndex(static m => m.ToolCalls is { Count: 1 });
             Check("a reply cut off on the way: the call is ended as far as it ran before 再試行 is offered, and the reply asked for again follows it and its result",
                   string.Join(",", cut.Tools.Order) == "arrived,arrived,ended early,run pptcom" && cut.Shows("TOOL_RESULT,SCRIPT_PART_KEPT,AI_SERVER_ERROR,AI_REPLY") &&
@@ -1259,19 +1270,19 @@ namespace ChatStreamTests
                   cut.Messages[call + 1].ToolCallId == "call_pptcom" && cut.Messages[call + 1].Content == "ran pptcom" && cut.Messages[call + 2].Content == "done",
                   string.Join(",", cut.Tools.Order) + " / " + cut.Describe() + " / " + string.Join(",", cut.Messages.Select(static m => m.Role)) + " / " + string.Join("|", cut.Tools.NotRun));
 
-            Run stopped = await RunRequestAsync([CallsToolInPieces("pptcom", [pieces[0]], cut: true)], view: new FakeView(cancelRetry: true), everyEvent: true).ConfigureAwait(true);
+            Run stopped = await RunRequestAsync([CallsToolInPieces("pptcom", [pieces[0]], cut: true)], view: new FakeView(cancelRetry: true)).ConfigureAwait(true);
             Check("中止 at 再試行 after it: ended once, and the user was told that the slides keep it",
                   string.Join(",", stopped.Tools.Order) == "arrived,ended early,run pptcom" && stopped.View.Codes.FindAll(static c => c == "SCRIPT_PART_KEPT").Count == 1 &&
                   stopped.Error is OperationCanceledException, string.Join(",", stopped.Tools.Order) + " / " + stopped.Describe());
 
             string failing = Http(200, Sse(ToolCallDelta("pptcom", pieces[0], first: true), "{\"error\":{\"code\":\"400\",\"message\":\"bad request\"}}"));
-            Run failed = await RunRequestAsync([failing], everyEvent: true).ConfigureAwait(true);
+            Run failed = await RunRequestAsync([failing]).ConfigureAwait(true);
             Check("a reply that fails for good while its call arrives: the call is ended as far as it ran, and the request ends with the failure",
                   string.Join(",", failed.Tools.Order) == "arrived,ended early,run pptcom" && failed.Shows("TOOL_RESULT,SCRIPT_PART_KEPT") && failed.Tools.NotRun[0].Contains("stopped") &&
                   failed.Messages[failed.Messages.Count - 1].Role == "tool" && failed.Error is InvalidOperationException,
                   string.Join(",", failed.Tools.Order) + " / " + failed.Describe());
 
-            Run plain = await RunRequestAsync([CallsTool("imagegen"), Reply("done")], everyEvent: true).ConfigureAwait(true);
+            Run plain = await RunRequestAsync([CallsTool("imagegen"), Reply("done")]).ConfigureAwait(true);
             Check("a call that is no pptcom script is only run when the reply is whole", plain.Tools.Arrived.Count == 0 && string.Join(",", plain.Tools.Order) == "run imagegen",
                   string.Join(",", plain.Tools.Order));
         }
@@ -1289,9 +1300,9 @@ namespace ChatStreamTests
             return Http(200, Sse([.. events]));
         }
 
-        private static string ToolCallDelta(string name, string argumentsPiece, bool first)
+        private static string ToolCallDelta(string name, string argumentsPiece, bool first, int index = 0)
         {
-            JObject call = new() { ["index"] = 0, ["function"] = new JObject { ["arguments"] = argumentsPiece } };
+            JObject call = new() { ["index"] = index, ["function"] = new JObject { ["arguments"] = argumentsPiece } };
             if (first)
             {
                 call["id"] = "call_" + name;

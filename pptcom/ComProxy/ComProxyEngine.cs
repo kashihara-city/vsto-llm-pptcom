@@ -417,8 +417,8 @@ namespace Pptcom.ComProxy
         }
 
         // A script on its way: what its statements came to so far, and what the ones still to come must know of them.
-        // One made by BeginScript is run with RunAsync - once with the whole script, or again and again with a longer
-        // part of it while the model still writes it (ComScriptParser.RunnablePrefix) - and ended with EndScriptAsync.
+        // One made by BeginScript is run with RunAsync - once with the whole script, or each time more of it has been
+        // read while the model still writes it (ComScriptParser.Reading) - and ended with EndScriptAsync.
         internal sealed class ScriptRun(int maxFailures)
         {
             public ComScriptResult Result { get; } = new() { MaxFailures = maxFailures };
@@ -446,8 +446,7 @@ namespace Pptcom.ComProxy
             return new ScriptRun(maxFailures);
         }
 
-        // Runs the statements of `parsed` that the run has not come to: all of them, or those after the ones a shorter
-        // part of the same script had.
+        // Runs the statements of `parsed` that the run has not come to: all of them, or those read since it last ran.
         public async Task RunAsync(ScriptRun run, ComScriptParser.ParseResult parsed)
         {
             await RunLinesAsync(parsed, run).ConfigureAwait(true);
@@ -487,14 +486,9 @@ namespace Pptcom.ComProxy
             HashSet<string> poisoned = run.Poisoned, causes = run.Causes;
             int maxFailures = run.MaxFailures;
 
-            Dictionary<int, List<JObject>> opsByLine = OpsByLine(parsed);
             for (int line = run.Done + 1; line <= parsed.Lines.Count; line++)
             {
-                if (!opsByLine.TryGetValue(line, out List<JObject> lineOps))
-                {
-                    lineOps = [];
-                }
-
+                List<JObject> lineOps = parsed.OpsOf(line);
                 parsed.LineErrors.TryGetValue(line, out ComScriptParser.LineError? parseError);
 
                 ComLineResult lr = new()
@@ -581,24 +575,6 @@ namespace Pptcom.ComProxy
             }
 
             _chartDataValues.Clear();
-        }
-
-        // The parsed ops of each line (by line number, from 1).
-        private static Dictionary<int, List<JObject>> OpsByLine(ComScriptParser.ParseResult parsed)
-        {
-            JArray ops = JArray.Parse(parsed.OpsJson);
-            Dictionary<int, List<JObject>> opsByLine = [];
-            for (int k = 0; k < ops.Count; k++)
-            {
-                if (!opsByLine.TryGetValue(parsed.OpLineNumbers[k], out List<JObject> list))
-                {
-                    opsByLine[parsed.OpLineNumbers[k]] = list = [];
-                }
-
-                list.Add((JObject)ops[k]);
-            }
-
-            return opsByLine;
         }
 
         // The poisoned variable (one a failed/skipped statement should have set in this call) that the statement

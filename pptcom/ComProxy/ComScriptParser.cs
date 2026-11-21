@@ -34,8 +34,10 @@ namespace Pptcom.ComProxy
         {
             // A script that cannot be parsed at all (Success false) has only Error; the rest stays empty.
             public bool Success;
-            public string OpsJson = "[]";
             public string Error = "";
+            // The script's ops in the order they run, and the same as the JSON ComProxyEngine.ExecuteAsync takes.
+            public JArray Ops = [];
+            public string OpsJson => Ops.ToString();
             // opIndex -> 1-based statement number, so ComBatchResult failures can be reported
             // per source line instead of per internal hop.
             public List<int> OpLineNumbers = [];
@@ -55,6 +57,21 @@ namespace Pptcom.ComProxy
             // ops; the rest of the script still parses, and ComProxyEngine.ExecuteScriptAsync reports
             // them as failed and skips the statements that use what they would have set.
             public Dictionary<int, LineError> LineErrors = [];
+            // Per statement (index = statement number - 1): where its ops begin in Ops.
+            public List<int> FirstOps = [];
+
+            // The ops of the statement with this number (from 1); none when it could not be parsed.
+            public List<JObject> OpsOf(int line)
+            {
+                int from = FirstOps[line - 1], to = line < FirstOps.Count ? FirstOps[line] : Ops.Count;
+                List<JObject> ops = new(to - from);
+                for (int k = from; k < to; k++)
+                {
+                    ops.Add((JObject)Ops[k]);
+                }
+
+                return ops;
+            }
         }
 
         internal sealed class LineError
@@ -71,62 +88,128 @@ namespace Pptcom.ComProxy
         // never for a model's pptcom script.
         public static ParseResult Parse(string script, IEnumerable<string>? priorKnownIds, int maxLines, bool allowImage = false)
         {
-            List<string> lines = StatementsOf(script);
-            if (lines.Count == 0)
-            {
-                return new ParseResult { Success = false, Error = "script is empty" };
-            }
+            ParseResult read = new Reading(priorKnownIds, maxLines, allowImage).Read(script);
+            return read.Success && read.Lines.Count == 0 ? new ParseResult { Success = false, Error = "script is empty" } : read;
+        }
 
-            // For ... Next loops are written out, then With blocks rewritten. Each Stmt keeps the code to
-            // parse and the text reports show (as written, with the loop counters of that pass), so a
-            // report says `.Font.Size = 12   (rr = 3)`, not `_w1.Font.Size = 12`.
-            _currentKnownIds = null;
-            _currentState = null;
-            List<Stmt> stmts = ExpandForLoops([.. lines.Select(static l => new Stmt { Code = l, Shown = l })], maxLines, out string? loopError);
-            if (loopError is not null)
-            {
-                return new ParseResult { Success = false, Error = loopError };
-            }
+        // A script being read. Read is given its text: all of it at once (Parse), or part by part while the model still
+        // writes it - each part whole lines with their For loops closed, as RunnablePrefix cuts them; a With left open
+        // at a part's end goes on into the next. Only the part given is read: what the statements before it left - the
+        // variables they set, the With blocks they opened - is kept here. So a script read part by part comes to the
+        // statements of the same script read at once, and a part takes no longer to read for what was read before it.
+        internal sealed class Reading
+        {
+            private readonly State _state;
+            private readonly int _maxLines;
+            // The With blocks open where the reading stands (their objects, innermost last), and how many hidden
+            // variables were made for With objects so far (ExpandWithBlocks).
+            private readonly List<string> _withObjects = [];
+            private int _hiddenWiths;
+            // The hidden With variables read so far, each with the variable its object came from (ChangedRootOf).
+            private readonly Dictionary<string, string> _withRoots = new(StringComparer.OrdinalIgnoreCase);
+            // Statements read so far as they were written, their loops not written out: for the over-limit report.
+            private int _written;
 
-            stmts = ExpandWithBlocks(stmts);
-            List<string> code = [.. stmts.Select(static x => x.Code)];
-            lines = [.. stmts.Select(static x => x.Shown)];
-
-            if (lines.Count == 0)
+            public Reading(IEnumerable<string>? priorKnownIds, int maxLines, bool allowImage = false)
             {
-                return new ParseResult { Success = false, Error = "script is empty" };
-            }
-
-            if (lines.Count > maxLines)
-            {
-                return new ParseResult { Success = false, Error = Invariant($"too many lines ({lines.Count} > {maxLines})") };
-            }
-
-            State state = new()
-            {
-                AllowImage = allowImage,
-            };
-            if (priorKnownIds is not null)
-            {
-                foreach (string id in priorKnownIds)
+                _maxLines = maxLines;
+                _state = new State { AllowImage = allowImage };
+                if (priorKnownIds is not null)
                 {
-                    state.KnownIds.Add(id);
+                    foreach (string id in priorKnownIds)
+                    {
+                        _state.KnownIds.Add(id);
+                    }
+                }
+
+                Result = new ParseResult { Success = true, Ops = _state.Ops, OpLineNumbers = _state.OpLineNumbers, DefinedIds = _state.NewlyDefinedIds };
+            }
+
+            // What was read so far; it grows with each part read.
+            public ParseResult Result { get; }
+
+            // Reads the next part and returns Result. A part that takes the script over its limit of statements is
+            // not read at all: what comes back then says why (Success false), and Result stays as it was.
+            public ParseResult Read(string part)
+            {
+                List<string> written = StatementsOf(part);
+
+                // For ... Next loops are written out, then With blocks rewritten. Each Stmt keeps the code to
+                // parse and the text reports show (as written, with the loop counters of that pass), so a
+                // report says `.Font.Size = 12   (rr = 3)`, not `_w1.Font.Size = 12`.
+                _currentKnownIds = null;
+                _currentState = null;
+                int before = Result.Lines.Count;
+                List<Stmt> stmts = ExpandForLoops([.. written.Select(static l => new Stmt { Code = l, Shown = l })], _maxLines, before, _written, out string? loopError);
+                if (loopError is not null)
+                {
+                    return new ParseResult { Success = false, Error = loopError };
+                }
+
+                List<string> withObjects = [.. _withObjects];
+                int hiddenWiths = _hiddenWiths;
+                stmts = ExpandWithBlocks(stmts, withObjects, ref hiddenWiths);
+                if (before + stmts.Count > _maxLines)
+                {
+                    return new ParseResult { Success = false, Error = Invariant($"too many lines ({before + stmts.Count} > {_maxLines})") };
+                }
+
+                _withObjects.Clear();
+                _withObjects.AddRange(withObjects);
+                _hiddenWiths = hiddenWiths;
+                _written += written.Count;
+                _currentKnownIds = _state.KnownIds; // lets ParseValue tell variables from enum names
+                _currentState = _state;             // lets ParseValue emit the ops of a COM expression
+                foreach (Stmt st in stmts)
+                {
+                    ReadStatement(st);
+                }
+
+                return Result;
+            }
+
+            // A statement that does not parse is dropped on its own, like one that fails at run time:
+            // its partial ops are taken back, and the variable it would have set is still made known
+            // so later statements parse - the engine skips those (they depend on a failed line).
+            private void ReadStatement(Stmt st)
+            {
+                Result.Lines.Add(st.Shown);
+                Result.ChangedRoots.Add(ChangedRootOf(st.Code, _withRoots));
+                Result.FirstOps.Add(_state.Ops.Count);
+                int lineNo = Result.Lines.Count, opsBefore = _state.Ops.Count;
+                try
+                {
+                    _currentLine = lineNo;
+                    if (st.Error is not null)
+                    {
+                        throw new ComScriptScope.RejectedException(st.Error, st.Cause ?? st.Error);
+                    }
+
+                    ParseLine(st.Code, lineNo, _state);
+                }
+                // Whatever the line's parse throws makes it a line that could not be read; the others go on.
+                catch (Exception ex) when (Guard.IsRecoverable(ex))
+                {
+                    while (_state.Ops.Count > opsBefore)
+                    {
+                        _state.Ops.RemoveAt(_state.Ops.Count - 1);
+                    }
+
+                    while (_state.OpLineNumbers.Count > opsBefore)
+                    {
+                        _state.OpLineNumbers.RemoveAt(_state.OpLineNumbers.Count - 1);
+                    }
+
+                    Match named = AssignedNamePattern.Match(st.Code);
+                    string? assigns = named.Success && !ReservedWords.Contains(named.Groups[1].Value) ? named.Groups[1].Value : null;
+                    if (assigns is not null)
+                    {
+                        _state.KnownIds.Add(assigns);
+                    }
+
+                    Result.LineErrors[lineNo] = new LineError { Message = ex.Message, Cause = ex is ComScriptScope.RejectedException scope ? scope.Cause : ex.Message, Assigns = assigns };
                 }
             }
-            _currentKnownIds = state.KnownIds; // lets ParseValue tell variables from enum names
-            _currentState = state;             // lets ParseValue emit the ops of a COM expression
-
-            Dictionary<int, LineError> lineErrors = ParseStatements(stmts, code, state);
-            return new ParseResult
-            {
-                Success = true,
-                DefinedIds = state.NewlyDefinedIds,
-                OpsJson = state.Ops.ToString(),
-                OpLineNumbers = state.OpLineNumbers,
-                Lines = lines,
-                ChangedRoots = ChangedRootsOf(code),
-                LineErrors = lineErrors,
-            };
         }
 
         // One entry per statement: trailing ' comments are dropped, lines ending in VBA's ` _` are
@@ -155,93 +238,35 @@ namespace Pptcom.ComProxy
             return lines;
         }
 
-        // A statement that does not parse is dropped on its own, like one that fails at run time:
-        // its partial ops are taken back, and the variable it would have set is still made known
-        // so later statements parse - the engine skips those (they depend on a failed line).
-        private static Dictionary<int, LineError> ParseStatements(List<Stmt> stmts, List<string> code, State state)
-        {
-            Dictionary<int, LineError> lineErrors = [];
-            for (int lineNo = 1; lineNo <= code.Count; lineNo++)
-            {
-                int opsBefore = state.Ops.Count;
-                try
-                {
-                    _currentLine = lineNo;
-                    Stmt decided = stmts[lineNo - 1];
-                    if (decided.Error is not null)
-                    {
-                        throw new ComScriptScope.RejectedException(decided.Error, decided.Cause ?? decided.Error);
-                    }
-
-                    ParseLine(code[lineNo - 1], lineNo, state);
-                }
-                // Whatever the line's parse throws makes it a line that could not be read; the others go on.
-                catch (Exception ex) when (Guard.IsRecoverable(ex))
-                {
-                    while (state.Ops.Count > opsBefore)
-                    {
-                        state.Ops.RemoveAt(state.Ops.Count - 1);
-                    }
-
-                    while (state.OpLineNumbers.Count > opsBefore)
-                    {
-                        state.OpLineNumbers.RemoveAt(state.OpLineNumbers.Count - 1);
-                    }
-
-                    Match named = AssignedNamePattern.Match(code[lineNo - 1]);
-                    string? assigns = named.Success && !ReservedWords.Contains(named.Groups[1].Value) ? named.Groups[1].Value : null;
-                    if (assigns is not null)
-                    {
-                        state.KnownIds.Add(assigns);
-                    }
-
-                    lineErrors[lineNo] = new LineError { Message = ex.Message, Cause = ex is ComScriptScope.RejectedException scope ? scope.Cause : ex.Message, Assigns = assigns };
-                }
-            }
-
-            return lineErrors;
-        }
-
         private static readonly Regex HiddenWithSetPattern = new(@"^Set\s+(_w\d+)\s*=\s*([A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
         private static readonly Regex BindsVariablePattern = new(@"^(Set\s|[A-Za-z_]\w*\s*=)", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
         private static readonly Regex LeadingRootPattern = new(@"^([A-Za-z_]\w*)\s*[.(]", RegexOptions.Compiled, Guard.RegexTimeout);
 
-        // See ParseResult.ChangedRoots. Reads the code as parsed (With blocks already written out), so a
-        // hidden With variable stands for the variable its object came from.
-        private static List<string?> ChangedRootsOf(List<string> code)
+        // See ParseResult.ChangedRoots. Reads a statement's code as parsed (With blocks already written out), so a
+        // hidden With variable stands for the variable its object came from: `withRoots` holds those met so far.
+        private static string? ChangedRootOf(string code, Dictionary<string, string> withRoots)
         {
-            Dictionary<string, string> withRoots = new(StringComparer.OrdinalIgnoreCase);
-            List<string?> roots = [];
-            foreach (string c in code)
+            Match set = HiddenWithSetPattern.Match(code);
+            if (set.Success)
             {
-                Match set = HiddenWithSetPattern.Match(c);
-                if (set.Success)
-                {
-                    string from = set.Groups[2].Value;
-                    withRoots[set.Groups[1].Value] = withRoots.TryGetValue(from, out string outer) ? outer : from;
-                    roots.Add(null);
-                    continue;
-                }
-                if (BindsVariablePattern.IsMatch(c))
-                {
-                    roots.Add(null);
-                    continue;
-                }
-                Match m = LeadingRootPattern.Match(c);
-                string? root = m.Success ? m.Groups[1].Value : null;
-                if (root is not null && withRoots.TryGetValue(root, out string mapped))
-                {
-                    root = mapped;
-                }
-
-                if (root is not null && (IsApp(root) || IsHiddenName(root) || root.Equals(PresId, StringComparison.OrdinalIgnoreCase)))
-                {
-                    root = null;
-                }
-
-                roots.Add(root);
+                string from = set.Groups[2].Value;
+                withRoots[set.Groups[1].Value] = withRoots.TryGetValue(from, out string outer) ? outer : from;
+                return null;
             }
-            return roots;
+
+            if (BindsVariablePattern.IsMatch(code))
+            {
+                return null;
+            }
+
+            Match m = LeadingRootPattern.Match(code);
+            string? root = m.Success ? m.Groups[1].Value : null;
+            if (root is not null && withRoots.TryGetValue(root, out string mapped))
+            {
+                root = mapped;
+            }
+
+            return root is not null && (IsApp(root) || IsHiddenName(root) || root.Equals(PresId, StringComparison.OrdinalIgnoreCase)) ? null : root;
         }
 
         [ThreadStatic] private static HashSet<string>? _currentKnownIds; // null outside Parse's statement loop
@@ -311,15 +336,14 @@ namespace Pptcom.ComProxy
         // `Set _w1 = s.Shapes(3).TextFrame`), so `With sld.Shapes.AddShape(...)` still adds one shape.
         // Inside the block a leading-dot member (`.Font.Size = 12`, `x = .Width / 2`, `With .Paragraphs(1)`)
         // gets the innermost With object in front. `End With` closes the block; one with no open
-        // block is left for ComScriptScope to report.
+        // block is left for ComScriptScope to report. `open` and `hidden`: the With objects open before these
+        // statements and the hidden variables made before them (Reading); both are left as they stand after them.
         private static readonly Regex WithPattern = new(@"^With\s+(.+)$", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
         private static readonly Regex EndWithPattern = new(@"^End\s+With$", RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
 
-        private static List<Stmt> ExpandWithBlocks(List<Stmt> statements)
+        private static List<Stmt> ExpandWithBlocks(List<Stmt> statements, List<string> open, ref int hidden)
         {
             List<Stmt> result = [];
-            List<string> open = [];
-            int hidden = 0;
             foreach (Stmt st in statements)
             {
                 string s = open.Count > 0 ? PrefixWithMembers(st.Code, open[open.Count - 1]) : st.Code;
@@ -366,6 +390,7 @@ namespace Pptcom.ComProxy
         // measured before writing anything out (iterations x body), and a script over it is rejected
         // with each loop's share. A loop whose bounds are only known while running (To tbl.Rows.Count)
         // is not written out: its lines fail together with a note saying to write the number.
+        // Of a script read part by part (Reading), the statements read before count against the limit too.
         private static readonly Regex ForPattern = new(@"^For\s+([A-Za-z_]\w*)\s*=\s*(.+?)\s+To\s+(.+?)(?:\s+Step\s+(.+))?$",
             RegexOptions.Compiled | RegexOptions.IgnoreCase, Guard.RegexTimeout);
         private static readonly Regex NextPattern = new(@"^Next(?:\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*))?$",
@@ -404,7 +429,8 @@ namespace Pptcom.ComProxy
         }
 
         // The statements with their For loops written out; empty when `error` says why they cannot be.
-        private static List<Stmt> ExpandForLoops(List<Stmt> statements, int maxStatements, out string? error)
+        // `before`: the statements the script already has (written out); `written`: how many it had as written.
+        private static List<Stmt> ExpandForLoops(List<Stmt> statements, int maxStatements, int before, int written, out string? error)
         {
             error = null;
             List<LoopNode> root = [];
@@ -421,7 +447,7 @@ namespace Pptcom.ComProxy
                     ForNode loop = new()
                     {
                         Header = st,
-                        HeaderNumber = i + 1,
+                        HeaderNumber = written + i + 1,
                         Variable = header.Groups[1].Value,
                     };
                     loop.Problem = LoopBounds(header, loop);
@@ -452,7 +478,7 @@ namespace Pptcom.ComProxy
                 return statements;
             }
 
-            long total = root.Sum(SizeOf);
+            long total = before + root.Sum(SizeOf);
             if (total > maxStatements)
             {
                 StringBuilder sb = new("too many statements after writing out the For loops: " + total.ToString("N0", CultureInfo.InvariantCulture) +
@@ -672,9 +698,10 @@ namespace Pptcom.ComProxy
 
         // Of a script still being written, the leading lines that can be run now, as text: whole lines only (the last
         // one counts when `complete` says the script is all there), none that goes on in a line still to come, and
-        // nothing from a For on whose Next has not come - a loop is written out whole before any of it runs. Parsed by
-        // itself, this part gives the statements the whole script begins with (a With left open at its end goes on
-        // into what follows), so they need not run again when more of it is parsed.
+        // nothing from a For on whose Next has not come - a loop is written out whole before any of it runs. What
+        // comes after these lines can be cut in the same way by itself, as no line and no loop is open where they end:
+        // a script is cut on from there when more of it has come, and a Reading takes each cut as the script's next
+        // part (a With left open at a part's end goes on into the next).
         public static string RunnablePrefix(string scriptSoFar, bool complete)
         {
             string[] lines = scriptSoFar.Replace("\r\n", "\n").Split('\n');

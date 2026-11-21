@@ -127,8 +127,9 @@ namespace Pptcom.Agent
         // arguments arrive as fragments per call index and StreamedReply reassembles them. `onProgress`
         // is invoked on the calling thread's context as chunks arrive (reasoning chars count
         // too, so the UI can show life during the silent thinking phase).
-        // `onArriving`: waited for after each report of progress, with the reply as far as it has come: its tool calls
-        // can be run while they still arrive (RequestRunner). The stream is not read on meanwhile.
+        // `onArriving`: waited for each time a line has ended in the reply's first tool call's arguments, with the reply
+        // as far as it has come: that call's script can be run line by line while it still arrives (RequestRunner).
+        // The stream is not read on meanwhile.
         public async Task<ChatReply> ChatAsync(
             List<ChatMessage> messages,
             JArray? tools = null,
@@ -139,8 +140,8 @@ namespace Pptcom.Agent
             return await StreamChatAsync(messages, tools, "auto", onProgress, onArriving, cancellationToken).ConfigureAwait(true);
         }
 
-        // How long at least between two reports of a reply's progress (onProgress, onArriving).
-        public TimeSpan ProgressInterval { get; set; } = TimeSpan.FromMilliseconds(500);
+        // How long at least between two reports of a reply's progress (onProgress).
+        private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(500);
 
         // The same, but the model may not call the tools (tool_choice "none"). They are sent all the same: they are part
         // of the prompt the server has cached, and a request without them would be read again from the start.

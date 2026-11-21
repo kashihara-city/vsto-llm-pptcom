@@ -23,6 +23,12 @@ namespace Pptcom.Agent
         private readonly TimeSpan _reportEvery;
         private DateTime _lastReport = DateTime.MinValue;
 
+        // The reply's first tool call (its index), whether its arguments so far end in a backslash that begins an
+        // escape, and whether a line has ended in them since Add last said so (NoteLineEnds).
+        private int _firstCall = int.MaxValue;
+        private bool _escape;
+        private bool _lineEnded;
+
         // `reportEvery`: how long at least between two reports of how far the reply has come (Add).
         public StreamedReply(Action<StreamProgress>? onProgress, TimeSpan reportEvery)
         {
@@ -34,8 +40,9 @@ namespace Pptcom.Agent
         // How far the reply has come, as the last report had it.
         public StreamProgress Progress { get; } = new();
 
-        // One event (the JSON of a "data:" line). `onProgress` hears of it at most every `reportEvery`; true when this
-        // event was reported (the reader then lets what runs the reply's tool calls as they arrive have its turn).
+        // One event (the JSON of a "data:" line). `onProgress` hears of it at most every `reportEvery`. True when a line
+        // has ended in the first tool call's arguments with this event: the reader then lets what runs that call's
+        // script as it arrives have its turn, as a statement can only be run once its line is whole.
         public bool Add(JObject chunk)
         {
             // LiteLLM reports a backend failure after the 200 header as an error event.
@@ -75,15 +82,16 @@ namespace Pptcom.Agent
                 }
             }
 
-            if (DateTime.UtcNow - _lastReport < _reportEvery)
+            bool lineEnded = _lineEnded;
+            _lineEnded = false;
+            if (DateTime.UtcNow - _lastReport >= _reportEvery)
             {
-                return false;
+                Progress.Elapsed = DateTime.UtcNow - _started;
+                _onProgress?.Invoke(Progress);
+                _lastReport = DateTime.UtcNow;
             }
 
-            Progress.Elapsed = DateTime.UtcNow - _started;
-            _onProgress?.Invoke(Progress);
-            _lastReport = DateTime.UtcNow;
-            return true;
+            return lineEnded;
         }
 
         // Whether the server said why the reply ended ("stop", "tool_calls", "length"): the reply is complete.
@@ -184,6 +192,7 @@ namespace Pptcom.Agent
                 slot = new ToolCall();
                 _toolSlots[index] = slot;
                 _toolArgs[index] = new StringBuilder();
+                _firstCall = Math.Min(_firstCall, index);
             }
             string id = (string?)tc["id"] ?? "";
             if (id.Length > 0)
@@ -204,6 +213,30 @@ namespace Pptcom.Agent
                 {
                     _toolArgs[index].Append(args);
                     Progress.ToolArgChars += args.Length;
+                    if (index == _firstCall)
+                    {
+                        NoteLineEnds(args);
+                    }
+                }
+            }
+        }
+
+        // Notes whether a line ends in this piece of the first call's arguments: in the JSON a line's end is the two
+        // characters \n, which may come in two pieces, and after an escaped backslash an n is just an n. A line's end in
+        // another string of the arguments than the script counts too: looking once more than needed costs little, and
+        // missing a line would leave it unrun until the next one.
+        private void NoteLineEnds(string piece)
+        {
+            foreach (char c in piece)
+            {
+                if (_escape)
+                {
+                    _lineEnded |= c == 'n';
+                    _escape = false;
+                }
+                else
+                {
+                    _escape = c == '\\';
                 }
             }
         }

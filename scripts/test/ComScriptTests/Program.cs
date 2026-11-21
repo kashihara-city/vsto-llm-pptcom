@@ -251,6 +251,7 @@ namespace ComScriptTests
             AcceptedStatementTests();
             ForLoopTests();
             ArrivingScriptTests();
+            ReadInPartsTests();
             GivenNameTests();
             RejectedStatementTests();
         }
@@ -298,8 +299,9 @@ namespace ComScriptTests
 
         }
 
-        // A script still being written: which of its lines can be run already (ComScriptParser.RunnablePrefix), and
-        // that running it part by part comes to what running it at once does (ComProxyEngine.ScriptRun), with what an
+        // A script still being written: which of its lines can be run already (ComScriptParser.RunnablePrefix), that
+        // reading it part by part comes to the statements it has read at once (ComScriptParser.Reading), and that
+        // running it part by part comes to what running it at once does (ComProxyEngine.ScriptRun), with what an
         // earlier part's failure means for a later one carried over.
         private static void ArrivingScriptTests()
         {
@@ -328,13 +330,16 @@ namespace ComScriptTests
 
             ComProxyEngine engine = new(new object());
             ComProxyEngine.ScriptRun run = engine.BeginScript();
+            ComScriptParser.Reading reading = new(priorKnownIds: null, 2000);
+            string ran = "";
             List<int> done = [];
             for (int cut = 1; cut <= script.Length; cut++)
             {
                 string part = Part(script.Substring(0, cut), complete: cut == script.Length);
-                if (part.Length > 0)
+                if (part.Length > ran.Length)
                 {
-                    engine.RunAsync(run, ComScriptParser.Parse(part, priorKnownIds: null, 2000)).GetAwaiter().GetResult();
+                    engine.RunAsync(run, reading.Read(part.Substring(ran.Length))).GetAwaiter().GetResult();
+                    ran = part;
                 }
 
                 if (done.Count == 0 || done[done.Count - 1] != run.Done)
@@ -352,6 +357,76 @@ namespace ComScriptTests
             static double Number(object? value)
             {
                 return Convert.ToDouble(value, CultureInfo.InvariantCulture);
+            }
+        }
+
+        // A script read part by part (ComScriptParser.Reading) - cut after each character, as a script may arrive -
+        // comes to the statements it has read at once: With blocks that go on into the next part (a hidden variable's
+        // too, and one inside another), loops, a line in two, two statements in a line, a statement that cannot be read.
+        private static void ReadInPartsTests()
+        {
+            const string blocks = "' a card\nSet s = ActivePresentation.Slides(1)\nWith s.Shapes(1)\n  .Left = 10\n  With .TextFrame.TextRange\n    .Text = \"a\" & _\n      \"b\"\n" +
+                                  "  End With\n  .Top = .Left + 5\nEnd With\nWith s\n  n = .Shapes.Count: m = n + 1\n  bad = nosuch.Value\n  k = bad + 1\nEnd With\n" +
+                                  "For i = 1 To 2\n  With s.Shapes(i)\n    .Top = i * 10\n  End With\nNext\ns.Name = \"x\"";
+            string once = Shape(ComScriptParser.Parse(blocks, priorKnownIds: null, 2000)), parts = Shape(InParts(blocks, out int reads, out bool sameCuts));
+            Report("arriving: read part by part, a script comes to the statements it has read at once", once == parts && reads > 10 && once.Contains("_w4") && once.Contains("changes s"),
+                   Invariant($"read in {reads} part(s)\nin parts:\n{parts}\nat once:\n{once}"));
+            Report("arriving: cut on from where the lines that can be run ended, a script is cut where it is cut from its start", sameCuts, "");
+
+            // a part that takes the script over its limit is not read: what was read stays, and so do the With blocks open
+            ComScriptParser.Reading limited = new(priorKnownIds: null, 6);
+            limited.Read("a = 1\nb = 2\nc = 3");
+            ComScriptParser.ParseResult loop = limited.Read("\nFor i = 1 To 3\nd = i\nNext");
+            ComScriptParser.ParseResult block = limited.Read("\nWith a\nd = 4\ne = 5\nf = 6\ng = 7");
+            ComScriptParser.ParseResult after = limited.Read("\nd = .Value");
+            Report("arriving: a part that takes the script over its limit is not read, and what was read before it stays as it was",
+                   !loop.Success && loop.Error.StartsWith("too many statements after writing out the For loops: 10 > 6.", StringComparison.Ordinal) &&
+                   loop.Error.Contains("statement 4: For i = 1 To 3 -> 7 statements") && !block.Success && block.Error == "too many lines (7 > 6)" &&
+                   after.Success && ReferenceEquals(after, limited.Result) && after.Lines.Count == 4 && after.LineErrors.ContainsKey(4),
+                   Invariant($"{loop.Error} | {block.Error} | {Shape(limited.Result)}"));
+            Report("arriving: a script of comments only is empty read at once, and nothing yet read part by part",
+                   ComScriptParser.Parse("' a\nRem b", priorKnownIds: null, 2000).Error == "script is empty" &&
+                   new ComScriptParser.Reading(priorKnownIds: null, 2000).Read("' a\nRem b") is { Success: true, Lines.Count: 0 }, "");
+
+            // as the add-in does: what has come after the lines read is cut, and the cut is read on
+            static ComScriptParser.ParseResult InParts(string script, out int reads, out bool sameCuts)
+            {
+                ComScriptParser.Reading reading = new(priorKnownIds: null, 2000);
+                string ran = "";
+                reads = 0;
+                sameCuts = true;
+                for (int cut = 1; cut <= script.Length; cut++)
+                {
+                    string soFar = script.Substring(0, cut);
+                    string more = ComScriptParser.RunnablePrefix(soFar.Substring(ran.Length), complete: cut == script.Length);
+                    sameCuts &= ran + more == ComScriptParser.RunnablePrefix(soFar, complete: cut == script.Length);
+                    if (more.Length > 0)
+                    {
+                        reading.Read(more);
+                        ran += more;
+                        reads++;
+                    }
+                }
+
+                return reading.Result;
+            }
+
+            // all that a parse gives, as text
+            static string Shape(ComScriptParser.ParseResult p)
+            {
+                System.Text.StringBuilder sb = new();
+                for (int i = 0; i < p.Lines.Count; i++)
+                {
+                    sb.Append(Invariant($"{i + 1} {p.Lines[i]} | changes {p.ChangedRoots[i] ?? "-"} | {p.OpsOf(i + 1).Count} op(s)"));
+                    if (p.LineErrors.TryGetValue(i + 1, out ComScriptParser.LineError? error))
+                    {
+                        sb.Append(" | ").Append(error.Message).Append(" / ").Append(error.Cause).Append(" / ").Append(error.Assigns);
+                    }
+
+                    sb.Append('\n');
+                }
+
+                return sb.Append("defines ").Append(string.Join(",", p.DefinedIds)).Append("\nops of ").Append(string.Join(",", p.OpLineNumbers)).Append('\n').Append(p.OpsJson).ToString();
             }
         }
 
@@ -394,6 +469,8 @@ namespace ComScriptTests
                 string.Join(",", ops.Where(static o => (string?)o["id"] == "x").Select(static o => (string?)o["value"])) == "$r,$r,$r" &&
                 string.Join(",", ops.Where(static o => (string?)o["id"] == "r").Select(static o => (string?)o["value"])) == "5,3,1,-1" ? null : "Step -2: " + ops);
             CheckValue("as in VBA the counter is one Step past the end after the loop", "For r = 1 To 4\nNext\nx = r", "Long", "5");
+            CheckValue("text that reads as a date and time stays the text it is", "x = \"2026-11-21T10:00:00\"", "String", "2026-11-21T10:00:00");
+            CheckValue("text that reads as a date and time stays the text it is, joined to a value too", "n = 3\nx = \"2026-11-21T10:00:00\" & n", "String", "2026-11-21T10:00:003");
             CheckValue("loop body arithmetic", "s = 0\nFor r = 1 To 4\n    s = s + r\nNext\nx = s", "Long", "10");
             Reject("Set t = ActivePresentation.Slides(1).Shapes(1).Table\nFor r = 1 To t.Rows.Count\n    x = r\nNext", "its bounds must be numbers");
             Reject("For i = 1 To 3000\n    x = i\nNext", "too many statements after writing out the For loops: 6,001 > 2000");

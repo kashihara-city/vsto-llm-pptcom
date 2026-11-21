@@ -699,9 +699,18 @@ namespace Pptcom
             {
                 StreamedScript? streamed = _streamed;
                 _streamed = null;
-                ToolResult result = streamed is not null
-                    ? await FinishAsync(streamed, call).ConfigureAwait(true)
-                    : await RunToolAsync(run, engine, knownIds, call).ConfigureAwait(true);
+                ToolResult result;
+                try
+                {
+                    result = streamed is not null
+                        ? await FinishAsync(streamed, call).ConfigureAwait(true)
+                        : await RunToolAsync(run, engine, knownIds, call).ConfigureAwait(true);
+                }
+                finally
+                {
+                    ForgetLooks();
+                }
+
                 if (call.Name == "pptcom")
                 {
                     addin.ShowSlideWorkedOn(run.Pane, engine);
