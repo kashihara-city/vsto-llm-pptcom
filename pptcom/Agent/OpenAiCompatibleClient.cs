@@ -399,11 +399,10 @@ namespace Pptcom.Agent
                 while (true)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    idle.CancelAfter(StreamIdleLimit);
                     string? line;
                     try
                     {
-                        line = await reader.ReadLineAsync().ConfigureAwait(true);
+                        line = await NextLineAsync(reader, idle).ConfigureAwait(true);
                     }
                     // The response closed by 中止 or by the idle limit: whatever the read threw says only that.
                     catch (Exception ex) when (Guard.IsRecoverable(ex) && (cancellationToken.IsCancellationRequested || idle.IsCancellationRequested))
@@ -413,11 +412,6 @@ namespace Pptcom.Agent
                                                      LlmServerFailure.Stalled);
                     }
 
-                    // The idle limit is for the server's silence: it runs only while a line is waited for. What is done
-                    // here with a line that has come takes its own time - the progress shown, a script's statements run
-                    // as they arrive - and when that took longer than the limit, the response was closed and a reply the
-                    // server had sent whole was asked for again.
-                    idle.CancelAfter(Timeout.InfiniteTimeSpan);
                     if (line is null)
                     {
                         break;
@@ -459,6 +453,20 @@ namespace Pptcom.Agent
             }
 
             return streamed.Finish();
+        }
+
+        // The stream's next line. The idle limit is for the server's silence: it runs only while the line is waited for,
+        // and is stopped where the line comes - not on the caller's thread, which is PowerPoint's own in the add-in and
+        // may be kept by other work when the line has long come. What the caller does with a line takes its own time
+        // too (the progress shown, a script's statements run as they arrive). Counted with the wait, any of these
+        // closed the response when it took longer than the limit, and a reply the server had sent in time was asked
+        // for again.
+        private async Task<string?> NextLineAsync(StreamReader reader, CancellationTokenSource idle)
+        {
+            idle.CancelAfter(StreamIdleLimit);
+            string? line = await reader.ReadLineAsync().ConfigureAwait(false);
+            idle.CancelAfter(Timeout.InfiniteTimeSpan);
+            return line;
         }
 
         // Models the endpoint offers, with their mode when known ("chat", "image_generation", ...) and how many tokens they

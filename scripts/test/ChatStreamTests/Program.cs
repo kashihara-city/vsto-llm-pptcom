@@ -212,6 +212,81 @@ namespace ChatStreamTests
             Check("中止 ends the read", ex is OperationCanceledException, Describe(ex));
             ex = await StalledAsync(stalled, cancel: false).ConfigureAwait(true);
             Check("the idle limit ends the read (再試行)", ex is LlmServerException { Failure: LlmServerFailure.Stalled }, Describe(ex));
+
+            // The limit is for the server's silence, not for how long the thread the chat is awaited on - PowerPoint's
+            // own, in the add-in - takes to come back to it: a reply whose rest came in time is read to its end.
+            Exception? free = ChatWhileThreadIsKept(TimeSpan.Zero), kept = ChatWhileThreadIsKept(TimeSpan.FromMilliseconds(800));
+            Check("a reply whose rest came in time is read to its end, also when the thread it is awaited on was kept by other work for longer than the idle limit",
+                  free is null && kept is null, "the thread free: " + Describe(free) + " / kept: " + Describe(kept));
+        }
+
+        // A chat awaited on a thread that runs one thing after the other, as a window's thread does. The server sends
+        // the start of the reply and waits; once the chat waits for the next line, the thread tells the server to send
+        // the rest and is then kept for `keptFor` by other work. The idle limit is 300 ms. The rest is longer than what
+        // is read ahead, so that reading on needs the connection. What ended the chat (null: it was read to its end).
+        private static Exception? ChatWhileThreadIsKept(TimeSpan keptFor)
+        {
+            string start = Sse(Content("a")) + ":" + new string(' ', 24000) + "\n\n";
+            string rest = Sse(Content("b")) + ":" + new string(' ', 40000) + "\n\n" + Sse(Finish("stop"), "[DONE]");
+            string whole = Http(200, start + rest);
+            // made on this thread: the server's own work does not wait for the thread below
+            using FakeServer server = new(whole.Substring(0, whole.Length - rest.Length) + FakeServer.Pause + rest, stall: false);
+            Exception? ended = null;
+            Thread thread = new(() =>
+            {
+                OneThreadContext context = new();
+                SynchronizationContext.SetSynchronizationContext(context);
+                OpenAiCompatibleClient client = new(server.Url, "", "test-model")
+                {
+                    StreamIdleLimit = TimeSpan.FromMilliseconds(300),
+                };
+                bool told = false;
+                Task<ChatReply> chat = client.ChatAsync([new ChatMessage("user", "hi")], onProgress: progress =>
+                {
+                    if (!told)
+                    {
+                        // behind the chat's own work in the thread's queue: it runs once the chat waits for the next line
+                        told = true;
+                        context.Post(state =>
+                        {
+                            server.Resume();
+                            Thread.Sleep(keptFor);
+                        }, state: null);
+                    }
+                }, cancellationToken: CancellationToken.None);
+                context.RunUntil(chat);
+                ended = chat.Exception?.GetBaseException();
+            });
+            thread.Start();
+            thread.Join();
+            return ended;
+        }
+
+        // A thread's work as a window's thread takes it: what is posted is run on the thread that calls RunUntil, one
+        // thing after the other.
+        private sealed class OneThreadContext : SynchronizationContext
+        {
+            private readonly System.Collections.Concurrent.ConcurrentQueue<(SendOrPostCallback Work, object? State)> _posted = new();
+
+            public override void Post(SendOrPostCallback d, object? state)
+            {
+                _posted.Enqueue((d, state));
+            }
+
+            public void RunUntil(Task done)
+            {
+                while (!done.IsCompleted)
+                {
+                    if (_posted.TryDequeue(out (SendOrPostCallback Work, object? State) next))
+                    {
+                        next.Work(next.State);
+                    }
+                    else
+                    {
+                        Thread.Sleep(5);
+                    }
+                }
+            }
         }
 
         // An error's headers, then a body that does not finish. The first request carries mm_processor_kwargs, so
@@ -1479,11 +1554,14 @@ namespace ChatStreamTests
 
         // HTTP exchanges on the loopback address, one connection each: reads a request, writes the next response,
         // and closes the connection - or, with `stall`, keeps the last one open and sends nothing more until the
-        // test is over.
+        // test is over. A response with Pause in it is sent up to there, and its rest once Resume is called.
         private sealed class FakeServer : IDisposable
         {
+            public const char Pause = '\u0001';
+
             private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
             private readonly TaskCompletionSource<bool> _release = new();
+            private readonly TaskCompletionSource<bool> _resume = new();
             private readonly TaskCompletionSource<bool> _sent = new();
 
             public FakeServer(string response, bool stall)
@@ -1515,8 +1593,18 @@ namespace ChatStreamTests
                     using TcpClient peer = await _listener.AcceptTcpClientAsync().ConfigureAwait(true);
                     using NetworkStream stream = peer.GetStream();
                     Requests.Add(await ReadRequestAsync(stream).ConfigureAwait(true));
-                    byte[] bytes = Encoding.UTF8.GetBytes(responses[i]);
-                    await stream.WriteAsync(bytes, 0, bytes.Length, CancellationToken.None).ConfigureAwait(true);
+                    string[] parts = responses[i].Split(Pause);
+                    for (int part = 0; part < parts.Length; part++)
+                    {
+                        if (part > 0)
+                        {
+                            await _resume.Task.ConfigureAwait(true);
+                        }
+
+                        byte[] bytes = Encoding.UTF8.GetBytes(parts[part]);
+                        await stream.WriteAsync(bytes, 0, bytes.Length, CancellationToken.None).ConfigureAwait(true);
+                    }
+
                     if (i == responses.Length - 1)
                     {
                         _sent.TrySetResult(true);
@@ -1565,9 +1653,16 @@ namespace ChatStreamTests
                 return Encoding.UTF8.GetString(body);
             }
 
+            // The rest of a response that waits at its Pause is sent.
+            public void Resume()
+            {
+                _resume.TrySetResult(true);
+            }
+
             public void Dispose()
             {
                 _release.TrySetResult(true);
+                _resume.TrySetResult(true);
                 _listener.Stop();
             }
         }
