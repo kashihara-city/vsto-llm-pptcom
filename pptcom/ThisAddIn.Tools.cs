@@ -221,7 +221,11 @@ namespace Pptcom
                 }
             }
 
-            ToolResult generated = new("Generated image bound to " + name + " (" + size + " px, aspect " + AspectText(size) + "). Use it in pptcom: shapes.AddPicture(" + name + ", msoFalse, msoTrue, left, top, width, height) with width/height in the same aspect ratio.");
+            // an image without a notice is made all the same; the model is told to give one, as with pptcom
+            string notGiven = string.IsNullOrWhiteSpace(TextOf(args[RequestRunner.NoticeArgument]))
+                ? "\n(This image was made, but the call had no notice (one short sentence telling the user what the image is for). Give notice with every imagegen call.)"
+                : "";
+            ToolResult generated = new("Generated image bound to " + name + " (" + size + " px, aspect " + AspectText(size) + "). Use it in pptcom: shapes.AddPicture(" + name + ", msoFalse, msoTrue, left, top, width, height) with width/height in the same aspect ratio." + notGiven);
             // The image goes to the model with the result, so it can check it before placing it. Without it
             // (run18) the model discovered the background-tint mismatch only after placement and spent more
             // turns regenerating and cropping. Its main colors and its edge's go with it as numbers (ImageColors):

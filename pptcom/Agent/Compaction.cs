@@ -55,7 +55,8 @@ namespace Pptcom.Agent
         // whose result says only that they ran (PptcomRan): the results' Defined, Changed and failed lines told later
         // requests what the slides had been, and the model took that for what they are (it rewrote a card it believed
         // was the chart's label), so it looks at the slides again with pptread. The other calls stay, imagegen's prompt
-        // replaced by a note, each result cut to its first line: an image's variable, a document's name, the deck's size.
+        // replaced by a note (its notice still says what the image is for), each result cut to its first line: an image's
+        // variable, a document's name, the deck's size.
         // A call left without a result (the user stopped the request) gets one saying so. `ending`: what the user was
         // shown when the request stopped before it finished, which goes last as the model's own words; the model's notes
         // stay then too, as they tell what was left to do. Null for a request that finished: its notes go.

@@ -475,7 +475,7 @@ namespace ChatStreamTests
 
             // imagegen, pptread, pptcom (with a failure), docread, pptcom again, and the reply
             List<ChatMessage> mixed = [new ChatMessage("system", "s"), new ChatMessage("user", "make a deck")];
-            AddTurn(mixed, "i1", "imagegen", "{\"name\":\"heroImg\",\"prompt\":\"a cat\",\"size\":\"1024x768\"}", "Generated image bound to heroImg (1024x768 px, aspect 4:3). Use it in pptcom: ...", slide: null);
+            AddTurn(mixed, "i1", "imagegen", "{\"notice\":\"表紙の絵を作ります\",\"name\":\"heroImg\",\"prompt\":\"a cat\",\"size\":\"1024x768\"}", "Generated image bound to heroImg (1024x768 px, aspect 4:3). Use it in pptcom: ...", slide: null);
             AddTurn(mixed, "r1", "pptread", "{\"slide\":\"1\"}", "Presentation: 1 slide(s), 960x540 pt.\nRenderings of slide(s) 1 are attached in the next message, each with its shape list.", slide: 1);
             AddTurn(mixed, "p1", "pptcom", "{\"script\":\"card1.Top = 195\"}", "68 of 70 lines applied; 2 failed, 0 skipped.\nFAILED line 5: ...\nChanged: card1, card2.", slide: 1);
             AddTurn(mixed, "d1", "docread", "{\"doc\":\"d1\"}", "d1: a.docx (Word document, 10 lines). It is the user's material...\nThe whole text:\n1 見出し", slide: null);
@@ -483,8 +483,9 @@ namespace ChatStreamTests
             mixed.Add(new ChatMessage("assistant", "作りました。"));
             List<ChatMessage> later = Compaction.ShortenForLater(mixed, mixed[1], "make a deck", ending: null);
             string sequence = string.Join(" | ", later.ConvertAll(static m => m.Role + ": " + (m.Content ?? string.Join(",", (m.ToolCalls ?? []).ConvertAll(static c => c.Name + " " + c.Arguments)))));
-            Check("pptcom calls as one that ran, nothing of what they did; imagegen, pptread and docread with their first lines; the reply",
+            Check("pptcom calls as one that ran, nothing of what they did; imagegen (its notice, not its prompt), pptread and docread with their first lines; the reply",
                   later.Count == 10 && later[1].ToolCalls![0].Name == "imagegen" && later[1].ToolCalls![0].Arguments.Contains("(left out)") &&
+                  later[1].ToolCalls![0].Arguments.Contains("表紙の絵を作ります") && !later[1].ToolCalls![0].Arguments.Contains("a cat") &&
                   later[2].Content!.StartsWith("Generated image bound to heroImg", StringComparison.Ordinal) &&
                   later[3].ToolCalls![0].Name == "pptread" && later[4].Content == "Presentation: 1 slide(s), 960x540 pt." &&
                   later[5].ToolCalls![0].Id == "call_p1" && later[5].ToolCalls![0].Arguments.Contains("2 pptcom call(s)") &&
@@ -566,6 +567,12 @@ namespace ChatStreamTests
             Check("imagegen gets the image prompt's rules and sizes",
                   description.EndsWith((string?)zimage["rules"] ?? "?", StringComparison.Ordinal) && description.IndexOf('%') < 0 &&
                   JToken.DeepEquals(image["parameters"]?["properties"]?["size"], zimage["size"]), description);
+            string imageArguments = string.Join(",", (image["parameters"]?["properties"] as JObject)?.Properties().Select(static p => p.Name) ?? []);
+            string imageRequired = string.Join(",", (image["parameters"]?["required"] as JArray)?.Select(static r => (string?)r) ?? []);
+            Check("imagegen takes a notice to the user first, then the name, the prompt and the size; the notice, the name and the prompt are required; the system prompt says so",
+                  imageArguments == "notice,name,prompt,size" && imageRequired == "notice,name,prompt" &&
+                  prompt.Split('\n').Any(static l => l.StartsWith(AgentTools.ImageLineMark, StringComparison.Ordinal) && l.Contains("`imagegen`") && l.Contains("`notice`")),
+                  imageArguments + " / " + imageRequired);
             // Every image prompt the settings offer (AddinSettings.ImagePrompts) is a file of rules and sizes, the sizes
             // including the default the add-in asks for without one (1024x1024).
             List<string> wrong = [];
@@ -591,7 +598,7 @@ namespace ChatStreamTests
             int marked = Array.FindAll(lines, static l => l.StartsWith(AgentTools.ImageLineMark, StringComparison.Ordinal)).Length;
             string with = AgentTools.SystemPrompt(prompt, withImages: true), without = AgentTools.SystemPrompt(prompt, withImages: false);
             Check("with an image model: the image lines, without their mark",
-                  marked == 2 && with.Split('\n').Length == lines.Length && !with.Contains(AgentTools.ImageLineMark) && with.Contains("`imagegen`"),
+                  marked == 3 && with.Split('\n').Length == lines.Length && !with.Contains(AgentTools.ImageLineMark) && with.Contains("`imagegen`"),
                   Invariant($"{marked} marked"));
             Check("without: the image lines left out, and neither the prompt nor the tools name imagegen",
                   without.Split('\n').Length == lines.Length - marked && !without.Contains("imagegen") && !plain.ToString().Contains("imagegen"),
@@ -785,6 +792,12 @@ namespace ChatStreamTests
             Check("a pptcom call's notice is shown once, before its result; a call without one shows none",
                   noticed.Shows("AI_STEP,TOOL_RESULT,AI_REPLY,REQUEST_DONE") && noticed.View.Steps.SequenceEqual(["表紙を作ります"], StringComparer.Ordinal) &&
                   !tool.Shows("AI_STEP"), noticed.Describe() + " / " + string.Join("|", noticed.View.Steps));
+            Run drawn = await RunRequestAsync(
+                [CallsTool("imagegen", arguments: "{\"notice\":\"表紙の絵を作ります\",\"name\":\"hero\",\"prompt\":\"p\"}"), Reply("ok")]).ConfigureAwait(true);
+            Run read = await RunRequestAsync([CallsTool("pptread", arguments: "{\"notice\":\"読みます\",\"slide\":\"1\"}"), Reply("ok")]).ConfigureAwait(true);
+            Check("an imagegen call's notice is shown the same way; no other tool has one",
+                  drawn.Shows("AI_STEP,TOOL_RESULT,AI_REPLY,REQUEST_DONE") && drawn.View.Steps.SequenceEqual(["表紙の絵を作ります"], StringComparer.Ordinal) && !read.Shows("AI_STEP"),
+                  drawn.Describe() + " / " + string.Join("|", drawn.View.Steps) + " / " + read.Describe());
             Check("the notice is read from arguments still being written once it is closed, wherever it comes in them",
                   RequestRunner.NoticeOf("{\"notice\":\"表紙を作ります\",\"language\":\"ja-JP\",\"script\":\"Set s = ") == "表紙を作ります" &&
                   RequestRunner.NoticeOf("{\"notice\":\"表紙を作") is null && RequestRunner.NoticeOf("{ \"notice\" : \"a \\\"quoted\\\" word\", \"scr") == "a \"quoted\" word" &&

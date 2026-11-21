@@ -181,7 +181,8 @@ namespace Pptcom.Agent
             };
         }
 
-        // A pptcom call tells the user in `notice` what it is meant to do (tools.json): they are shown it as the
+        // A pptcom call tells the user in `notice` what it is meant to do, an imagegen call what its image is for
+        // (tools.json): they are shown it as the
         // model's words, once per call - as soon as it has come, while the script after it is still being written (the
         // model gives it before the script), or else when the call is run. The calls are those of one reply: when a
         // turn's reply is asked for again, what was shown of the one before is forgotten (ChatTurnAsync).
@@ -194,7 +195,8 @@ namespace Pptcom.Agent
         {
             for (int i = 0; i < calls.Count; i++)
             {
-                if (calls[i].Name == "pptcom" && !_noticesShown.Contains((turn, i)) && NoticeOf(calls[i].Arguments) is string notice)
+                bool tells = calls[i].Name == "pptcom" || calls[i].Name == AgentTools.ImageTool;
+                if (tells && !_noticesShown.Contains((turn, i)) && NoticeOf(calls[i].Arguments) is string notice)
                 {
                     _noticesShown.Add((turn, i));
                     view.Log("AI_STEP", notice);
@@ -202,7 +204,8 @@ namespace Pptcom.Agent
             }
         }
 
-        // The notice to the user in a pptcom call's arguments - all of them, or as much as has come of them - or null:
+        // The notice to the user in the arguments of a pptcom or an imagegen call - all of them, or as much as has come
+        // of them - or null:
         // none yet (its text is not closed), none at all, or an empty one. It is read wherever it comes in them: the
         // model does not always give it first (the language may come before it), and one read only once the arguments
         // are whole would show after the script, which is run as it arrives, had done its work.
