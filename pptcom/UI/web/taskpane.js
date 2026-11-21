@@ -19,14 +19,48 @@ let continueRow = null, continueButton = null;  // 続ける, while the request 
 
 // ---- conversation ------------------------------------------------------------------------------
 
-function nearBottom() { return log.scrollHeight - log.scrollTop - log.clientHeight < 40; }
+// The conversation follows its end, as what is added there is what the user watches - until they scroll up to look
+// back (`following` false: it then stays where they put it, and the arrow #to-end shows), and again once they scroll
+// down to the end, press the arrow, or a request is sent. Only a scroll that goes up lets go. The end also leaves the
+// sight when the room for the conversation gets smaller - the status line and the note that the slides are locked
+// come with every request - and when what is added is taller than the room; neither is the user looking elsewhere,
+// so how far the end is from the bottom does not say whether to follow.
+let following = true;
+let lastTop = 0;   // where the conversation was scrolled to when last looked at: a scroll to above it went up
+const toEnd = $("to-end");
+function atEnd() { return log.scrollHeight - log.scrollTop - log.clientHeight < 2; }
+function follow(on) {
+  following = on;
+  toEnd.classList.toggle("show", !on);
+}
+function keepToEnd() {
+  if (!following) return;
+  log.scrollTop = log.scrollHeight;
+  lastTop = log.scrollTop;
+}
+log.addEventListener("scroll", () => {
+  const top = log.scrollTop;
+  if (atEnd()) follow(true);
+  else if (top < lastTop) follow(false);
+  lastTop = top;
+});
+toEnd.addEventListener("click", () => { follow(true); keepToEnd(); });
+// The room for the conversation changed (what is under it came or went, the pane was resized).
+new ResizeObserver(() => { if (following) keepToEnd(); else if (atEnd()) follow(true); }).observe(log);
+// The user folded or unfolded a block (the event does not bubble: it is caught on its way down). The block of the
+// request in progress is opened for its rows, which go on being followed; another one is being looked at, so the
+// conversation stays where it is, and follows on only if its end is still in sight.
+log.addEventListener("toggle", e => {
+  if (work && e.target === work.el) keepToEnd();
+  else follow(atEnd());
+}, true);
+
 // 続ける stays last: what comes while it shows goes above it, so that pressed, its 続けて follows all of the request
 // it carries on.
 function add(el) {
-  const stick = nearBottom();
   if (continueRow && el !== continueRow && continueRow.parentNode === log) log.insertBefore(el, continueRow);
   else log.appendChild(el);
-  if (stick) log.scrollTop = log.scrollHeight;
+  keepToEnd();
 }
 function div(cls, text) {
   const el = document.createElement("div");
@@ -51,12 +85,11 @@ function startWork() {
 }
 function workRow(cls, tool, text) {
   if (!work) startWork();
-  const stick = nearBottom();
   const r = div("row " + cls);
   if (tool) r.appendChild(div("tool", tool));
   r.appendChild(div("text", text));
   work.body.appendChild(r);
-  if (stick) log.scrollTop = log.scrollHeight;
+  keepToEnd();
 }
 function finishWork(state, footer) {
   if (!work) return;
@@ -96,6 +129,7 @@ function onLog(m) {
   switch (logKinds[m.code]) {
     case "user":
       if (work) finishWork("stopped");
+      follow(true);   // a request is watched from its start, wherever the user had scrolled to
       add(div("msg user", text));
       startWork();
       return;
@@ -131,6 +165,7 @@ function onLog(m) {
       work = null;
       continueRow = continueButton = null;
       log.textContent = "";
+      follow(true);
       add(div("divider", i18n.t("NEW_CHAT")));
       return;
     case "plain":

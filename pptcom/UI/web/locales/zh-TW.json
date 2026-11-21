@@ -46,6 +46,7 @@
   "RETRY": "重試",
   "CONTINUE_HINT": "從停止的地方繼續進行",
   "CONTINUE": "繼續",
+  "TO_END": "移至最新訊息",
   "INPUT_PLACEHOLDER": "輸入想製作的投影片內容（拖放或貼上即可附加資料或圖片）",
   "ATTACH": "附加資料或圖片",
   "ATTACH_HINT": "附加資料或圖片（Word、Excel、PowerPoint、PDF、文字檔、圖片）",

@@ -142,6 +142,20 @@ input[type=text]:focus, input[type=password]:focus, input[type=number]:focus, se
 /* a file that was not attached, with the reason */
 .note.alert { color: var(--err); }
 
+/* The arrow back to the conversation's end, shown while it does not follow (taskpane.js): a round button over the
+   middle of the conversation's lower edge. Its anchor takes no room, right under the conversation. */
+#to-end-anchor { flex: none; position: relative; height: 0; }
+#to-end {
+  position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%);
+  width: 32px; height: 32px; padding: 0;
+  border: 1px solid var(--line); border-radius: 50%;
+  background: var(--panel); color: var(--text);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+  display: none; place-items: center; cursor: pointer;
+}
+#to-end.show { display: grid; }
+#to-end:hover { color: var(--accent); border-color: var(--accent); }
+
 /* the turns of one request, folded into one block */
 .work {
   border: 1px solid var(--line);

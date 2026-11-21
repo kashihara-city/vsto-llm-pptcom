@@ -46,6 +46,7 @@
   "RETRY": "再試行",
   "CONTINUE_HINT": "止まったところから続きを進めます",
   "CONTINUE": "続ける",
+  "TO_END": "最新のメッセージへ",
   "INPUT_PLACEHOLDER": "作りたいスライドの内容を入力（資料や画像はドロップか貼り付けで添付できます）",
   "ATTACH": "資料や画像を添付",
   "ATTACH_HINT": "資料や画像を添付（Word、Excel、PowerPoint、PDF、テキスト、画像）",

@@ -2,7 +2,7 @@
 // time, also before the add-in's busy state arrives and while another window's pane runs one; a refused send does
 // not leave the page waiting; a request that stops (the deck was closed, 中止, an error) closes its block as stopped,
 // one that finishes as done; that what ran of a stopped script stays on the slides is told below the block, where it
-// is seen;
+// is seen; the conversation follows its end until the user scrolls up, and again once they are back at the end;
 // 続ける shows last after a request that stopped at the turn limit, and sends like
 // a request; the line above the input shows what is selected in PowerPoint, and the settings the version, whether
 // the browser uses the add-in's refusing proxy, the context limit, the models (none chosen yet, 使わない), the image
@@ -65,10 +65,12 @@ function element() {
 // `texts`: how i18n.load ends (by default never: the codes show, and "ready" is not sent); `readyState`: the page's
 // document.readyState as taskpane.js starts ("loading" until the test fires DOMContentLoaded).
 function page({ texts = () => new Promise(() => {}), readyState = "complete" } = {}) {
-  const sent = [], fetched = [], elements = new Map(), onDocument = {};
+  const sent = [], fetched = [], elements = new Map(), onDocument = {}, onResize = [];
   let onMessage = null;
   const context = vm.createContext({
     console, URLSearchParams, location: { search: "" },
+    // nothing is laid out here: a test says when what the page observes changed its size (resize)
+    ResizeObserver: class { constructor(fn) { onResize.push(fn); } observe() {} },
     // nothing answers: the add-in's proxy refuses whatever the page asks the network for
     fetch: url => { fetched.push(url); return Promise.reject(new TypeError("Failed to fetch")); },
     window: { chrome: { webview: {
@@ -90,6 +92,7 @@ function page({ texts = () => new Promise(() => {}), readyState = "complete" } =
     posted: () => sent.map(m => m.type),
     fetched: () => fetched,
     fire: type => { if (onDocument[type]) onDocument[type](); },
+    resize: () => { for (const fn of onResize) fn(); },
     submit: text => { context.text = text; run("input.value = text; submit();"); },
     host: data => onMessage({ data }),
     log: (code, ...args) => onMessage({ data: { type: "log", code, args } }),
@@ -433,6 +436,75 @@ function notAttached() {
         !!row && row.className === "row extra alert" && row.children[0].textContent === "DOC_NOT_ATTACHED", row ? row.className : "(no row)");
 }
 
+// The conversation follows its end until the user scrolls up to look back, and again once they scroll down to the
+// end, press the arrow, or a request is sent. Nothing is laid out here: the test says how tall the conversation and
+// the room for it are, and fires the events a browser would; the scroll position is kept within what there is to
+// scroll, as a browser keeps it.
+function followsItsEnd() {
+  const p = page();
+  const log = p.element("log"), arrow = p.element("to-end");
+  let top = 0;
+  Object.defineProperty(log, "scrollTop", { get: () => top, set: v => { top = Math.max(0, Math.min(v, log.scrollHeight - log.clientHeight)); } });
+  const tall = (all, room) => { log.scrollHeight = all; if (room != null) log.clientHeight = room; };
+  const below = () => log.scrollHeight - log.scrollTop - log.clientHeight;   // how far the end is under what is seen
+  const shown = () => arrow.classList.contains("show");
+  const scrollTo = to => { log.scrollTop = to; log.listeners.scroll(); };
+  const state = () => "end " + below() + " px below, arrow " + (shown() ? "shown" : "hidden");
+
+  tall(1000, 700);
+  p.log("USER_REQUEST", "one");
+  check("the conversation follows its end as things are added", below() === 0 && !shown(), state());
+  // A request begins: the status line and the note that the slides are locked take room from the conversation. Its
+  // end is then out of sight though nobody scrolled, and the scroll event of the page's own move comes after that.
+  tall(1000, 632);
+  log.listeners.scroll();
+  tall(1060);
+  p.log("AI_STEP", "a notice");
+  check("it still follows when the room for it got smaller: the end left the sight, but nobody scrolled up", below() === 0 && !shown(), state());
+  tall(1060, 600);
+  const left = below();
+  p.resize();
+  check("and comes back to its end when the room changes", left === 32 && below() === 0, "left " + left + " px below; then " + state());
+  tall(1100);
+  p.log("TOOL_RESULT", 1, "pptcom", "OK");
+  check("a row of the request's block is followed too", below() === 0, state());
+
+  scrollTo(200);
+  const up = shown();
+  tall(1200);
+  p.log("AI_STEP", "another");
+  p.resize();
+  check("once the user scrolls up it stays where they put it, and the arrow shows", up && log.scrollTop === 200 && shown(), "arrow shown=" + up + "; top " + log.scrollTop + ", " + state());
+  scrollTo(400);
+  tall(1300);
+  p.log("AI_STEP", "more");
+  check("scrolling down short of the end does not follow yet", log.scrollTop === 400 && shown(), "top " + log.scrollTop + ", " + state());
+  scrollTo(1e9);
+  const back = !shown();
+  tall(1400);
+  p.log("AI_STEP", "yet more");
+  check("scrolled down to the end, it follows again and the arrow goes", back && below() === 0 && !shown(), "arrow gone=" + back + "; " + state());
+
+  scrollTo(100);
+  p.click("to-end");
+  check("the arrow takes it to the end and follows again", below() === 0 && !shown(), state());
+  scrollTo(100);
+  tall(1500);
+  p.log("USER_REQUEST", "two");
+  check("a request sent is shown wherever the user had scrolled to", below() === 0 && !shown(), state());
+
+  // a block folded or unfolded by the user: the request's own is followed on, another one is being looked at
+  tall(1800);
+  log.listeners.toggle({ target: p.work().el });
+  check("the block of the request in progress, unfolded, is followed to its end", below() === 0 && !shown(), state());
+  tall(2200);
+  log.listeners.toggle({ target: {} });
+  check("another block unfolded stays in sight: the conversation stops following", below() === 400 && shown(), state());
+  tall(40, 600);
+  p.log("NEW_CONVERSATION");
+  check("a new conversation follows from its start", !shown(), state());
+}
+
 // "ready" waits for docs.js as well as the texts: the add-in then sends at once what waited, files to convert among it,
 // and only docs.js takes those. docs.js is a module script, so it has run by DOMContentLoaded.
 async function readyWaitsForDocs() {
@@ -466,6 +538,7 @@ ends();
 notAttached();
 partKept();
 slidesLocked();
+followsItsEnd();
 readyWaitsForDocs().then(proxyState).then(() => {
   console.log();
   console.log(failed === 0 ? `ALL PASSED (${passed})` : `${failed} FAILED, ${passed} passed`);
