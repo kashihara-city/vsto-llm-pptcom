@@ -69,7 +69,6 @@ namespace ComScriptTests
             ComTypeTests();
             UsageBatchTests();
             SelectionTests();
-            FingerprintTests();
             ChangeTrackingTests();
             TextLanguageTests();
             RenderSizeTests();
@@ -466,7 +465,7 @@ namespace ComScriptTests
         }
 
         // The engine binds ActivePresentation once, as the request starts; the pptread text, the renderings, the
-        // shape lists and the fingerprint read that deck (ComProxyEngine.Presentation) even after the user has
+        // shape lists read that deck (ComProxyEngine.Presentation) even after the user has
         // switched to another one while the model was thinking.
         private static void DeckTests()
         {
@@ -1714,30 +1713,6 @@ namespace ComScriptTests
             return DeckReader.DescribeSelection(new SelDeck(slide), s, variables: null, out summary);
         }
 
-        // The deck read at a request's end (DeckReader.TakeFingerprint) with what was read at its start: the slides the
-        // request changed are read again, the others taken as they were (their shapes not read at all) with the variables
-        // that hold them now; an edit the user made meanwhile to one of those then shows at the next request's start.
-        private static void FingerprintTests()
-        {
-            FpShape title = new() { Id = 2, Text = "title" }, card = new() { Id = 3, Text = "card" };
-            FpDeck deck = new(new FpSlide(256, title), new FpSlide(257, card));
-            Dictionary<string, List<string>> none = new(StringComparer.Ordinal);
-            DeckReader.Fingerprint start = DeckReader.TakeFingerprint(deck, none);
-
-            card.Left = 50;           // the request moves the card on slide 2 ...
-            title.Text = "by hand";   // ... and the user edits slide 1 meanwhile
-            Dictionary<string, List<string>> held = new(StringComparer.Ordinal) { [ComProxyEngine.ShapeKey(256, 2)] = ["t1"] };
-            int readsBefore = title.Reads;
-            DeckReader.Fingerprint end = DeckReader.TakeFingerprint(deck, held, start, new HashSet<int> { 257 });
-            int readsAtEnd = title.Reads - readsBefore;
-            DeckReader.ShapeState kept = end.Slides[0].Shapes[2], read = end.Slides[1].Shapes[3];
-            DeckReader.DeckChanges next = DeckReader.Compare(end, DeckReader.TakeFingerprint(deck, held));
-            Report("deck at a request's end: changed slides read again, the others kept with today's variables; a hand edit meanwhile shows next time",
-                   readsAtEnd == 0 && kept.Text == "title" && kept.Variables == "= t1 " && read.Left == 50 &&
-                   next.Lines.Count == 1 && next.Lines[0].StartsWith("slide 1:", StringComparison.Ordinal) && next.Lines[0].Contains("text changed"),
-                   string.Join(" | ", next.Lines) + Invariant($" (reads of slide 1's text at the end: {readsAtEnd})"));
-        }
-
         // Which ops count as changing their slide (ComProxyEngine.MayChange): sets and calls, and gets of what is no property -
         // box.Delete without parentheses is parsed as a get, and deletes the shape - or of a type the interop does not have.
         private static void ChangeTrackingTests()
@@ -1795,89 +1770,6 @@ namespace ComScriptTests
             ComScriptResult plain = new ComProxyEngine(new object()).ExecuteScriptAsync(parsed).GetAwaiter().GetResult();
             ComScriptResult given = new ComProxyEngine(new object()).ExecuteScriptAsync(parsed, textLanguage: 1041).GetAwaiter().GetResult();
             Report("text language: a script that writes no text runs the same with a language named", plain.Success && given.Success, "");
-        }
-
-        // ActivePresentation.Slides.Count and Slides(n), as late binding reaches them.
-        internal sealed class FpDeck(params FpSlide[] slides) : DynamicObject
-        {
-            public FpSlides Slides { get; } = new(slides);
-
-            public override bool TryInvokeMember(InvokeMemberBinder binder, object?[]? args, out object? result)
-            {
-                result = binder.Name == "Slides" && args is { Length: 1 } ? slides[(int)args[0]! - 1] : null;
-                return result is not null;
-            }
-        }
-
-        internal sealed class FpSlides(FpSlide[] slides)
-        {
-            public int Count => slides.Length;
-        }
-
-        internal sealed class FpSlide(int id, params FpShape[] shapes) : DynamicObject
-        {
-            public int SlideID { get; } = id;
-
-            public FpShapes Shapes { get; } = new(shapes);
-
-            public override bool TryInvokeMember(InvokeMemberBinder binder, object?[]? args, out object? result)
-            {
-                result = binder.Name == "Shapes" && args is { Length: 1 } ? shapes[(int)args[0]! - 1] : null;
-                return result is not null;
-            }
-        }
-
-        internal sealed class FpShapes(FpShape[] shapes)
-        {
-            public int Count => shapes.Length;
-        }
-
-        // A text box without a fill; every read of its text frame counts (Reads).
-        internal sealed class FpShape
-        {
-            public int Reads { get; private set; }
-
-            public int Id { get; set; }
-
-            public double Left { get; set; } = 10;
-
-            public double Top { get; } = 20;
-
-            public double Width { get; } = 100;
-
-            public double Height { get; } = 40;
-
-            public int HasTable { get; }
-
-            public int HasTextFrame { get; } = -1;
-
-            public string Text { get; set; } = "";
-
-            public FpFill Fill { get; } = new();
-
-            public FpFrame TextFrame
-            {
-                get
-                {
-                    Reads++;
-                    return new(this);
-                }
-            }
-        }
-
-        internal sealed class FpFill
-        {
-            public int Visible { get; }
-        }
-
-        internal sealed class FpFrame(FpShape shape)
-        {
-            public FpRange TextRange => new(shape.Text);
-        }
-
-        internal sealed class FpRange(string text)
-        {
-            public string Text { get; } = text;
         }
 
         internal sealed class SelWindow

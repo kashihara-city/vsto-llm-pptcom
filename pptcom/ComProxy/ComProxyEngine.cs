@@ -1342,9 +1342,8 @@ namespace Pptcom.ComProxy
 
         // Slide tracking for auto-renders: a handle belongs to the slide it was reached from;
         // a result that IS a slide (Slides(n), Slides.Add) starts a new owner. Ops that may change
-        // something (MayChange) mark their owner slide as touched, and a new slide they made; one
-        // with no slide to mark changed what cannot be told (_untrackedChange). Returns the slide the
-        // result belongs to.
+        // something (MayChange) mark their owner slide as touched, and a new slide they made. Returns
+        // the slide the result belongs to.
         private object? TrackSlides(string action, string target, object targetObj, string? member, object? resultValue)
         {
             _handleSlide.TryGetValue(target, out object? targetSlide);
@@ -1357,14 +1356,9 @@ namespace Pptcom.ComProxy
             if (MayChange(action, targetObj, member))
             {
                 MarkTouched(targetSlide);
-                bool madeSlide = resultSlide is not null && !ReferenceEquals(resultSlide, targetSlide);
-                if (madeSlide)
+                if (resultSlide is not null && !ReferenceEquals(resultSlide, targetSlide))
                 {
                     MarkTouched(resultSlide); // Slides.Add
-                }
-                else if (targetSlide is null)
-                {
-                    _untrackedChange = true;
                 }
             }
 
@@ -1764,22 +1758,11 @@ namespace Pptcom.ComProxy
         private readonly Dictionary<string, object?> _handleSlide = new(StringComparer.OrdinalIgnoreCase); // null: not on a slide
         private readonly List<object> _touchedSlides = [];
 
-        // The slides changed since the last TakeChangedSlideIds: those of all of a request's calls, where _touchedSlides
-        // has one call's. The deck is read again at a request's end only on these (DeckReader.TakeFingerprint) - or all
-        // of it, after a change whose slide could not be told (_untrackedChange: of the presentation, its page setup...).
-        private readonly List<object> _changedSlides = [];
-        private bool _untrackedChange;
-
         private void MarkTouched(object? slide)
         {
             if (slide is null)
             {
                 return;
-            }
-
-            if (!_changedSlides.Exists(s => ReferenceEquals(s, slide)))
-            {
-                _changedSlides.Add(slide);
             }
 
             _lastTouched = slide;
@@ -1813,29 +1796,6 @@ namespace Pptcom.ComProxy
             {
                 return null; // the slide was deleted
             }
-        }
-
-        // The SlideIDs of the slides changed since the last call (one deleted since is left out), forgetting them; null
-        // when a change since could not be tied to a slide (then the whole deck is to be read again).
-        public HashSet<int>? TakeChangedSlideIds()
-        {
-            bool untracked = _untrackedChange;
-            _untrackedChange = false;
-            HashSet<int> ids = [];
-            foreach (object s in _changedSlides)
-            {
-                try
-                {
-                    ids.Add((int)((dynamic)s).SlideID);
-                }
-                catch (Exception ex) when (Guard.IsRecoverable(ex))
-                {
-                    // slide was deleted
-                }
-            }
-
-            _changedSlides.Clear();
-            return untracked ? null : ids;
         }
 
         // Current 1-based indexes of the slides changed since the last call (resolved now, so

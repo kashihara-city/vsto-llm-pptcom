@@ -20,7 +20,7 @@ namespace Pptcom.UI
             return new PaneText(new JObject { ["code"] = code, ["args"] = Values(args) });
         }
 
-        // The items, each shown as a value, joined by the text of separatorCode (LIST_SEPARATOR "・", ...).
+        // The items, each shown as a value, joined by the text of separatorCode (DETAIL_SEPARATOR "、").
         public static PaneText Join(string separatorCode, IEnumerable<object> items)
         {
             return new PaneText(new JObject { ["join"] = separatorCode, ["items"] = Values(items) });

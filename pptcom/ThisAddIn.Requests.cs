@@ -21,11 +21,10 @@ namespace Pptcom
     {
         // What goes between the time line and the request in the user message: the attached documents and
         // pictures (`picturesShown`: those on this request's message), and for a request that follows earlier
-        // ones how the last one ended if it did not finish, what the user changed in the deck since, and a
-        // pointer to pptread; last, `selection` (what the user had selected in PowerPoint, SelectionContext).
-        // English, like the rest of the prompt. The hand edits
-        // also go into run.HandEdits, so the shortened copy of this request keeps them (a request
-        // stopped right away would otherwise lose them for the next one).
+        // ones how many slides the deck has now and a pointer to pptread - what the earlier requests did, and what
+        // the user may have done to the slides by hand since, the model sees there, and is not told here; last,
+        // `selection` (what the user had selected in PowerPoint, SelectionContext). English, like the rest of the
+        // prompt.
         private static string ContextBeforeRequest(Conversation c, RunRecord run, string selection, ISet<string> picturesShown)
         {
             string documents = DocumentsContext(c, picturesShown);
@@ -35,27 +34,6 @@ namespace Pptcom
             }
 
             System.Text.StringBuilder sb = new(documents);
-            if (c.LastSeen is not null)
-            {
-                try
-                {
-                    DeckReader.Fingerprint now = DeckReader.TakeFingerprint(c.Engine.Presentation, c.Engine.ShapeVariables());
-                    run.SeenAtStart = now;
-                    DeckReader.DeckChanges changes = DeckReader.Compare(c.LastSeen, now);
-                    if (changes.Lines.Count > 0)
-                    {
-                        run.HandEdits = "Since your previous request the deck was changed outside this conversation (by the user):\n" +
-                                        string.Concat(changes.Lines.Select(static line => "- " + line + "\n"));
-                        sb.Append(run.HandEdits).Append("Look at those slides with pptread before you change them.\n\n");
-                        run.Pane.Control.Log("HAND_EDITS", HandEditsText(changes));
-                        LogToFile("(deck changed by the user since the last request:\n" + string.Join("\n", changes.Lines) + ")");
-                    }
-                }
-                catch (Exception ex) when (Guard.IsRecoverable(ex))
-                {
-                    LogToFile("(deck comparison failed: " + ex.Message + ")");
-                }
-            }
             int slides = 0;
             try
             {
@@ -267,8 +245,7 @@ namespace Pptcom
                 // The ending, what the user was shown, goes last as the model's own words, in their language: a reply in
                 // English there would draw the next replies into English.
                 string? ending = EndingText(run);
-                c.Earlier.AddRange(Compaction.ShortenForLater(run.Messages, run.OwnMessage, (run.HandEdits is not null ? run.HandEdits + "\n" : "") + run.Request +
-                                                                                                   (run.Selection is not null ? "\n" + run.Selection : ""), ending));
+                c.Earlier.AddRange(Compaction.ShortenForLater(run.Messages, run.OwnMessage, run.Request + (run.Selection is not null ? "\n" + run.Selection : ""), ending));
                 // From after the earlier requests it was sent with: a request that carried on another one keeps that one too.
                 c.Stopped = null;
                 if (run.Outcome == "max_turns")
@@ -284,10 +261,6 @@ namespace Pptcom
                 }
 
                 run.Pane.Control.ShowContinue(c.Stopped is not null);
-                // what the request did not change is as it was at its start (SeenAtStart): only its slides are read again
-                // (all of them after a change that could not be tied to a slide: changed null)
-                HashSet<int>? changed = c.Engine.TakeChangedSlideIds();
-                c.LastSeen = DeckReader.TakeFingerprint(c.Engine.Presentation, c.Engine.ShapeVariables(), run.SeenAtStart, changed);
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
@@ -317,8 +290,6 @@ namespace Pptcom
             public int EarlierMessages;      // how many shortened messages of earlier requests it was sent after (then the stopped one's, when it continues)
             public List<ChatMessage>? Messages; // this request's conversation, as sent
             public ChatMessage? OwnMessage;  // this request's user message in Messages (not its index: notes before it may leave)
-            public string? HandEdits;        // what the user had changed by hand before it (ContextBeforeRequest)
-            public DeckReader.Fingerprint? SeenAtStart; // the deck as read for those, at its start (null: not read)
             public string? Selection;        // one line on what the user had selected when sending it (DeckReader.DescribeSelection)
             public DeckDefaults? DeckDefaults;
             public readonly System.Text.StringBuilder Log = new();
@@ -530,7 +501,6 @@ namespace Pptcom
                 ["continues"] = run.Continues, // 続ける: carried on the request before it, which stopped at the turn limit
                 ["context_limit"] = run.ContextLimit,
                 ["compactions"] = run.State.Compactions,
-                ["hand_edits"] = run.HandEdits,
                 ["documents"] = run.Conversation is not null ? new JArray(run.Conversation.Documents.Select(static d => d.Describe())) : [],
                 // what the task pane showed: each tool call's first result line, and the model's reply
                 ["tools"] = new JArray(run.State.ToolLines),
@@ -762,26 +732,5 @@ namespace Pptcom
             }
         }
 
-        // "スライド 2・5 が手で変更されています。スライドが 1 枚削除されています" in Japanese.
-        private static PaneText HandEditsText(DeckReader.DeckChanges changes)
-        {
-            List<object> parts = [];
-            if (changes.Touched.Count > 0)
-            {
-                parts.Add(PaneText.Of("HAND_EDITS_SLIDES", PaneText.Join("LIST_SEPARATOR", changes.Touched.Cast<object>())));
-            }
-
-            if (changes.Removed > 0)
-            {
-                parts.Add(PaneText.Of("HAND_EDITS_REMOVED", changes.Removed));
-            }
-
-            if (changes.Reordered)
-            {
-                parts.Add(PaneText.Of("HAND_EDITS_REORDERED"));
-            }
-
-            return PaneText.Join("SENTENCE_SEPARATOR", parts);
-        }
     }
 }

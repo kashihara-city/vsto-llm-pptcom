@@ -82,7 +82,7 @@ const logKinds = {
   AI_DECK_CLOSED: "stopped",
   // a request refused before it started: its block ends with the reason
   NO_ENDPOINT_OR_MODEL: "stopped", DOC_STILL_CONVERTING: "stopped", HTTP_WITH_API_KEY: "stopped",
-  HAND_EDITS: "handEdits", NEW_CONVERSATION: "reset",
+  NEW_CONVERSATION: "reset",
   READY: "plain", NO_ENDPOINT_HELP: "plain",
   // what ran of a script whose reply was cut off or stopped stays on the slides: said where it is seen, not as a row
   // of the progress block
@@ -127,12 +127,6 @@ function onLog(m) {
     case "error":
       add(div("msg assistant error", text));
       return;
-    case "handEdits": {
-      // what the user changed by hand since the last request: above this request's progress block
-      const note = div("note", i18n.fill("NOTE", text));
-      if (work) log.insertBefore(note, work.el); else add(note);
-      return;
-    }
     case "reset":     // 新しい会話 pressed: start from an empty pane
       work = null;
       continueRow = continueButton = null;

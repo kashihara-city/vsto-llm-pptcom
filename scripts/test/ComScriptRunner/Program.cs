@@ -350,7 +350,6 @@ namespace ComScriptRunner
                 UsageSink = ComProxyEngine.FileUsageSink("rig"),
             };
             List<string> knownIds = [];
-            DeckReader.Fingerprint fingerprint = new(); // see the "fingerprint" request
             stdout.WriteLine(new JObject { ["ready"] = true }.ToString(Newtonsoft.Json.Formatting.None));
 
             try
@@ -387,7 +386,7 @@ namespace ComScriptRunner
                     JObject reply;
                     try
                     {
-                        reply = DeckReply(req, (object)app, engine, ref fingerprint) ?? ScriptReply(req, engine, knownIds);
+                        reply = DeckReply(req, (object)app, engine) ?? ScriptReply(req, engine, knownIds);
                     }
                     catch (Exception ex) when (Guard.IsRecoverable(ex))
                     {
@@ -407,35 +406,15 @@ namespace ComScriptRunner
             return 0;
         }
 
-        // The answer to a request about the deck (read, fingerprint, compare, brief, image, export, open, probe,
+        // The answer to a request about the deck (read, brief, image, export, open, probe,
         // save), or null for a script.
-        private static JObject? DeckReply(JObject req, dynamic app, ComProxyEngine engine, ref DeckReader.Fingerprint fingerprint)
+        private static JObject? DeckReply(JObject req, dynamic app, ComProxyEngine engine)
         {
             if (req["read"] is JToken read)
             {
                 // pptread: the tool text and the slides to render (each then fetched with export + brief).
                 string text = DeckReader.Read(engine.Presentation, read.ToString(), out List<int> toRender);
                 return new JObject { ["text"] = text, ["slides"] = new JArray(toRender) };
-            }
-
-            if (req["fingerprint"] is not null)
-            {
-                // The add-in's check for edits made between two requests: remember the deck now ...
-                fingerprint = DeckReader.TakeFingerprint(engine.Presentation, engine.ShapeVariables());
-                return new JObject { ["slides"] = fingerprint.Slides.Count };
-            }
-
-            if (req["compare"] is not null)
-            {
-                // ... and list what changed since.
-                DeckReader.DeckChanges changes = DeckReader.Compare(fingerprint, DeckReader.TakeFingerprint(engine.Presentation, engine.ShapeVariables()));
-                return new JObject
-                {
-                    ["lines"] = new JArray(changes.Lines),
-                    ["touched"] = new JArray(changes.Touched),
-                    ["removed"] = changes.Removed,
-                    ["reordered"] = changes.Reordered,
-                };
             }
 
             if (req["brief"] is JToken brief)

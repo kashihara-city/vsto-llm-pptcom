@@ -279,8 +279,8 @@ namespace Pptcom
         // earlier ones (ShortenForLater): the user's requests, the tool calls with the image prompts left out and
         // each request's pptcom calls as one that says only that they ran, the first line of the other results (an
         // image's variable, a document's name) and the model's replies - no renderings, no reasoning. The deck itself is not resent:
-        // the model looks at it with pptread, and is told which slides the user changed by hand since
-        // the last request (DeckReader.Fingerprint / Compare). A request that stopped at the turn limit is also kept
+        // the model looks at it with pptread, where it also sees what the user changed by hand since the last
+        // request (it is not told of that). A request that stopped at the turn limit is also kept
         // whole until the next one (Stopped), for 続ける. The conversation ends with 新しい会話,
         // when its window is gone, or when PowerPoint closes. Kept in memory only.
         private sealed class Conversation
@@ -300,8 +300,6 @@ namespace Pptcom
             public readonly List<ChatMessage> Earlier = [];
             // The last request, when it stopped at the turn limit: 続ける carries it on. Null otherwise.
             public StoppedRequest? Stopped;
-            // The deck as the last request left it, to tell the next one what the user changed since.
-            public DeckReader.Fingerprint? LastSeen;
             // Generated images already copied into a run folder. The temp files themselves stay until
             // the conversation ends: later requests may still place them by their variable.
             public readonly HashSet<string> SavedImages = new(StringComparer.OrdinalIgnoreCase);
