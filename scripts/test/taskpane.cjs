@@ -4,7 +4,7 @@
 // one that finishes as done; that what ran of a stopped script stays on the slides is told below the block, where it
 // is seen; the conversation follows its end until the user scrolls up, and again once they are back at the end;
 // 続ける shows last after a request that stopped at the turn limit, and sends like
-// a request; the line above the input shows what is selected in PowerPoint, and the settings the version, whether
+// a request; a question the request asks shows with its two answers, and the one pressed is sent; the line above the input shows what is selected in PowerPoint, and the settings the version, whether
 // the browser uses the add-in's refusing proxy, the context limit, the models (none chosen yet, 使わない), the image
 // prompt and the API key (typed in, deleted).
 // taskpane.js runs as it is, in a stand-in for the browser and WebView2 made of plain objects; messages
@@ -380,6 +380,40 @@ function continueButton() {
         log.children.map(e => e.className).join(" | "));
 }
 
+// A question of the request in progress (the deck's one empty slide: delete it first?): last in the conversation, with
+// its two answers. The one pressed is sent, and the question goes; it also goes when the add-in takes it back (the
+// request was stopped meanwhile) and when the request has ended.
+function question() {
+  const p = page();
+  const log = p.element("log");
+  const asked = () => log.children.find(e => e.className === "msg assistant ask");
+  const answers = () => JSON.stringify(p.sent("answer").map(m => m.value));
+  const ask = () => p.host({ type: "ask", question: { code: "EMPTY_SLIDE_ASK", args: [] }, yes: { code: "EMPTY_SLIDE_DELETE", args: [] }, no: { code: "EMPTY_SLIDE_KEEP", args: [] } });
+  p.submit("request");
+  p.log("USER_REQUEST", "request");
+  p.host({ type: "busy", value: true });
+  ask();
+  const row = asked();
+  const shown = row ? row.children[0].textContent + ": " + row.children[1].children.map(b => b.textContent).join(" / ") : "(no question)";
+  check("a question of the request shows last in the conversation, with its two answers",
+        !!row && log.children[log.children.length - 1] === row && shown === "EMPTY_SLIDE_ASK: EMPTY_SLIDE_DELETE / EMPTY_SLIDE_KEEP",
+        shown + " | " + log.children.map(e => e.className).join(" | "));
+  row.children[1].children[0].listeners.click();
+  check("the first answer pressed: it is sent, and the question goes", answers() === "[true]" && !asked(), answers() + " asked=" + !!asked());
+  ask();
+  asked().children[1].children[1].listeners.click();
+  check("the second answer, asked again: sent as such", answers() === "[true,false]" && !asked(), answers() + " asked=" + !!asked());
+  ask();
+  ask();
+  const twice = log.children.filter(e => e.className === "msg assistant ask").length;
+  p.host({ type: "ask" });
+  check("asked twice it shows once; taken back by the add-in it goes, and nothing is sent", twice === 1 && !asked() && answers() === "[true,false]",
+        "shown=" + twice + " asked=" + !!asked() + " " + answers());
+  ask();
+  p.host({ type: "busy", value: false });
+  check("the request ending takes it away too", !asked() && answers() === "[true,false]", "asked=" + !!asked() + " " + answers());
+}
+
 // While a request runs, the add-in keeps the slides of its window from being edited by hand; the page says so
 // (body.locked shows the line above the input) for as long as the add-in says it does, and not in a pane that only
 // waits for another window's request.
@@ -534,6 +568,7 @@ apiKeyDelete();
 settingsStayOpen();
 newChat();
 continueButton();
+question();
 ends();
 notAttached();
 partKept();

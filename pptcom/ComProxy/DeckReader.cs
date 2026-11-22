@@ -238,27 +238,29 @@ namespace Pptcom.ComProxy
             return ((int)Math.Round((double)v, MidpointRounding.AwayFromZero)).ToString(CultureInfo.InvariantCulture);
         }
 
-        // The one slide of a presentation that was made in PowerPoint's own window and not touched since: the empty
-        // title slide such a presentation starts with (one made through COM starts with none), which a request takes
-        // away before the model works. Null for any other deck - and whenever the user may have done anything to it:
-        // a presentation that was ever saved is the user's document, and none of its slides is removed; and one that
-        // was not must be unchanged since PowerPoint made it (Presentation.Saved, which PowerPoint keeps true until
-        // the first change of any kind). Looking at the slide alone did not tell: its only slide was removed from a
-        // saved presentation with its notes and its background, and from an unsaved one whose user had written on the
-        // notes page, moved an empty placeholder or chosen another layout. What the slide shows is looked at all the
-        // same (text, notes, a background of its own, comments), as a program can say that nothing changed. What
-        // cannot be read counts as the user's. `placeholders`: how many empty placeholders the slide has.
-        public static object? UntouchedStarterSlide(object presentation, out int placeholders)
+        // The one slide of a presentation when it shows nothing: only empty placeholders (or no shape at all), no notes,
+        // no background of its own, no comments. Such is the empty title slide a presentation made in PowerPoint's own
+        // window starts with (one made through COM starts with none), which a request takes away before the model
+        // works. Null for any other deck, and when something cannot be read.
+        // `untouched`: nobody can have done anything to it - the presentation was never saved and is unchanged since
+        // PowerPoint made it (Presentation.Saved, which PowerPoint keeps true until the first change of any kind).
+        // Only then may the slide go without a word. Looking at the slide alone does not tell: such a slide was
+        // removed from a saved presentation, and from an unsaved one whose user had written on the notes page, moved
+        // an empty placeholder or chosen another layout. When it is not untouched, the user is the one to say whether
+        // it goes. `placeholders`: how many empty placeholders the slide has.
+        public static object? EmptyOnlySlide(object presentation, out bool untouched, out int placeholders)
         {
             int count = 0;
+            bool asMade = false;
             object? found = Guard.Try<object?>(() =>
             {
                 dynamic pres = presentation;
-                if ((int)pres.Slides.Count != 1 || ((string?)pres.Path ?? "").Length > 0 || (int)pres.Saved == 0)
+                if ((int)pres.Slides.Count != 1)
                 {
                     return null;
                 }
 
+                asMade = ((string?)pres.Path ?? "").Length == 0 && (int)pres.Saved != 0;
                 dynamic slide = pres.Slides.Item(1);
                 if ((int)slide.FollowMasterBackground == 0 || (int)slide.Comments.Count > 0 || HasNotes(slide))
                 {
@@ -279,6 +281,7 @@ namespace Pptcom.ComProxy
                 return slide;
             }, fallback: null);
             placeholders = found is null ? 0 : count;
+            untouched = found is not null && asMade;
             return found;
         }
 

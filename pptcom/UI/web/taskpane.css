@@ -137,6 +137,9 @@ input[type=text]:focus, input[type=password]:focus, input[type=number]:focus, se
 .assistant.error { border-color: var(--err); }
 /* on the user's side: pressed, it becomes the user's message 続けて */
 .continue-row { display: flex; justify-content: flex-end; margin-top: -4px; }
+/* a question of the request in progress, with its two answers under it */
+.ask { display: flex; flex-direction: column; gap: 8px; }
+.ask-answers { display: flex; justify-content: flex-end; gap: 6px; }
 /* a long path (the run folder) breaks anywhere rather than making the conversation scroll sideways */
 .note { color: var(--muted); font-size: 12px; padding: 0 2px; overflow-wrap: anywhere; }
 /* a file that was not attached, with the reason */

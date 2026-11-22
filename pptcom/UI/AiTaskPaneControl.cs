@@ -69,6 +69,8 @@ namespace Pptcom.UI
         public event EventHandler? RetryRequested;
         // 続ける: shown when the last request stopped at the turn limit (ShowContinue); it carries that request on.
         public event EventHandler? ContinueRequested;
+        // The answer pressed under a question the request asked (Ask): on for its first answer.
+        public event EventHandler<SwitchEventArgs>? Answered;
         // Settings area: the endpoint is applied with the 取得 button (or Enter), models on selection.
         public event EventHandler<TextEventArgs>? EndpointSubmitted;
         public event EventHandler<TextEventArgs>? ChatModelSelected;
@@ -323,6 +325,9 @@ namespace Pptcom.UI
                     break;
                 case "continue":
                     ContinueRequested?.Invoke(this, EventArgs.Empty); // ThisAddIn.SendAsync shows it (CONTINUE_REQUEST)
+                    break;
+                case "answer":
+                    Answered?.Invoke(this, new SwitchEventArgs((bool?)m["value"] == true));
                     break;
                 case "newChat":
                     NewConversationRequested?.Invoke(this, EventArgs.Empty);
@@ -613,6 +618,18 @@ namespace Pptcom.UI
         public void ShowRetry(bool show)
         {
             Post(new JObject { ["type"] = "retry", ["value"] = show });
+        }
+
+        // A question of the running request, last in the conversation, with its two answers to press (the page answers
+        // with {type: "answer", value: true for `yes`}); EndAsk takes it away, answered or not.
+        public void Ask(PaneText question, PaneText yes, PaneText no)
+        {
+            Post(new JObject { ["type"] = "ask", ["question"] = question.ToJson(), ["yes"] = yes.ToJson(), ["no"] = no.ToJson() });
+        }
+
+        public void EndAsk()
+        {
+            Post(new JObject { ["type"] = "ask" });
         }
 
         // Whether the conversation's last request stopped at the turn limit and can be carried on (続ける).

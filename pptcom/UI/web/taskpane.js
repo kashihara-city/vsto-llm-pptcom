@@ -1,10 +1,11 @@
 "use strict";
 // The add-in (AiTaskPaneControl.cs) and this page talk only through WebView2 web messages:
-//   page -> add-in: {type: "ready" | "send" | "cancel" | "retry" | "continue" | "newChat" | "endpoint" | "chatModel" | "imageModel" | "apiKey", ...}
+//   page -> add-in: {type: "ready" | "send" | "cancel" | "retry" | "continue" | "newChat" | "endpoint" | "chatModel" | "imageModel" | "apiKey", ...},
+//   {type: "answer", value: bool} to the add-in's {type: "ask", question, yes, no} (three messages; without them the question goes)
 //   page -> add-in also: {type: "openPane" | "runAsArrives" | "saveProgress" | "externalControl", value: bool}, {type: "contextLimit", value: "<digits>"},
 //   {type: "imagePrompt", value: "<name>"}, {type: "apiKey", value: "<the key typed>"}, {type: "apiKeyDelete"};
 //   "imageModel" may be "" (（使わない）); {type: "probed"} answers the add-in's {type: "proxy", probe: "<address>"}
-//   add-in -> page: {type: "log" | "status" | "busy" | "retry" | "continue" | "endpoint" | "models" | "apiKeyState" | "options" | "selection" | "about" | "proxy", ...}
+//   add-in -> page: {type: "log" | "status" | "busy" | "retry" | "continue" | "ask" | "endpoint" | "models" | "apiKeyState" | "options" | "selection" | "about" | "proxy", ...}
 //   ("log" and "status" carry a message: {code, args}, shown with the text of locales/<language>.json, see i18n.js)
 // Attached documents (drop, attach button, chips, PDF pages) have their own messages: see docs.js.
 const host = window.chrome && window.chrome.webview;
@@ -16,6 +17,7 @@ let busy = false, cancelling = false;
 let sending = false;      // a request was sent and the add-in has not answered with its busy state yet
 let work = null;          // the folded block of the request in progress
 let continueRow = null, continueButton = null;  // 続ける, while the request the turn limit stopped can be carried on
+let askRow = null;        // a question of the request in progress, with its two answers, while it waits for one
 
 // ---- conversation ------------------------------------------------------------------------------
 
@@ -163,7 +165,7 @@ function onLog(m) {
       return;
     case "reset":     // 新しい会話 pressed: start from an empty pane
       work = null;
-      continueRow = continueButton = null;
+      continueRow = continueButton = askRow = null;
       log.textContent = "";
       follow(true);
       add(div("divider", i18n.t("NEW_CHAT")));
@@ -239,6 +241,26 @@ function showContinue(on) {
   });
   continueRow.appendChild(continueButton);
   add(continueRow);
+}
+// A question the request asks before it goes on (the deck's one empty slide: delete it first?): last in the
+// conversation, with its two answers. The request waits for one of them, or for the stop button; the question goes
+// once answered, and when the add-in takes it back (a message without a question; the request ended).
+function showAsk(m) {
+  if (askRow) askRow.remove();
+  askRow = null;
+  if (!m.question) return;
+  askRow = div("msg assistant ask");
+  askRow.appendChild(div("ask-text", i18n.t(m.question)));
+  const answers = div("ask-answers");
+  for (const [text, value] of [[m.yes, true], [m.no, false]]) {
+    const b = document.createElement("button");
+    b.className = "btn";
+    b.textContent = i18n.t(text);
+    b.addEventListener("click", () => { showAsk({}); post({ type: "answer", value }); });
+    answers.appendChild(b);
+  }
+  askRow.appendChild(answers);
+  add(askRow);
 }
 // Not while a request is on its way either (sent, its busy state not back yet): it would end the conversation that
 // request runs in.
@@ -322,7 +344,7 @@ function setBusy(on, elsewhere, locked) {
   $("apikey-delete").disabled = on || !apiKeySet;
   if (on) askDelete(false);
   if (waiting) $("status").textContent = i18n.t("STATUS_BUSY_ELSEWHERE");
-  if (!on) { $("status").textContent = ""; $("retry-bar").classList.remove("show"); if (work) finishWork("done"); }
+  if (!on) { $("status").textContent = ""; $("retry-bar").classList.remove("show"); showAsk({}); if (work) finishWork("done"); }
   if (continueButton) continueButton.disabled = on;
 }
 
@@ -333,6 +355,7 @@ const handlers = {
   retry: m => $("retry-bar").classList.toggle("show", !!m.value),
   // whether the conversation's last request stopped at the turn limit and can be carried on
   continue: m => showContinue(!!m.value),
+  ask: m => showAsk(m),
   // With no endpoint the settings open, so one can be entered. They never fold by themselves: the add-in sends the
   // endpoint again after 取得 and after the key is set or deleted, while the user is still in them.
   endpoint: m => { endpoint.value = m.value || ""; if (!endpoint.value) $("settings").open = true; updateSummary(); },

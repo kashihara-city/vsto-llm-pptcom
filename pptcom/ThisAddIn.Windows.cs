@@ -33,6 +33,8 @@ namespace Pptcom
             public int FetchShown;
             // The selection the pane shows (DeckReader.UserSelection.Key), so that it is told only of changes.
             public string SelectionShown = "";
+            // The user said to keep the deck's one empty slide: this window's requests do not ask about it again.
+            public bool KeepsEmptySlide;
 
             // A document of the pane's conversation is still being read.
             public bool IsReadingDocuments => Pending.IsReading(Conversation);
@@ -92,6 +94,14 @@ namespace Pptcom
             control.SendRequested += (s, e) => _ = SendAsync(pane, e.Text, fromOutside: false);
             control.CancelRequested += (s, e) => _cancel.Cancel();
             control.RetryRequested += (s, e) => _retryWait?.TrySetResult(true);
+            control.Answered += (s, e) =>
+            {
+                // only the pane of the request that waits has a question to answer
+                if (ReferenceEquals(pane, _runPane))
+                {
+                    _answerWait?.TrySetResult(e.On);
+                }
+            };
             control.ContinueRequested += (s, e) => _ = SendAsync(pane, Texts.Get("CONTINUE_REQUEST"), fromOutside: false, continues: true);
             control.NewConversationRequested += (s, e) => OnNewConversationRequested(pane);
             control.ExternalControlChanged += (s, e) => OnExternalControlChanged(pane, e.On);

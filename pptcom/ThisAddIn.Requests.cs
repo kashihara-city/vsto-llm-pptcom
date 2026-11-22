@@ -148,7 +148,7 @@ namespace Pptcom
                 // inside the try: whatever fails from here on, the slides are released and the busy state is taken back
                 HoldSlides(pane);
                 ShowBusy(pane);
-                await HandleDeckEditRequestAsync(pane, userMessage, continues).ConfigureAwait(true);
+                await HandleDeckEditRequestAsync(pane, userMessage, continues, fromOutside).ConfigureAwait(true);
             }
             catch (OperationCanceledException)
             {
@@ -190,7 +190,7 @@ namespace Pptcom
         // deck, slide PNGs, this request's session log, summary.json, the generated images and the
         // slide renderings the model saw. Written even when the request fails or is cancelled.
         // Temp PNGs (ComProxyEngine.TempPath) are deleted afterwards.
-        private async Task HandleDeckEditRequestAsync(WindowPane pane, string userMessage, bool continues)
+        private async Task HandleDeckEditRequestAsync(WindowPane pane, string userMessage, bool continues, bool fromOutside)
         {
             RunRecord run = new()
             {
@@ -207,7 +207,7 @@ namespace Pptcom
             _currentRun = run;
             try
             {
-                RemoveUntouchedStarterSlide(run);
+                await SettleEmptySlideAsync(run, fromOutside, _cancel.Token).ConfigureAwait(true);
                 await RunAgentAsync(userMessage, run).ConfigureAwait(true);
                 // max_turns: the model was still calling tools when the turn limit stopped it. max_tokens: a reply
                 // reached the output limit before it said anything to do (see RunAgentAsync).
@@ -312,24 +312,60 @@ namespace Pptcom
 
         // A presentation created from PowerPoint's UI starts with one empty title slide (two
         // empty placeholders); one created via COM starts with none. The model otherwise has to
-        // discover and delete it (carrot run, generated-pptx/addin_20261004_223624). Removed
-        // only from a presentation that is new and holds nothing of the user's (DeckReader.UntouchedStarterSlide).
-        private static void RemoveUntouchedStarterSlide(RunRecord run)
+        // discover and delete it (carrot run, generated-pptx/addin_20261004_223624). It goes without a word
+        // only from a presentation that is new and unchanged since PowerPoint made it (DeckReader.EmptyOnlySlide).
+        // In any other presentation whose one slide shows nothing - saved, or changed in some way - the slide may hold
+        // something of the user's that cannot be seen on it, and the user is asked in the pane whether it goes
+        // (AskAsync; 中止 stops the request there). Once they said to keep it, that window's requests do not ask again.
+        // A request from another program has nobody to answer: the slide stays.
+        private async Task SettleEmptySlideAsync(RunRecord run, bool fromOutside, CancellationToken ct)
+        {
+            WindowPane pane = run.Pane;
+            if (DeckReader.EmptyOnlySlide(pane.Presentation, out bool untouched, out _) is null)
+            {
+                return;
+            }
+
+            if (!untouched)
+            {
+                if (fromOutside || pane.KeepsEmptySlide)
+                {
+                    LogToFile("(the deck's one slide is empty and stays: " + (fromOutside ? "the request comes from another program" : "the user said to keep it") + ")");
+                    return;
+                }
+
+                LogToFile("(the deck's one slide is empty, in a presentation that was saved or changed: the user is asked whether it goes)");
+                bool delete = await AskAsync(pane, PaneText.Of("EMPTY_SLIDE_ASK"), PaneText.Of("EMPTY_SLIDE_DELETE"), PaneText.Of("EMPTY_SLIDE_KEEP"), ct).ConfigureAwait(true);
+                if (!delete)
+                {
+                    pane.KeepsEmptySlide = true;
+                    LogToFile("(the user's answer: keep it)");
+                    pane.Control.Log("EMPTY_SLIDE_KEPT");
+                    return;
+                }
+            }
+
+            RemoveEmptySlide(run, asked: !untouched);
+        }
+
+        // Deletes the deck's one empty slide: the untouched one a new presentation starts with, or (`asked`) the one
+        // the user said to delete. It is looked at again here, as the answer may have taken a while.
+        private static void RemoveEmptySlide(RunRecord run, bool asked)
         {
             try
             {
-                if (DeckReader.UntouchedStarterSlide(run.Pane.Presentation, out int shapeCount) is not object slide)
+                if (DeckReader.EmptyOnlySlide(run.Pane.Presentation, out bool untouched, out int shapeCount) is not object slide || !(asked || untouched))
                 {
                     return;
                 }
 
                 ((dynamic)slide).Delete();
-                LogToFile(Invariant($"(removed the untouched starter slide: 1 slide with {shapeCount} empty placeholder(s))"));
-                run.Pane.Control.Log("STARTER_SLIDE_REMOVED");
+                LogToFile(Invariant($"(removed the deck's one empty slide{(asked ? ", as the user said" : ", untouched since the presentation was made")}: {shapeCount} empty placeholder(s))"));
+                run.Pane.Control.Log(asked ? "EMPTY_SLIDE_DELETED" : "STARTER_SLIDE_REMOVED");
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))
             {
-                LogToFile("(starter slide check failed: " + ex.Message + ")");
+                LogToFile("(the empty slide was not removed: " + ex.Message + ")");
             }
         }
 
@@ -544,6 +580,29 @@ namespace Pptcom
 
         // Completed by the task pane's 再試行 button; cancelled by 中止 (the request's token).
         private TaskCompletionSource<bool>? _retryWait; // set while a request waits for 再試行
+        // Completed by one of the two answers under a question in the pane (AskAsync); cancelled the same way.
+        private TaskCompletionSource<bool>? _answerWait;
+
+        // Asks the user in the request's pane, with two answers to press, and waits: true for `yes`. 中止 (and the
+        // window closing) ends the wait as it ends the request.
+        private async Task<bool> AskAsync(WindowPane pane, PaneText question, PaneText yes, PaneText no, CancellationToken ct)
+        {
+            TaskCompletionSource<bool> wait = new();
+            _answerWait = wait;
+            using (ct.Register(() => wait.TrySetCanceled(ct)))
+            {
+                pane.Control.Ask(question, yes, no);
+                try
+                {
+                    return await wait.Task.ConfigureAwait(true);
+                }
+                finally
+                {
+                    pane.Control.EndAsk();
+                    _answerWait = null;
+                }
+            }
+        }
 
         private async Task WaitForRetryAsync(WindowPane pane, CancellationToken ct)
         {
