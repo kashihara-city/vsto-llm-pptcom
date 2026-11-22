@@ -69,6 +69,7 @@
   "SELECTION_MORE": "ほか {0} 個",
 
   "WORK_THINKING": "考えています…",
+  "WORK_WAITING_ANSWER": "回答を待っています…",
   "WORK_DONE": "処理の経過",
   "WORK_STOPPED": "処理の経過（途中で終了）",
   "WORK_TURNS": "{0} ターン",

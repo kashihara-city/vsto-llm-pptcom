@@ -18,6 +18,7 @@ let sending = false;      // a request was sent and the add-in has not answered 
 let work = null;          // the folded block of the request in progress
 let continueRow = null, continueButton = null;  // 続ける, while the request the turn limit stopped can be carried on
 let askRow = null;        // a question of the request in progress, with its two answers, while it waits for one
+let askedUnder = null;    // the header of the request's block and what it said before the question: it says the request waits
 
 // ---- conversation ------------------------------------------------------------------------------
 
@@ -165,7 +166,7 @@ function onLog(m) {
       return;
     case "reset":     // 新しい会話 pressed: start from an empty pane
       work = null;
-      continueRow = continueButton = askRow = null;
+      continueRow = continueButton = askRow = askedUnder = null;
       log.textContent = "";
       follow(true);
       add(div("divider", i18n.t("NEW_CHAT")));
@@ -244,11 +245,20 @@ function showContinue(on) {
 }
 // A question the request asks before it goes on (the deck's one empty slide: delete it first?): last in the
 // conversation, with its two answers. The request waits for one of them, or for the stop button; the question goes
-// once answered, and when the add-in takes it back (a message without a question; the request ended).
+// once answered, and when the add-in takes it back (a message without a question; the request ended). Meanwhile the
+// header of the request's block says that it waits for the answer, not that the model thinks; it says what it said
+// before again once the question is gone, unless the block has ended since.
 function showAsk(m) {
   if (askRow) askRow.remove();
   askRow = null;
+  const waits = i18n.t("WORK_WAITING_ANSWER");
+  if (askedUnder && askedUnder.title.textContent === waits) askedUnder.title.textContent = askedUnder.said;
+  askedUnder = null;
   if (!m.question) return;
+  if (work) {
+    askedUnder = { title: work.title, said: work.title.textContent };
+    work.title.textContent = waits;
+  }
   askRow = div("msg assistant ask");
   askRow.appendChild(div("ask-text", i18n.t(m.question)));
   const answers = div("ask-answers");

@@ -398,8 +398,12 @@ function question() {
   check("a question of the request shows last in the conversation, with its two answers",
         !!row && log.children[log.children.length - 1] === row && shown === "EMPTY_SLIDE_ASK: EMPTY_SLIDE_DELETE / EMPTY_SLIDE_KEEP",
         shown + " | " + log.children.map(e => e.className).join(" | "));
+  const header = () => p.lastBlock().children[0].children[1].textContent;
+  const whileAsked = header();
   row.children[1].children[0].listeners.click();
   check("the first answer pressed: it is sent, and the question goes", answers() === "[true]" && !asked(), answers() + " asked=" + !!asked());
+  check("the header of the request's block says it waits for the answer while the question shows, and what it said before once it is gone",
+        whileAsked === "WORK_WAITING_ANSWER" && header() === "WORK_THINKING", whileAsked + " / " + header());
   ask();
   asked().children[1].children[1].listeners.click();
   check("the second answer, asked again: sent as such", answers() === "[true,false]" && !asked(), answers() + " asked=" + !!asked());
@@ -410,8 +414,18 @@ function question() {
   check("asked twice it shows once; taken back by the add-in it goes, and nothing is sent", twice === 1 && !asked() && answers() === "[true,false]",
         "shown=" + twice + " asked=" + !!asked() + " " + answers());
   ask();
+  p.log("AI_CANCELLED");
+  const stopped = header();
+  p.host({ type: "ask" });
+  check("a block that ended while the question showed keeps how it ended in its header", stopped.startsWith("WORK_STOPPED") && header() === stopped,
+        stopped + " / " + header());
+  p.submit("again");
+  p.log("USER_REQUEST", "again");
+  p.host({ type: "busy", value: true });
+  ask();
   p.host({ type: "busy", value: false });
-  check("the request ending takes it away too", !asked() && answers() === "[true,false]", "asked=" + !!asked() + " " + answers());
+  check("the request ending takes it away too, and its block's header says how it ended", !asked() && answers() === "[true,false]" && header().startsWith("WORK_DONE"),
+        "asked=" + !!asked() + " " + answers() + " " + header());
 }
 
 // While a request runs, the add-in keeps the slides of its window from being edited by hand; the page says so

@@ -69,6 +69,7 @@
   "SELECTION_MORE": "{0} more",
 
   "WORK_THINKING": "Thinking…",
+  "WORK_WAITING_ANSWER": "Waiting for your answer…",
   "WORK_DONE": "Steps",
   "WORK_STOPPED": "Steps (stopped partway)",
   "WORK_TURNS": "{0} turn(s)",

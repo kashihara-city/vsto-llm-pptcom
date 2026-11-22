@@ -69,6 +69,7 @@
   "SELECTION_MORE": "另 {0} 個",
 
   "WORK_THINKING": "思考中…",
+  "WORK_WAITING_ANSWER": "等待您的回答…",
   "WORK_DONE": "處理過程",
   "WORK_STOPPED": "處理過程（中途結束）",
   "WORK_TURNS": "{0} 個回合",
