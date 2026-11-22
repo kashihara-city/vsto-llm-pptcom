@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace Pptcom.ComProxy
@@ -19,15 +20,18 @@ namespace Pptcom.ComProxy
     //   - What the layout and the master show on the slide (their shapes, pictures and texts, the theme's background).
     //     It is not the slide's: it shows on every slide of that layout and stays in the file when the slide goes, and
     //     a heading written there cannot be told from a logo or a watermark, which most templates have. The question
-    //     to the user says that the slide is empty "but for what its layout shows". One case is on the list all the
-    //     same: a layout that PowerPoint takes away once no slide uses it (CustomLayout.Preserved off - a layout the
-    //     user added is such a one) would go with the slide, and whatever was put on it.
-    //   - Where an empty placeholder sits and how large it is: nothing shows of it, and a presentation in which one
-    //     was moved is changed, so the user is asked.
-    //   - The formatting of text that is not there, the slide's name, the section it is in.
-    // To add a sign: one line in OnTheSlide or OnAPlaceholder, and one line in the list of ComScriptTests. The values a
-    // slide has as PowerPoint makes it were read from a real one, for every layout of its themes: none of the signs is
-    // set there, and what the themes fill and frame their placeholders with is the same on the slide as on its layout.
+    //     to the user says that the slide is empty "but for what its layout shows". Two cases are on the list all the
+    //     same, as they would go with the slide, and whatever was put on them: a layout that PowerPoint takes away
+    //     once no slide uses it (CustomLayout.Preserved off - a layout the user added is such a one), and a master
+    //     that it takes away likewise (Design.Preserved off, in a presentation with more than one master).
+    //   - Where an empty placeholder that shows nothing sits and how large it is: nothing shows of it, and a
+    //     presentation in which one was moved is changed, so the user is asked.
+    //   - The formatting of text that is not there, the slide's name, the section it is in; the header, footer and
+    //     date of the notes pages, which are set for all of them.
+    // To add a sign: one line in OnTheSlide, OnAPlaceholder or Look, and one line in the list of ComScriptTests. The
+    // values a slide has as PowerPoint makes it were read from a real one, for every layout of its themes: none of the
+    // signs is set there, and every placeholder that shows has, on its layout, one of its kind at its place with the
+    // same look in all that Look reads.
     internal static class EmptySlide
     {
         // The deck's one slide when it holds nothing of its own; null for any other deck, and when something cannot
@@ -48,7 +52,7 @@ namespace Pptcom.ComProxy
                 }
 
                 object slide = pres.Slides.Item(1);
-                (kept, count) = Guard.Try(() => Held(slide), (CannotBeRead, 0));
+                (kept, count) = Guard.Try(() => Held(slide, presentation), (CannotBeRead, 0));
                 if (kept.Length > 0)
                 {
                     return null;
@@ -78,17 +82,17 @@ namespace Pptcom.ComProxy
         // ---- 1. what the slide holds of its own ------------------------------------------------------------
 
         // What the slide holds, in words for the log ("" for nothing), and how many empty placeholders it has.
-        private static (string Holds, int Placeholders) Held(object slide)
+        private static (string Holds, int Placeholders) Held(object slide, object presentation)
         {
-            foreach ((string what, Func<dynamic, bool> there) in OnTheSlide)
+            foreach ((string what, Func<dynamic, dynamic, bool> there) in OnTheSlide)
             {
-                if (there(slide))
+                if (there(slide, presentation))
                 {
                     return (what, 0);
                 }
             }
 
-            if (OnTheNotesPage(slide) is string notes)
+            if (OnTheNotesPage(slide, presentation) is string notes)
             {
                 return (notes, 0);
             }
@@ -107,35 +111,43 @@ namespace Pptcom.ComProxy
             return ("", count);
         }
 
-        // What a slide can have set on itself, beside its shapes. Each is off, or none, on a slide as PowerPoint
-        // makes it.
-        private static readonly (string What, Func<dynamic, bool> There)[] OnTheSlide =
+        // What a slide can have set on itself, beside its shapes (the slide, then its presentation). Each is off, or
+        // none, on a slide as PowerPoint makes it.
+        private static readonly (string What, Func<dynamic, dynamic, bool> There)[] OnTheSlide =
         [
-            ("a background of its own", static s => (int)s.FollowMasterBackground == 0),
-            ("a comment", static s => (int)s.Comments.Count > 0),
-            ("an animation", static s => (int)s.TimeLine.MainSequence.Count > 0 || (int)s.TimeLine.InteractiveSequences.Count > 0),
-            ("a transition", static s => (int)s.SlideShowTransition.EntryEffect != 0),
-            ("a time after which it advances", static s => (int)s.SlideShowTransition.AdvanceOnTime != 0),
-            ("a sound for its transition", static s => (int)s.SlideShowTransition.SoundEffect.Type != 0),
-            ("that it is hidden in the slide show", static s => (int)s.SlideShowTransition.Hidden != 0),
-            ("a tag", static s => (int)s.Tags.Count > 0),
-            ("a link", static s => (int)s.Hyperlinks.Count > 0),
-            ("data a program attached to it", static s => (int)s.CustomerData.Count > 0),
-            ("that the master's shapes are switched off on it", static s => (int)s.DisplayMasterShapes == 0),
+            ("a background of its own", static (s, _) => (int)s.FollowMasterBackground == 0),
+            ("a comment", static (s, _) => (int)s.Comments.Count > 0),
+            ("an animation", static (s, _) => (int)s.TimeLine.MainSequence.Count > 0 || (int)s.TimeLine.InteractiveSequences.Count > 0),
+            ("a transition", static (s, _) => (int)s.SlideShowTransition.EntryEffect != 0),
+            ("a time after which it advances", static (s, _) => (int)s.SlideShowTransition.AdvanceOnTime != 0),
+            ("a sound for its transition", static (s, _) => (int)s.SlideShowTransition.SoundEffect.Type != 0),
+            ("that it is hidden in the slide show", static (s, _) => (int)s.SlideShowTransition.Hidden != 0),
+            ("a tag", static (s, _) => (int)s.Tags.Count > 0),
+            ("a link", static (s, _) => (int)s.Hyperlinks.Count > 0),
+            ("data a program attached to it", static (s, _) => (int)s.CustomerData.Count > 0),
+            ("that the master's shapes are switched off on it", static (s, _) => (int)s.DisplayMasterShapes == 0),
             // PowerPoint takes such a layout away with the last slide that uses it; the layouts of its own themes are
             // nearly all kept, one that was added to a master is not
-            ("a layout that goes when its last slide goes", static s => (int)s.CustomLayout.Preserved == 0),
+            ("a layout that goes when its last slide goes", static (s, _) => (int)s.CustomLayout.Preserved == 0),
+            // and such a master likewise, with all its layouts and what is on them - when it is not the only one (the
+            // one master of a presentation says "not preserved" too, and stays)
+            ("a master that goes when its last slide goes", static (s, p) => (int)p.Designs.Count > 1 && (int)s.Design.Preserved == 0),
         ];
 
-        // The notes page: text in its body placeholder, or a shape that is not one of the page's placeholders (a text
-        // box put there). Its other placeholders are the slide's picture, the page number and the like.
-        private static string? OnTheNotesPage(object slide)
+        // The notes page: text in its body placeholder; a shape that is not one of the page's placeholders (a text box
+        // put there); a placeholder with something in it, hidden, with an alternative text, or with a look of its
+        // own - not that of the notes master's placeholder of its kind (a picture set as the fill of the body shows on
+        // the printed notes, with no text in it). The page's other placeholders are the slide's picture, the page
+        // number and the like; a notes page has one of each kind, so the kind tells which of the master's is its own.
+        private static string? OnTheNotesPage(object slide, object presentation)
         {
             dynamic shapes = ((dynamic)slide).NotesPage.Shapes;
+            object ofMaster = ((dynamic)presentation).NotesMaster.Shapes;
             int count = (int)shapes.Count;
             for (int i = 1; i <= count; i++)
             {
-                dynamic shape = shapes.Item(i);
+                object placeholder = shapes.Item(i);
+                dynamic shape = placeholder;
                 if ((int)shape.Type != MsoPlaceholder)
                 {
                     return "a shape put on its notes page";
@@ -144,6 +156,13 @@ namespace Pptcom.ComProxy
                 if ((int)shape.PlaceholderFormat.Type == PpPlaceholderBody && (int)shape.HasTextFrame != 0 && (int)shape.TextFrame.HasText != 0)
                 {
                     return "notes";
+                }
+
+                if ((int)shape.PlaceholderFormat.ContainedType != MsoAutoShape || (int)shape.Visible == 0 ||
+                    ((string?)shape.AlternativeText ?? "").Length > 0 || ((string?)shape.Title ?? "").Length > 0 ||
+                    ShowsOfItsOwn(placeholder, ofMaster, atItsPlace: false))
+                {
+                    return "something set on a placeholder of its notes page";
                 }
             }
 
@@ -181,7 +200,8 @@ namespace Pptcom.ComProxy
                 }
             }
 
-            return ShowsOfItsOwn(placeholder, slide) ? "a fill or a line of a placeholder's own" : null;
+            object ofLayout = ((dynamic)slide).CustomLayout.Shapes;
+            return ShowsOfItsOwn(placeholder, ofLayout, atItsPlace: true) ? "a fill or a line of a placeholder's own" : null;
         }
 
         // What an empty placeholder can have set on itself. Each is off, or empty, on a slide as PowerPoint makes it.
@@ -192,42 +212,73 @@ namespace Pptcom.ComProxy
             ("an action on a placeholder", static h => (int)h.ActionSettings.Item(PpMouseClick).Action != PpActionNone || (int)h.ActionSettings.Item(PpMouseOver).Action != PpActionNone),
         ];
 
-        // Whether the placeholder has a fill or a line that shows and is its own: not what its layout gives a
-        // placeholder of that kind. Themes fill and frame their placeholders, many of them with a picture - that is
-        // the layout's, like its shapes, and every slide of the layout has it. (Where the layout fills that kind of
-        // placeholder with a picture, another picture set as the fill cannot be told from it.)
-        private static bool ShowsOfItsOwn(object placeholder, object slide)
+        // Whether the placeholder has a fill or a line that shows and is its own: not the look of its counterpart
+        // among `ofTheMaster`, the shapes of its layout (or, for a notes page, of the notes master). Themes fill and
+        // frame their placeholders, many of them with a picture - that is the layout's, like its shapes, and every
+        // slide of the layout has it. The counterpart is the placeholder of the same kind, and (`atItsPlace`) at the
+        // same place: a layout may have two of a kind, each with its own look, and one that was made to look like its
+        // neighbour is not as its layout has it. A placeholder that shows and has no counterpart - it was moved, or
+        // resized - counts as its own. (Where the layout fills a placeholder with a picture, another picture set as
+        // the fill cannot be told from it.)
+        private static bool ShowsOfItsOwn(object placeholder, object ofTheMaster, bool atItsPlace)
         {
-            (int Fill, int FillType, int FillColor, int Line, int LineColor) look = LookOf(placeholder);
-            (int fill, _, _, int line, _) = look;
-            if (fill == 0 && line == 0)
+            dynamic shape = placeholder;
+            if ((int)shape.Fill.Visible == 0 && (int)shape.Line.Visible == 0)
             {
                 return false;
             }
 
-            int kind = (int)((dynamic)placeholder).PlaceholderFormat.Type;
-            dynamic ofLayout = ((dynamic)slide).CustomLayout.Shapes;
-            int count = (int)ofLayout.Count;
+            int kind = (int)shape.PlaceholderFormat.Type;
+            string place = PlaceOf(placeholder), look = LookOf(placeholder);
+            dynamic others = ofTheMaster;
+            int count = (int)others.Count;
             for (int i = 1; i <= count; i++)
             {
-                object its = ofLayout.Item(i);
+                object its = others.Item(i);
                 dynamic one = its;
-                if ((int)one.Type == MsoPlaceholder && (int)one.PlaceholderFormat.Type == kind && LookOf(its) == look)
+                if ((int)one.Type == MsoPlaceholder && (int)one.PlaceholderFormat.Type == kind && (!atItsPlace || PlaceOf(its) == place))
                 {
-                    return false;
+                    return LookOf(its) != look;
                 }
             }
 
             return true;
         }
 
-        // Whether the shape's fill shows, of what kind and color, and whether its line shows, in what color. What
-        // does not show has no kind or color here.
-        private static (int Fill, int FillType, int FillColor, int Line, int LineColor) LookOf(object of)
+        // Where the shape is and how large, to a hundredth of a point.
+        private static string PlaceOf(object of)
         {
             dynamic shape = of;
-            bool fill = (int)shape.Fill.Visible != 0, line = (int)shape.Line.Visible != 0;
-            return (fill ? 1 : 0, fill ? (int)shape.Fill.Type : 0, fill ? (int)shape.Fill.ForeColor.RGB : 0, line ? 1 : 0, line ? (int)shape.Line.ForeColor.RGB : 0);
+            return string.Join(" ", new[] { (float)shape.Left, (float)shape.Top, (float)shape.Width, (float)shape.Height }.Select(static v => v.ToString("0.##", CultureInfo.InvariantCulture)));
+        }
+
+        // All that is read of how a shape that shows is drawn: its turn and flips, its fill, its line, its effects.
+        // What cannot be read of a shape (the angle of a gradient it does not have) is the same for its counterpart.
+        // Not the kind of AutoShape: a placeholder says another one on the slide than on its layout, also as made.
+        private static readonly Func<dynamic, object?>[] Look =
+        [
+            static h => h.Rotation, static h => h.HorizontalFlip, static h => h.VerticalFlip,
+            static h => h.Fill.Visible, static h => h.Fill.Type, static h => h.Fill.ForeColor.RGB, static h => h.Fill.BackColor.RGB, static h => h.Fill.Transparency,
+            static h => h.Fill.GradientColorType, static h => h.Fill.GradientStyle, static h => h.Fill.GradientVariant, static h => h.Fill.GradientStops.Count,
+            static h => h.Fill.GradientAngle, static h => h.Fill.Pattern, static h => h.Fill.PresetTexture, static h => h.Fill.TextureType,
+            static h => h.Line.Visible, static h => h.Line.ForeColor.RGB, static h => h.Line.BackColor.RGB, static h => h.Line.Weight, static h => h.Line.DashStyle,
+            static h => h.Line.Style, static h => h.Line.Transparency,
+            static h => h.Shadow.Visible, static h => h.Glow.Radius, static h => h.SoftEdge.Type, static h => h.Reflection.Type, static h => h.ThreeD.Visible,
+        ];
+
+        private static string LookOf(object of)
+        {
+            return string.Join("|", Look.Select(read => Guard.Try(() => Written(read(of)), "?")));
+        }
+
+        private static string Written(object? value)
+        {
+            return value switch
+            {
+                float f => f.ToString("0.##", CultureInfo.InvariantCulture),
+                double d => d.ToString("0.##", CultureInfo.InvariantCulture),
+                _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "",
+            };
         }
 
         private const int MsoPlaceholder = 14, MsoAutoShape = 1, PpPlaceholderBody = 2;

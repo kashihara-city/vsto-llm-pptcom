@@ -614,6 +614,9 @@ namespace ComScriptTests
                 ("data a program attached to it", new SlideLike([Empty()]) { AttachedData = 1 }),
                 ("that the master's shapes are switched off on it", new SlideLike([Empty()]) { MasterShapesOff = true }),
                 ("a layout that goes when its last slide goes", new SlideLike([Empty()]) { LayoutGoesWithIt = true }),
+                // a picture as the fill of the notes' body: it shows on the printed notes, and there is no text
+                ("something set on a placeholder of its notes page", new SlideLike([Empty()]) { NotesBodyFilled = (true, 6, 0) }),
+                ("something set on a placeholder of its notes page", new SlideLike([Empty()]) { NotesBodyFilled = (true, 1, 255) }),
                 ("a placeholder that was hidden", new SlideLike([Empty(), new ShapeLike(type: 14, text: false) { HiddenShape = true }])),
                 (Alternative, new SlideLike([new ShapeLike(type: 14, text: false) { AlternativeText = "what it is for" }])),
                 (Alternative, new SlideLike([new ShapeLike(type: 14, text: false) { Title = "its title" }])),
@@ -649,6 +652,41 @@ namespace ComScriptTests
                    asTheLayout + " / " + otherColor + " / " + otherKind + " / " + picture);
             EmptySlide.Find(new DeckLike(SavedTo, new SlideLike([Empty()]) { SignsUnreadable = true }), out _, out _, out string unread);
             Report("empty slide: a sign that cannot be read counts as something held", unread == "something that cannot be read", unread);
+            EmptySlideCounterpartTests();
+        }
+
+        // A placeholder's look is its layout's only when the layout's placeholder of its kind at its place has it; and
+        // a master that PowerPoint takes away with its last slide keeps the slide, when there is another master.
+        private static void EmptySlideCounterpartTests()
+        {
+            // a layout with two placeholders of one kind, the left one red, the right one blue
+            static ShapeLike Column(float left, int color)
+            {
+                return new ShapeLike(type: 14, text: false) { Placeholder = 2, At = (left, 100f), Filled = (true, 1, color) };
+            }
+
+            ShapeLike[] twoColumns = [Column(40f, 255), Column(500f, 0xFF0000)];
+            string asTheLayout = EmptySlideOf(new DeckLike(SavedTo, new SlideLike([Column(40f, 255), Column(500f, 0xFF0000)]) { Layout = twoColumns }));
+            string likeItsNeighbour = EmptySlideOf(new DeckLike(SavedTo, new SlideLike([Column(40f, 255), Column(500f, 255)]) { Layout = twoColumns }));
+            string moved = EmptySlideOf(new DeckLike(SavedTo, new SlideLike([Column(40f, 255), Column(520f, 0xFF0000)]) { Layout = twoColumns }));
+            Report("empty slide: of two placeholders of a kind, each is compared with the layout's one at its place: made to look like its neighbour it is the slide's own, and so is one that shows and was moved",
+                   asTheLayout == "asked (2)" && likeItsNeighbour == "kept" && moved == "kept", asTheLayout + " / " + likeItsNeighbour + " / " + moved);
+            // an empty placeholder that shows nothing has no look to compare: moved, it is asked about
+            ShapeLike plain = new(type: 14, text: false) { Placeholder = 2, At = (40f, 100f) }, plainMoved = new(type: 14, text: false) { Placeholder = 2, At = (90f, 100f) };
+            string nothingShows = EmptySlideOf(new DeckLike(SavedTo, new SlideLike([plainMoved]) { Layout = [plain] }));
+            Report("empty slide: a placeholder that shows nothing and was moved holds nothing: the user is asked", nothingShows == "asked (1)", nothingShows);
+
+            static string Held(DeckLike deck)
+            {
+                return EmptySlide.Find(deck, out _, out _, out string holds) is null ? "kept: " + holds : "asked";
+            }
+
+            ShapeLike empty = new(type: 14, text: false);
+            string second = Held(new DeckLike(SavedTo, new SlideLike([empty]) { MasterGoesWithIt = true }) { Masters = 2 });
+            string only = Held(new DeckLike(SavedTo, new SlideLike([empty]) { MasterGoesWithIt = true }));
+            string preserved = Held(new DeckLike(SavedTo, new SlideLike([empty])) { Masters = 2 });
+            Report("empty slide: a master that is not preserved goes with its last slide when there is another one, and keeps the slide; the only master stays, and so does a preserved one",
+                   second == "kept: a master that goes when its last slide goes" && only == "asked" && preserved == "asked", second + " / " + only + " / " + preserved);
         }
 
         // A presentation as EmptySlide reads it: its path ("" when it was never saved), whether it is
@@ -665,6 +703,17 @@ namespace ComScriptTests
             public PropertiesLike Properties { get; } = new() { LastSaved = path.Length > 0, LastAuthor = path.Length > 0 ? "the one who saved it" : "" };
 
             public PropertiesLike BuiltInDocumentProperties => Properties.Unreadable ? throw new InvalidOperationException("the properties cannot be read") : Properties;
+
+            // how many masters the presentation has
+            public int Masters { get; set; } = 1;
+
+            public ItemsLike Designs => new([.. Enumerable.Repeat<object>("a master", Masters)]);
+
+            // the notes master: a header, a date, the slide's picture (framed), the notes, a footer, the page number
+            public SlideLike NotesMaster { get; } = new([
+                new ShapeLike(type: 14, text: false) { Placeholder = 14 }, new ShapeLike(type: 14, text: false) { Placeholder = 16 },
+                new ShapeLike(type: 14, text: false) { Placeholder = 1, Framed = (true, 0) }, new ShapeLike(type: 14, text: false) { Placeholder = 2 },
+                new ShapeLike(type: 14, text: false) { Placeholder = 15 }, new ShapeLike(type: 14, text: true) { Placeholder = 13 }]);
         }
 
         // The built-in document properties, by their place in PowerPoint's list: 6 the template's name, 7 who saved it
@@ -767,6 +816,14 @@ namespace ComScriptTests
             // the slide's layout is one PowerPoint takes away once no slide uses it
             public bool LayoutGoesWithIt { get; set; }
 
+            // and so is its master
+            public bool MasterGoesWithIt { get; set; }
+
+            public object Design => new { Preserved = MasterGoesWithIt ? 0 : -1 };
+
+            // the fill of the notes page's body placeholder (whether it shows, of what kind, in what color)
+            public (bool Shows, int Kind, int Color) NotesBodyFilled { get; set; }
+
             // as a layout: whether PowerPoint keeps it when no slide uses it
             public int Preserved { get; set; } = -1;
 
@@ -793,7 +850,8 @@ namespace ComScriptTests
 
             public SlideLike NotesPage => NotesUnreadable
                 ? throw new InvalidOperationException("the notes page cannot be read")
-                : new SlideLike([new ShapeLike(type: 14, text: false) { Placeholder = 1 }, new ShapeLike(type: 14, text: Notes.Length > 0) { Placeholder = 2 },
+                : new SlideLike([new ShapeLike(type: 14, text: false) { Placeholder = 1, Framed = (true, 0) },
+                                 new ShapeLike(type: 14, text: Notes.Length > 0) { Placeholder = 2, Filled = NotesBodyFilled },
                                  new ShapeLike(type: 14, text: PageNumber) { Placeholder = 13 }, .. NotesBox ? [new ShapeLike(type: 17, text: true)] : Array.Empty<ShapeLike>()]);
         }
 
@@ -833,6 +891,17 @@ namespace ComScriptTests
             public int ActionOnMouseOver { get; set; }
 
             public ActionsLike ActionSettings => new(ActionOnClick, ActionOnMouseOver);
+
+            // where it is; all are of one size here
+            public (float Left, float Top) At { get; set; }
+
+            public float Left => At.Left;
+
+            public float Top => At.Top;
+
+            public float Width { get; } = 300f;
+
+            public float Height { get; } = 200f;
 
             // its fill (whether it shows, of what kind, in what color) and its line (whether it shows, in what color)
             public (bool Shows, int Kind, int Color) Filled { get; set; }
