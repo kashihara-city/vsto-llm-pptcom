@@ -30,7 +30,7 @@ namespace ComScriptTests
     // 4. What the model is told: the errors and their hints (ComErrorText), fractions rounded where a whole number
     //    goes, and the shape list - animations, contents of tables, charts, SmartArt and groups, shape names,
     //    overlaps, square shapes past rounded corners, low contrast, the selection, the rendering's size.
-    internal static class Program
+    internal static partial class Program
     {
         private static int _pass, _fail;
 
@@ -257,6 +257,7 @@ namespace ComScriptTests
             EmptySlideContentTests();
             SlideAskedAboutTests();
             EmptySlideSignsTests();
+            EmptySlidePackageTests();
             RejectedStatementTests();
         }
 
@@ -476,13 +477,11 @@ namespace ComScriptTests
                    !names.StillHeld(new(StringComparer.Ordinal) { ["256:2"] = [(new TableStandIn(0), true)] }, "256:2"), "");
         }
 
-        // The deck's one slide when it holds nothing of its own (EmptySlide.Find), as the empty title slide a presentation
-        // made in PowerPoint's window starts with. It goes without a word only from a presentation that PowerPoint made
-        // from nothing and that is unchanged since; in one that was saved, changed in any way, or made from a template
-        // or a file, the user is asked. "removed": without a word; "asked"; "kept": it stays, and nobody is asked.
+        // The live checks, using late-bound Office stand-ins. A fresh or askable candidate must
+        // also pass the native package comparison (EmptySlidePackageTests) before deletion.
         private static string EmptySlideOf(DeckLike deck)
         {
-            return EmptySlide.Find(deck, out bool untouched, out int placeholders, out _) is null
+            return EmptySlide.FindCandidate(deck, out bool untouched, out int placeholders, out _) is null
                 ? "kept"
                 : Invariant($"{(untouched ? "removed" : "asked")} ({placeholders})");
         }
@@ -579,16 +578,16 @@ namespace ComScriptTests
             ShapeLike empty = new(type: 14, text: false), written = new(type: 14, text: true);
             SlideLike asked = new([empty, empty]);
             Report("empty slide: the slide the user was asked about is still the one, when nothing happened meanwhile",
-                   EmptySlide.IsStill(new DeckLike(SavedTo, asked), asked), "");
+                   EmptySlide.SameSlide(new DeckLike(SavedTo, asked), asked), "");
             Report("empty slide: another slide put in its place is not the one, though it shows nothing either",
-                   !EmptySlide.IsStill(new DeckLike(SavedTo, new SlideLike([empty, empty]) { Number = 257 }), asked), "");
+                   !EmptySlide.SameSlide(new DeckLike(SavedTo, new SlideLike([empty, empty]) { Number = 257 }), asked), "");
             // PowerPoint gives a new slide the number of one that was deleted
             SlideLike gone = new([empty, empty]) { Gone = true };
             Report("empty slide: nor is a new slide that got the number of the deleted one",
-                   !EmptySlide.IsStill(new DeckLike(SavedTo, new SlideLike([empty, empty])), gone), "");
+                   !EmptySlide.SameSlide(new DeckLike(SavedTo, new SlideLike([empty, empty])), gone), "");
             Report("empty slide: the same slide with something on it meanwhile, or with a second slide beside it, does not go",
-                   !EmptySlide.IsStill(new DeckLike(SavedTo, new SlideLike([written, empty])), asked) &&
-                   !EmptySlide.IsStill(new DeckLike(SavedTo, asked, new SlideLike([empty])), asked), "");
+                   EmptySlideOf(new DeckLike(SavedTo, new SlideLike([written, empty]))) == "kept" &&
+                   !EmptySlide.SameSlide(new DeckLike(SavedTo, asked, new SlideLike([empty])), asked), "");
         }
 
         // The lists of EmptySlide: every sign that the slide holds something of its own keeps it, and nobody is asked -
@@ -629,11 +628,11 @@ namespace ComScriptTests
             ];
             string wrong = string.Join("; ", signs.Select(static sign =>
             {
-                bool kept = EmptySlide.Find(new DeckLike(SavedTo, sign.Slide), out _, out _, out string holds) is null;
+                bool kept = EmptySlide.FindCandidate(new DeckLike(SavedTo, sign.Slide), out _, out _, out string holds) is null;
                 return kept && holds == sign.Sign ? "" : sign.Sign + " -> " + (kept ? holds : "not kept");
             }).Where(static w => w.Length > 0));
             Report("empty slide: each sign that the slide holds something of its own keeps it, and nobody is asked", wrong.Length == 0, wrong);
-            EmptySlide.Find(new DeckLike(SavedTo, new SlideLike([Empty(), Empty()])), out _, out int placeholders, out string none);
+            EmptySlide.FindCandidate(new DeckLike(SavedTo, new SlideLike([Empty(), Empty()])), out _, out int placeholders, out string none);
             Report("empty slide: with none of the signs it is asked about, and nothing is said to be held", placeholders == 2 && none.Length == 0, Invariant($"{placeholders} / {none}"));
 
             // themes fill and frame their placeholders, many with a picture: every slide of the layout has that, and it is
@@ -650,7 +649,7 @@ namespace ComScriptTests
             Report("empty slide: a fill and a line the layout gives that kind of placeholder are not the slide's own, a picture as the fill neither; another color is, and the look of another kind of placeholder",
                    asTheLayout == "asked (1)" && picture == "asked (1)" && otherColor == "kept" && otherKind == "kept",
                    asTheLayout + " / " + otherColor + " / " + otherKind + " / " + picture);
-            EmptySlide.Find(new DeckLike(SavedTo, new SlideLike([Empty()]) { SignsUnreadable = true }), out _, out _, out string unread);
+            EmptySlide.FindCandidate(new DeckLike(SavedTo, new SlideLike([Empty()]) { SignsUnreadable = true }), out _, out _, out string unread);
             Report("empty slide: a sign that cannot be read counts as something held", unread == "something that cannot be read", unread);
             EmptySlideCounterpartTests();
         }
@@ -678,7 +677,7 @@ namespace ComScriptTests
 
             static string Held(DeckLike deck)
             {
-                return EmptySlide.Find(deck, out _, out _, out string holds) is null ? "kept: " + holds : "asked";
+                return EmptySlide.FindCandidate(deck, out _, out _, out string holds) is null ? "kept: " + holds : "asked";
             }
 
             ShapeLike empty = new(type: 14, text: false);
@@ -848,6 +847,8 @@ namespace ComScriptTests
                 return new ItemsLike([.. Enumerable.Repeat<object>("one", count)]);
             }
 
+            public int HasNotesPage { get; } = -1;
+
             public SlideLike NotesPage => NotesUnreadable
                 ? throw new InvalidOperationException("the notes page cannot be read")
                 : new SlideLike([new ShapeLike(type: 14, text: false) { Placeholder = 1, Framed = (true, 0) },
@@ -873,6 +874,12 @@ namespace ComScriptTests
             public int Placeholder { get; set; } = 1;
 
             public int Contained { get; set; } = 1;
+
+            public int Id { get; } = 2;
+            public object Shadow { get; } = new { Visible = 0 };
+            public object Glow { get; } = new { Radius = 0f };
+            public object Reflection { get; } = new { Type = 0 };
+            public object ThreeD { get; } = new { Visible = 0 };
 
             public PlaceholderLike PlaceholderFormat => new(Placeholder, Contained);
 

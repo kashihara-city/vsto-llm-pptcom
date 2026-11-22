@@ -333,12 +333,18 @@ namespace Pptcom
         // not ask again. A request from another program has nobody to answer: the slide stays.
         private async Task SettleEmptySlideAsync(RunRecord run, bool fromOutside, CancellationToken ct)
         {
+            ct.ThrowIfCancellationRequested();
             WindowPane pane = run.Pane;
-            if (EmptySlide.Find(pane.Presentation, out bool untouched, out int shapeCount, out string holds) is not object slide)
+            if (pane.KeepsEmptySlide || (fromOutside && !EmptySlide.MayBeStarter(pane.Presentation)))
+            {
+                return;
+            }
+
+            if (EmptySlide.Find(pane.Presentation, out bool untouched, out int shapeCount, out string holds) is not EmptySlide.Candidate candidate)
             {
                 if (holds.Length > 0)
                 {
-                    LogToFile("(the deck's one slide stays, and nobody is asked: it holds " + holds + ")");
+                    LogToFile("(keeping the presentation's one slide: " + holds + ")");
                 }
 
                 return;
@@ -346,13 +352,14 @@ namespace Pptcom
 
             if (!untouched)
             {
-                if (fromOutside || pane.KeepsEmptySlide)
+                if (fromOutside)
                 {
-                    LogToFile("(the deck's one slide is empty and stays: " + (fromOutside ? "the request comes from another program" : "the user said to keep it") + ")");
+                    LogToFile("(keeping the empty slide: the request comes from another program)");
                     return;
                 }
 
                 LogToFile("(the deck's one slide is empty, in a presentation that was saved, changed or made from a file: the user is asked whether it goes)");
+                ct.ThrowIfCancellationRequested();
                 bool delete = await AskAsync(pane, PaneText.Of("EMPTY_SLIDE_ASK"), PaneText.Of("EMPTY_SLIDE_DELETE"), PaneText.Of("EMPTY_SLIDE_KEEP"), ct).ConfigureAwait(true);
                 if (!delete)
                 {
@@ -361,18 +368,20 @@ namespace Pptcom
                     pane.Control.Log("EMPTY_SLIDE_KEPT");
                     return;
                 }
-
-                // The answer may have taken a while. The slide the user was asked about goes, and no other: not one
-                // that was put in its place meanwhile, nor that slide once something is on it.
-                if (!EmptySlide.IsStill(pane.Presentation, slide))
-                {
-                    LogToFile("(the slide the user was asked about is no longer the deck's one empty slide: nothing is deleted)");
-                    pane.Control.Log("EMPTY_SLIDE_CHANGED");
-                    return;
-                }
             }
 
-            RemoveEmptySlide(run, slide, shapeCount, asked: !untouched);
+            // Creating the reference deck or waiting for an answer can dispatch Office events.
+            // Recheck the original slide and its dependencies immediately before either deletion.
+            ct.ThrowIfCancellationRequested();
+            if (!EmptySlide.IsStill(pane.Presentation, candidate, requireUntouched: untouched))
+            {
+                LogToFile("(the slide or its presentation changed during inspection: nothing is deleted)");
+                pane.Control.Log("EMPTY_SLIDE_CHANGED");
+                return;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            RemoveEmptySlide(run, candidate.Slide, shapeCount, asked: !untouched);
         }
 
         // Deletes the deck's one empty slide, as EmptySlide.Find found it: the untouched one a new presentation starts

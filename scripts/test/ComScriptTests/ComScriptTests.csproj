@@ -19,6 +19,9 @@
 
   <ItemGroup>
     <Reference Include="System" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Core" />
     <Reference Include="Microsoft.CSharp" />
   </ItemGroup>
@@ -58,6 +61,7 @@
     <Compile Include="..\..\..\pptcom\Polyfills\RequiredMemberAttribute.cs" />
     <Compile Include="..\..\..\pptcom\Polyfills\CompilerFeatureRequiredAttribute.cs" />
     <Compile Include="Program.cs" />
+    <Compile Include="Program.EmptySlidePackageTests.cs" />
   </ItemGroup>
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
