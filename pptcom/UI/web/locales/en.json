@@ -115,7 +115,7 @@
   "SENT_FROM_OUTSIDE": "Sent from another program",
   "NEW_CONVERSATION": "Started a new chat",
   "STARTER_SLIDE_REMOVED": "Removed the empty title slide the presentation started with",
-  "EMPTY_SLIDE_ASK": "This presentation's only slide is empty. Delete it before starting?",
+  "EMPTY_SLIDE_ASK": "This presentation has only one slide, and it appears to be empty apart from what its layout shows. Delete it before starting?",
   "EMPTY_SLIDE_DELETE": "Delete",
   "EMPTY_SLIDE_KEEP": "Keep",
   "EMPTY_SLIDE_DELETED": "Deleted the empty slide",

@@ -115,7 +115,7 @@
   "SENT_FROM_OUTSIDE": "由其他程式傳送",
   "NEW_CONVERSATION": "已開始新對話",
   "STARTER_SLIDE_REMOVED": "已刪除一開始就有的空白標題投影片",
-  "EMPTY_SLIDE_ASK": "這份簡報只有一張空白投影片。要先刪除再開始嗎？",
+  "EMPTY_SLIDE_ASK": "這份簡報只有一張投影片，除了共用的版面配置之外，看起來是空白的。要先刪除再開始嗎？",
   "EMPTY_SLIDE_DELETE": "刪除",
   "EMPTY_SLIDE_KEEP": "保留",
   "EMPTY_SLIDE_DELETED": "已刪除空白投影片",

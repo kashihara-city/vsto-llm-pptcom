@@ -115,7 +115,7 @@
   "SENT_FROM_OUTSIDE": "他のプログラムから送信されました",
   "NEW_CONVERSATION": "新しい会話を始めました",
   "STARTER_SLIDE_REMOVED": "最初から入っていた空のタイトルスライドを削除しました",
-  "EMPTY_SLIDE_ASK": "このプレゼンテーションのスライドは、空の 1 枚だけです。削除してから始めますか？",
+  "EMPTY_SLIDE_ASK": "このプレゼンテーションのスライドは 1 枚だけで、共通のレイアウトを除いて空のようです。削除してから始めますか？",
   "EMPTY_SLIDE_DELETE": "削除する",
   "EMPTY_SLIDE_KEEP": "残す",
   "EMPTY_SLIDE_DELETED": "空のスライドを削除しました",

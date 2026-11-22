@@ -256,6 +256,7 @@ namespace ComScriptTests
             StarterSlideTests();
             EmptySlideContentTests();
             SlideAskedAboutTests();
+            EmptySlideSignsTests();
             RejectedStatementTests();
         }
 
@@ -475,13 +476,13 @@ namespace ComScriptTests
                    !names.StillHeld(new(StringComparer.Ordinal) { ["256:2"] = [(new TableStandIn(0), true)] }, "256:2"), "");
         }
 
-        // The deck's one slide when it shows nothing (DeckReader.EmptyOnlySlide), as the empty title slide a presentation
+        // The deck's one slide when it holds nothing of its own (EmptySlide.Find), as the empty title slide a presentation
         // made in PowerPoint's window starts with. It goes without a word only from a presentation that PowerPoint made
         // from nothing and that is unchanged since; in one that was saved, changed in any way, or made from a template
         // or a file, the user is asked. "removed": without a word; "asked"; "kept": it stays, and nobody is asked.
         private static string EmptySlideOf(DeckLike deck)
         {
-            return DeckReader.EmptyOnlySlide(deck, out bool untouched, out int placeholders) is null
+            return EmptySlide.Find(deck, out bool untouched, out int placeholders, out _) is null
                 ? "kept"
                 : Invariant($"{(untouched ? "removed" : "asked")} ({placeholders})");
         }
@@ -571,26 +572,86 @@ namespace ComScriptTests
         }
 
         // The user was asked about one slide, and that slide is the one to go when they say so
-        // (DeckReader.StillEmptyOnlySlide): not a slide another program put in its place while they answered, nor the
+        // (EmptySlide.IsStill): not a slide another program put in its place while they answered, nor the
         // same slide once something is on it.
         private static void SlideAskedAboutTests()
         {
             ShapeLike empty = new(type: 14, text: false), written = new(type: 14, text: true);
             SlideLike asked = new([empty, empty]);
             Report("empty slide: the slide the user was asked about is still the one, when nothing happened meanwhile",
-                   DeckReader.StillEmptyOnlySlide(new DeckLike(SavedTo, asked), asked), "");
+                   EmptySlide.IsStill(new DeckLike(SavedTo, asked), asked), "");
             Report("empty slide: another slide put in its place is not the one, though it shows nothing either",
-                   !DeckReader.StillEmptyOnlySlide(new DeckLike(SavedTo, new SlideLike([empty, empty]) { Number = 257 }), asked), "");
+                   !EmptySlide.IsStill(new DeckLike(SavedTo, new SlideLike([empty, empty]) { Number = 257 }), asked), "");
             // PowerPoint gives a new slide the number of one that was deleted
             SlideLike gone = new([empty, empty]) { Gone = true };
             Report("empty slide: nor is a new slide that got the number of the deleted one",
-                   !DeckReader.StillEmptyOnlySlide(new DeckLike(SavedTo, new SlideLike([empty, empty])), gone), "");
+                   !EmptySlide.IsStill(new DeckLike(SavedTo, new SlideLike([empty, empty])), gone), "");
             Report("empty slide: the same slide with something on it meanwhile, or with a second slide beside it, does not go",
-                   !DeckReader.StillEmptyOnlySlide(new DeckLike(SavedTo, new SlideLike([written, empty])), asked) &&
-                   !DeckReader.StillEmptyOnlySlide(new DeckLike(SavedTo, asked, new SlideLike([empty])), asked), "");
+                   !EmptySlide.IsStill(new DeckLike(SavedTo, new SlideLike([written, empty])), asked) &&
+                   !EmptySlide.IsStill(new DeckLike(SavedTo, asked, new SlideLike([empty])), asked), "");
         }
 
-        // A presentation as EmptyOnlySlide reads it: its path ("" when it was never saved), whether it is
+        // The lists of EmptySlide: every sign that the slide holds something of its own keeps it, and nobody is asked -
+        // here in a saved presentation, where a slide with none of them is asked about. One slide per sign.
+        private static void EmptySlideSignsTests()
+        {
+            static ShapeLike Empty()
+            {
+                return new ShapeLike(type: 14, text: false);
+            }
+
+            const string OwnLook = "a fill or a line of a placeholder's own", Alternative = "an alternative text on a placeholder", Action = "an action on a placeholder";
+            (string Sign, SlideLike Slide)[] signs =
+            [
+                ("an animation", new SlideLike([Empty()]) { Animations = 1 }),
+                ("an animation", new SlideLike([Empty()]) { TriggeredAnimations = 1 }),
+                ("a transition", new SlideLike([Empty()]) { Transition = 3844 }),
+                ("a time after which it advances", new SlideLike([Empty()]) { AdvancesOnTime = true }),
+                ("a sound for its transition", new SlideLike([Empty()]) { TransitionSound = 2 }),
+                ("that it is hidden in the slide show", new SlideLike([Empty()]) { Hidden = true }),
+                ("a tag", new SlideLike([Empty()]) { TagCount = 1 }),
+                ("a link", new SlideLike([Empty()]) { LinkCount = 1 }),
+                ("data a program attached to it", new SlideLike([Empty()]) { AttachedData = 1 }),
+                ("that the master's shapes are switched off on it", new SlideLike([Empty()]) { MasterShapesOff = true }),
+                ("a layout that goes when its last slide goes", new SlideLike([Empty()]) { LayoutGoesWithIt = true }),
+                ("a placeholder that was hidden", new SlideLike([Empty(), new ShapeLike(type: 14, text: false) { HiddenShape = true }])),
+                (Alternative, new SlideLike([new ShapeLike(type: 14, text: false) { AlternativeText = "what it is for" }])),
+                (Alternative, new SlideLike([new ShapeLike(type: 14, text: false) { Title = "its title" }])),
+                (Action, new SlideLike([new ShapeLike(type: 14, text: false) { ActionOnClick = 7 }])),
+                (Action, new SlideLike([new ShapeLike(type: 14, text: false) { ActionOnMouseOver = 7 }])),
+                // 6: a picture as the fill; 1: one color
+                (OwnLook, new SlideLike([new ShapeLike(type: 14, text: false) { Filled = (true, 6, 0) }])),
+                (OwnLook, new SlideLike([new ShapeLike(type: 14, text: false) { Filled = (true, 1, 255) }])),
+                (OwnLook, new SlideLike([new ShapeLike(type: 14, text: false) { Framed = (true, 0) }])),
+            ];
+            string wrong = string.Join("; ", signs.Select(static sign =>
+            {
+                bool kept = EmptySlide.Find(new DeckLike(SavedTo, sign.Slide), out _, out _, out string holds) is null;
+                return kept && holds == sign.Sign ? "" : sign.Sign + " -> " + (kept ? holds : "not kept");
+            }).Where(static w => w.Length > 0));
+            Report("empty slide: each sign that the slide holds something of its own keeps it, and nobody is asked", wrong.Length == 0, wrong);
+            EmptySlide.Find(new DeckLike(SavedTo, new SlideLike([Empty(), Empty()])), out _, out int placeholders, out string none);
+            Report("empty slide: with none of the signs it is asked about, and nothing is said to be held", placeholders == 2 && none.Length == 0, Invariant($"{placeholders} / {none}"));
+
+            // themes fill and frame their placeholders, many with a picture: every slide of the layout has that, and it is
+            // the layout's
+            static ShapeLike Themed(int color, int kind = 1)
+            {
+                return new ShapeLike(type: 14, text: false) { Placeholder = 3, Filled = (true, kind, color), Framed = (true, 0) };
+            }
+
+            string asTheLayout = EmptySlideOf(new DeckLike(SavedTo, new SlideLike([Themed(0x336699)]) { Layout = [Themed(0x336699)] }));
+            string otherColor = EmptySlideOf(new DeckLike(SavedTo, new SlideLike([Themed(0x993366)]) { Layout = [Themed(0x336699)] }));
+            string otherKind = EmptySlideOf(new DeckLike(SavedTo, new SlideLike([Themed(0x336699)]) { Layout = [new ShapeLike(type: 14, text: false) { Placeholder = 4, Filled = (true, 1, 0x336699), Framed = (true, 0) }] }));
+            string picture = EmptySlideOf(new DeckLike(SavedTo, new SlideLike([Themed(0, kind: 6)]) { Layout = [Themed(0, kind: 6)] }));
+            Report("empty slide: a fill and a line the layout gives that kind of placeholder are not the slide's own, a picture as the fill neither; another color is, and the look of another kind of placeholder",
+                   asTheLayout == "asked (1)" && picture == "asked (1)" && otherColor == "kept" && otherKind == "kept",
+                   asTheLayout + " / " + otherColor + " / " + otherKind + " / " + picture);
+            EmptySlide.Find(new DeckLike(SavedTo, new SlideLike([Empty()]) { SignsUnreadable = true }), out _, out _, out string unread);
+            Report("empty slide: a sign that cannot be read counts as something held", unread == "something that cannot be read", unread);
+        }
+
+        // A presentation as EmptySlide reads it: its path ("" when it was never saved), whether it is
         // unchanged (-1, as PowerPoint says it; 0: changed), its slides, and its built-in properties.
         internal sealed class DeckLike(string path, params SlideLike[] slides)
         {
@@ -677,6 +738,59 @@ namespace ComScriptTests
 
             public ItemsLike Comments => new([.. Enumerable.Repeat<object>("a comment", CommentCount)]);
 
+            // what can be set on a slide, each off or none as PowerPoint makes one
+            public int Animations { get; set; }
+
+            public int TriggeredAnimations { get; set; }
+
+            public int Transition { get; set; }
+
+            public bool AdvancesOnTime { get; set; }
+
+            public int TransitionSound { get; set; }
+
+            public bool Hidden { get; set; }
+
+            public int TagCount { get; set; }
+
+            public int LinkCount { get; set; }
+
+            public int AttachedData { get; set; }
+
+            public bool MasterShapesOff { get; set; }
+
+            public bool SignsUnreadable { get; set; }
+
+            // the placeholders of the slide's layout
+            public ShapeLike[] Layout { get; set; } = [];
+
+            // the slide's layout is one PowerPoint takes away once no slide uses it
+            public bool LayoutGoesWithIt { get; set; }
+
+            // as a layout: whether PowerPoint keeps it when no slide uses it
+            public int Preserved { get; set; } = -1;
+
+            public object TimeLine => SignsUnreadable
+                ? throw new InvalidOperationException("the animations cannot be read")
+                : new { MainSequence = Some(Animations), InteractiveSequences = Some(TriggeredAnimations) };
+
+            public object SlideShowTransition => new { EntryEffect = Transition, AdvanceOnTime = AdvancesOnTime ? -1 : 0, Hidden = Hidden ? -1 : 0, SoundEffect = new { Type = TransitionSound } };
+
+            public ItemsLike Tags => Some(TagCount);
+
+            public ItemsLike Hyperlinks => Some(LinkCount);
+
+            public ItemsLike CustomerData => Some(AttachedData);
+
+            public int DisplayMasterShapes => MasterShapesOff ? 0 : -1;
+
+            public SlideLike CustomLayout => new(Layout) { Preserved = LayoutGoesWithIt ? 0 : -1 };
+
+            private static ItemsLike Some(int count)
+            {
+                return new ItemsLike([.. Enumerable.Repeat<object>("one", count)]);
+            }
+
             public SlideLike NotesPage => NotesUnreadable
                 ? throw new InvalidOperationException("the notes page cannot be read")
                 : new SlideLike([new ShapeLike(type: 14, text: false) { Placeholder = 1 }, new ShapeLike(type: 14, text: Notes.Length > 0) { Placeholder = 2 },
@@ -703,6 +817,40 @@ namespace ComScriptTests
             public int Contained { get; set; } = 1;
 
             public PlaceholderLike PlaceholderFormat => new(Placeholder, Contained);
+
+            // what can be set on a placeholder, each off or empty as PowerPoint makes one
+            public bool HiddenShape { get; set; }
+
+            public int Visible => HiddenShape ? 0 : -1;
+
+            public string AlternativeText { get; set; } = "";
+
+            public string Title { get; set; } = "";
+
+            // 0: no action
+            public int ActionOnClick { get; set; }
+
+            public int ActionOnMouseOver { get; set; }
+
+            public ActionsLike ActionSettings => new(ActionOnClick, ActionOnMouseOver);
+
+            // its fill (whether it shows, of what kind, in what color) and its line (whether it shows, in what color)
+            public (bool Shows, int Kind, int Color) Filled { get; set; }
+
+            public (bool Shows, int Color) Framed { get; set; }
+
+            public object Fill => new { Visible = Filled.Shows ? -1 : 0, Type = Filled.Kind, ForeColor = new { RGB = Filled.Color } };
+
+            public object Line => new { Visible = Framed.Shows ? -1 : 0, ForeColor = new { RGB = Framed.Color } };
+        }
+
+        // What a click on the shape (1) and the mouse over it (2) do.
+        internal sealed class ActionsLike(int onClick, int onMouseOver)
+        {
+            public object Item(int which)
+            {
+                return new { Action = which == 1 ? onClick : onMouseOver };
+            }
         }
 
         internal sealed class PlaceholderLike(int type, int containedType)

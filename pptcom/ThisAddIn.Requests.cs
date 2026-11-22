@@ -325,7 +325,8 @@ namespace Pptcom
         // A presentation created from PowerPoint's UI starts with one empty title slide (two
         // empty placeholders); one created via COM starts with none. The model otherwise has to
         // discover and delete it (carrot run, generated-pptx/addin_20261004_223624). It goes without a word
-        // only from a presentation that PowerPoint made from nothing and that is unchanged since (DeckReader.EmptyOnlySlide).
+        // only from a presentation that PowerPoint made from nothing and that is unchanged since (EmptySlide, which
+        // holds all that is looked at to tell).
         // In any other presentation whose one slide shows nothing - saved, changed in some way, made from a template -
         // the slide may hold something of the user's that cannot be seen on it, and the user is asked in the pane
         // whether it goes (AskAsync; 中止 stops the request there). Once they said to keep it, that window's requests do
@@ -333,8 +334,13 @@ namespace Pptcom
         private async Task SettleEmptySlideAsync(RunRecord run, bool fromOutside, CancellationToken ct)
         {
             WindowPane pane = run.Pane;
-            if (DeckReader.EmptyOnlySlide(pane.Presentation, out bool untouched, out int shapeCount) is not object slide)
+            if (EmptySlide.Find(pane.Presentation, out bool untouched, out int shapeCount, out string holds) is not object slide)
             {
+                if (holds.Length > 0)
+                {
+                    LogToFile("(the deck's one slide stays, and nobody is asked: it holds " + holds + ")");
+                }
+
                 return;
             }
 
@@ -358,7 +364,7 @@ namespace Pptcom
 
                 // The answer may have taken a while. The slide the user was asked about goes, and no other: not one
                 // that was put in its place meanwhile, nor that slide once something is on it.
-                if (!DeckReader.StillEmptyOnlySlide(pane.Presentation, slide))
+                if (!EmptySlide.IsStill(pane.Presentation, slide))
                 {
                     LogToFile("(the slide the user was asked about is no longer the deck's one empty slide: nothing is deleted)");
                     pane.Control.Log("EMPTY_SLIDE_CHANGED");
@@ -369,7 +375,7 @@ namespace Pptcom
             RemoveEmptySlide(run, slide, shapeCount, asked: !untouched);
         }
 
-        // Deletes the deck's one empty slide, as EmptyOnlySlide found it: the untouched one a new presentation starts
+        // Deletes the deck's one empty slide, as EmptySlide.Find found it: the untouched one a new presentation starts
         // with, or (`asked`) the one the user said to delete.
         private static void RemoveEmptySlide(RunRecord run, object slide, int placeholders, bool asked)
         {
