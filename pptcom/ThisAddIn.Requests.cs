@@ -207,7 +207,12 @@ namespace Pptcom
             _currentRun = run;
             try
             {
-                await SettleEmptySlideAsync(run, fromOutside, _cancel.Token).ConfigureAwait(true);
+                // not for 続ける: the stopped request goes on from the deck as it left it, and nothing is taken from under it
+                if (!continues)
+                {
+                    await SettleEmptySlideAsync(run, fromOutside, _cancel.Token).ConfigureAwait(true);
+                }
+
                 await RunAgentAsync(userMessage, run).ConfigureAwait(true);
                 // max_turns: the model was still calling tools when the turn limit stopped it. max_tokens: a reply
                 // reached the output limit before it said anything to do (see RunAgentAsync).
@@ -240,6 +245,13 @@ namespace Pptcom
             Conversation? c = run.Conversation;
             if (c is null || run.Messages is null || run.OwnMessage is null)
             {
+                // It ended before it took the conversation up (StartMessages). A request stopped at the turn limit is then
+                // still there to carry on, and its 続ける, which the page took away when it was pressed, shows again.
+                if (run.Pane.Conversation?.Stopped is not null)
+                {
+                    run.Pane.Control.ShowContinue(show: true);
+                }
+
                 return;
             }
 
@@ -313,15 +325,15 @@ namespace Pptcom
         // A presentation created from PowerPoint's UI starts with one empty title slide (two
         // empty placeholders); one created via COM starts with none. The model otherwise has to
         // discover and delete it (carrot run, generated-pptx/addin_20261004_223624). It goes without a word
-        // only from a presentation that is new and unchanged since PowerPoint made it (DeckReader.EmptyOnlySlide).
-        // In any other presentation whose one slide shows nothing - saved, or changed in some way - the slide may hold
-        // something of the user's that cannot be seen on it, and the user is asked in the pane whether it goes
-        // (AskAsync; 中止 stops the request there). Once they said to keep it, that window's requests do not ask again.
-        // A request from another program has nobody to answer: the slide stays.
+        // only from a presentation that PowerPoint made from nothing and that is unchanged since (DeckReader.EmptyOnlySlide).
+        // In any other presentation whose one slide shows nothing - saved, changed in some way, made from a template -
+        // the slide may hold something of the user's that cannot be seen on it, and the user is asked in the pane
+        // whether it goes (AskAsync; 中止 stops the request there). Once they said to keep it, that window's requests do
+        // not ask again. A request from another program has nobody to answer: the slide stays.
         private async Task SettleEmptySlideAsync(RunRecord run, bool fromOutside, CancellationToken ct)
         {
             WindowPane pane = run.Pane;
-            if (DeckReader.EmptyOnlySlide(pane.Presentation, out bool untouched, out _) is null)
+            if (DeckReader.EmptyOnlySlide(pane.Presentation, out bool untouched, out int shapeCount) is not object slide)
             {
                 return;
             }
@@ -334,7 +346,7 @@ namespace Pptcom
                     return;
                 }
 
-                LogToFile("(the deck's one slide is empty, in a presentation that was saved or changed: the user is asked whether it goes)");
+                LogToFile("(the deck's one slide is empty, in a presentation that was saved, changed or made from a file: the user is asked whether it goes)");
                 bool delete = await AskAsync(pane, PaneText.Of("EMPTY_SLIDE_ASK"), PaneText.Of("EMPTY_SLIDE_DELETE"), PaneText.Of("EMPTY_SLIDE_KEEP"), ct).ConfigureAwait(true);
                 if (!delete)
                 {
@@ -343,24 +355,28 @@ namespace Pptcom
                     pane.Control.Log("EMPTY_SLIDE_KEPT");
                     return;
                 }
+
+                // The answer may have taken a while. The slide the user was asked about goes, and no other: not one
+                // that was put in its place meanwhile, nor that slide once something is on it.
+                if (!DeckReader.StillEmptyOnlySlide(pane.Presentation, slide))
+                {
+                    LogToFile("(the slide the user was asked about is no longer the deck's one empty slide: nothing is deleted)");
+                    pane.Control.Log("EMPTY_SLIDE_CHANGED");
+                    return;
+                }
             }
 
-            RemoveEmptySlide(run, asked: !untouched);
+            RemoveEmptySlide(run, slide, shapeCount, asked: !untouched);
         }
 
-        // Deletes the deck's one empty slide: the untouched one a new presentation starts with, or (`asked`) the one
-        // the user said to delete. It is looked at again here, as the answer may have taken a while.
-        private static void RemoveEmptySlide(RunRecord run, bool asked)
+        // Deletes the deck's one empty slide, as EmptyOnlySlide found it: the untouched one a new presentation starts
+        // with, or (`asked`) the one the user said to delete.
+        private static void RemoveEmptySlide(RunRecord run, object slide, int placeholders, bool asked)
         {
             try
             {
-                if (DeckReader.EmptyOnlySlide(run.Pane.Presentation, out bool untouched, out int shapeCount) is not object slide || !(asked || untouched))
-                {
-                    return;
-                }
-
                 ((dynamic)slide).Delete();
-                LogToFile(Invariant($"(removed the deck's one empty slide{(asked ? ", as the user said" : ", untouched since the presentation was made")}: {shapeCount} empty placeholder(s))"));
+                LogToFile(Invariant($"(removed the deck's one empty slide{(asked ? ", as the user said" : ", untouched since the presentation was made")}: {placeholders} empty placeholder(s))"));
                 run.Pane.Control.Log(asked ? "EMPTY_SLIDE_DELETED" : "STARTER_SLIDE_REMOVED");
             }
             catch (Exception ex) when (Guard.IsRecoverable(ex))

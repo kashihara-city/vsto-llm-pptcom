@@ -254,6 +254,8 @@ namespace ComScriptTests
             ReadInPartsTests();
             GivenNameTests();
             StarterSlideTests();
+            EmptySlideContentTests();
+            SlideAskedAboutTests();
             RejectedStatementTests();
         }
 
@@ -474,53 +476,122 @@ namespace ComScriptTests
         }
 
         // The deck's one slide when it shows nothing (DeckReader.EmptyOnlySlide), as the empty title slide a presentation
-        // made in PowerPoint's window starts with. It goes without a word only from a presentation that is new and
-        // unchanged since PowerPoint made it; in one that was saved, or changed in any way, the user is asked. A slide
-        // with text, notes, a background of its own or comments is not empty: it stays, and nobody is asked.
+        // made in PowerPoint's window starts with. It goes without a word only from a presentation that PowerPoint made
+        // from nothing and that is unchanged since; in one that was saved, changed in any way, or made from a template
+        // or a file, the user is asked. "removed": without a word; "asked"; "kept": it stays, and nobody is asked.
+        private static string EmptySlideOf(DeckLike deck)
+        {
+            return DeckReader.EmptyOnlySlide(deck, out bool untouched, out int placeholders) is null
+                ? "kept"
+                : Invariant($"{(untouched ? "removed" : "asked")} ({placeholders})");
+        }
+
+        private const string SavedTo = "the folder it was saved to";
+
         private static void StarterSlideTests()
         {
             static string Found(DeckLike deck)
             {
-                return DeckReader.EmptyOnlySlide(deck, out bool untouched, out int placeholders) is null
-                    ? "kept"
-                    : Invariant($"{(untouched ? "removed" : "asked")} ({placeholders})");
+                return EmptySlideOf(deck);
             }
 
-            const string Folder = "the folder it was saved to";
-            ShapeLike empty = new(type: 14, text: false), written = new(type: 14, text: true), picture = new(type: 13, text: false);
+            ShapeLike empty = new(type: 14, text: false);
             Report("empty slide: a new presentation's one slide with empty placeholders only goes without a word; with none at all too",
                    Found(new DeckLike("", new SlideLike([empty, empty]))) == "removed (2)" && Found(new DeckLike("", new SlideLike([]))) == "removed (0)",
                    Found(new DeckLike("", new SlideLike([empty, empty]))) + " / " + Found(new DeckLike("", new SlideLike([]))));
-            Report("empty slide: text in a placeholder, another kind of shape, a second slide: kept, and nobody is asked",
-                   Found(new DeckLike("", new SlideLike([written, empty]))) == "kept" && Found(new DeckLike("", new SlideLike([empty, picture]))) == "kept" &&
-                   Found(new DeckLike("", new SlideLike([empty]), new SlideLike([empty]))) == "kept" &&
-                   Found(new DeckLike("", new SlideLike([written, empty])) { Saved = 0 }) == "kept" && Found(new DeckLike(Folder, new SlideLike([empty, picture]))) == "kept",
-                   Found(new DeckLike("", new SlideLike([written, empty])) { Saved = 0 }) + " / " + Found(new DeckLike(Folder, new SlideLike([empty, picture]))));
             // whatever the user did - a placeholder moved, a shape on the notes page, another layout - PowerPoint counts
             // the presentation as changed, though the slide may show nothing of it
             Report("empty slide: in a presentation changed since it was made the user is asked, as the slide may hold what it does not show",
                    Found(new DeckLike("", new SlideLike([empty, empty])) { Saved = 0 }) == "asked (2)" && Found(new DeckLike("", new SlideLike([])) { Saved = 0 }) == "asked (0)",
                    Found(new DeckLike("", new SlideLike([empty, empty])) { Saved = 0 }) + " / " + Found(new DeckLike("", new SlideLike([])) { Saved = 0 }));
             Report("empty slide: in a presentation that was saved the user is asked, changed since or not",
-                   Found(new DeckLike(Folder, new SlideLike([empty, empty]))) == "asked (2)" && Found(new DeckLike(Folder, new SlideLike([empty, empty])) { Saved = 0 }) == "asked (2)",
-                   Found(new DeckLike(Folder, new SlideLike([empty, empty]))) + " / " + Found(new DeckLike(Folder, new SlideLike([empty, empty])) { Saved = 0 }));
+                   Found(new DeckLike(SavedTo, new SlideLike([empty, empty]))) == "asked (2)" && Found(new DeckLike(SavedTo, new SlideLike([empty, empty])) { Saved = 0 }) == "asked (2)",
+                   Found(new DeckLike(SavedTo, new SlideLike([empty, empty]))) + " / " + Found(new DeckLike(SavedTo, new SlideLike([empty, empty])) { Saved = 0 }));
+            // neither has a path, and both count as unchanged: what tells them from a presentation PowerPoint made from
+            // nothing is what they bring from the file - its template's name, or who saved it last and when
+            DeckLike fromTemplate = new("", new SlideLike([empty, empty])) { Properties = { Template = "the template", LastSaved = true } };
+            DeckLike untitledCopy = new("", new SlideLike([empty, empty])) { Properties = { LastAuthor = "the one who saved the file", Revision = "1", LastSaved = true } };
+            Report("empty slide: in a presentation made from a template, or opened as an untitled copy of a file, the user is asked",
+                   Found(fromTemplate) == "asked (2)" && Found(untitledCopy) == "asked (2)", Found(fromTemplate) + " / " + Found(untitledCopy));
+            DeckLike onlyTheTime = new("", new SlideLike([empty, empty])) { Properties = { LastSaved = true } };
+            DeckLike onlyTheTemplate = new("", new SlideLike([empty, empty])) { Properties = { Template = "the template" } };
+            Report("empty slide: one sign of a file it came from is enough to ask (the time of a last save alone, a template's name alone)",
+                   Found(onlyTheTime) == "asked (2)" && Found(onlyTheTemplate) == "asked (2)", Found(onlyTheTime) + " / " + Found(onlyTheTemplate));
+            // 0x80010001: PowerPoint is busy. Only "no value" says that there never was a save.
+            DeckLike busy = new("", new SlideLike([empty, empty])) { Properties = { LastSaveFailsWith = unchecked((int)0x80010001) } };
+            DeckLike silent = new("", new SlideLike([empty, empty])) { Properties = { Unreadable = true } };
+            Report("empty slide: when the time of the last save cannot be read for another reason, or nothing of it can be read, the user is asked",
+                   Found(busy) == "asked (2)" && Found(silent) == "asked (2)", Found(busy) + " / " + Found(silent));
+        }
+
+        // What makes the deck's one slide not empty: it stays, and nobody is asked - in a new presentation, a changed
+        // one and a saved one alike.
+        private static void EmptySlideContentTests()
+        {
+            static string Found(DeckLike deck)
+            {
+                return EmptySlideOf(deck);
+            }
+
+            ShapeLike empty = new(type: 14, text: false), written = new(type: 14, text: true), picture = new(type: 13, text: false);
+            Report("empty slide: text in a placeholder, another kind of shape, a second slide: kept, and nobody is asked",
+                   Found(new DeckLike("", new SlideLike([written, empty]))) == "kept" && Found(new DeckLike("", new SlideLike([empty, picture]))) == "kept" &&
+                   Found(new DeckLike("", new SlideLike([empty]), new SlideLike([empty]))) == "kept" &&
+                   Found(new DeckLike("", new SlideLike([written, empty])) { Saved = 0 }) == "kept" && Found(new DeckLike(SavedTo, new SlideLike([empty, picture]))) == "kept",
+                   Found(new DeckLike("", new SlideLike([written, empty])) { Saved = 0 }) + " / " + Found(new DeckLike(SavedTo, new SlideLike([empty, picture]))));
+            // a placeholder with a table or a picture in it is still a placeholder, and has no text (nor a text frame)
+            ShapeLike table = new(type: 14, text: false) { Contained = 19, NoTextFrame = true }, photo = new(type: 14, text: false) { Contained = 13, NoTextFrame = true };
+            Report("empty slide: a placeholder that holds a table or a picture is not empty: kept, and nobody is asked",
+                   Found(new DeckLike(SavedTo, new SlideLike([empty, table]))) == "kept" && Found(new DeckLike(SavedTo, new SlideLike([empty, photo]))) == "kept" &&
+                   Found(new DeckLike("", new SlideLike([empty, table]))) == "kept" && Found(new DeckLike("", new SlideLike([photo])) { Saved = 0 }) == "kept",
+                   Found(new DeckLike(SavedTo, new SlideLike([empty, table]))) + " / " + Found(new DeckLike(SavedTo, new SlideLike([empty, photo]))) + " / " +
+                   Found(new DeckLike("", new SlideLike([empty, table]))));
+            ShapeLike forPicture = new(type: 14, text: false) { NoTextFrame = true };
+            Report("empty slide: an empty placeholder for a picture has no text frame, and is empty all the same",
+                   Found(new DeckLike("", new SlideLike([empty, forPicture]))) == "removed (2)" && Found(new DeckLike(SavedTo, new SlideLike([empty, forPicture]))) == "asked (2)",
+                   Found(new DeckLike("", new SlideLike([empty, forPicture]))) + " / " + Found(new DeckLike(SavedTo, new SlideLike([empty, forPicture]))));
             Report("empty slide: notes, a background of the slide's own, a comment: kept, and nobody is asked",
                    Found(new DeckLike("", new SlideLike([empty, empty]) { Notes = "what to say" })) == "kept" &&
                    Found(new DeckLike("", new SlideLike([empty, empty]) { FollowMasterBackground = 0 })) == "kept" &&
                    Found(new DeckLike("", new SlideLike([empty, empty]) { CommentCount = 1 })) == "kept" &&
-                   Found(new DeckLike(Folder, new SlideLike([empty, empty]) { Notes = "what to say" }) { Saved = 0 }) == "kept" &&
-                   Found(new DeckLike(Folder, new SlideLike([empty, empty]) { FollowMasterBackground = 0 })) == "kept",
+                   Found(new DeckLike(SavedTo, new SlideLike([empty, empty]) { Notes = "what to say" }) { Saved = 0 }) == "kept" &&
+                   Found(new DeckLike(SavedTo, new SlideLike([empty, empty]) { FollowMasterBackground = 0 })) == "kept",
                    Found(new DeckLike("", new SlideLike([empty, empty]) { Notes = "what to say" })) + " / " +
-                   Found(new DeckLike(Folder, new SlideLike([empty, empty]) { FollowMasterBackground = 0 })));
+                   Found(new DeckLike(SavedTo, new SlideLike([empty, empty]) { FollowMasterBackground = 0 })));
+            DeckLike fromTemplate = new("", new SlideLike([empty, empty]) { NotesBox = true }) { Properties = { Template = "the template", LastSaved = true } };
+            Report("empty slide: a text box put on the notes page is the slide's too: kept, and nobody is asked, wherever the presentation came from",
+                   Found(new DeckLike("", new SlideLike([empty, empty]) { NotesBox = true })) == "kept" && Found(fromTemplate) == "kept" &&
+                   Found(new DeckLike(SavedTo, new SlideLike([empty, empty]) { NotesBox = true })) == "kept",
+                   Found(new DeckLike("", new SlideLike([empty, empty]) { NotesBox = true })) + " / " + Found(fromTemplate));
             Report("empty slide: the notes page's other placeholders (the page number) are no notes; what cannot be read keeps the slide, and nobody is asked",
                    Found(new DeckLike("", new SlideLike([empty, empty]) { PageNumber = true })) == "removed (2)" &&
                    Found(new DeckLike("", new SlideLike([empty, empty]) { NotesUnreadable = true })) == "kept" &&
-                   Found(new DeckLike(Folder, new SlideLike([empty, empty]) { NotesUnreadable = true })) == "kept",
-                   Found(new DeckLike(Folder, new SlideLike([empty, empty]) { NotesUnreadable = true })));
+                   Found(new DeckLike(SavedTo, new SlideLike([empty, empty]) { NotesUnreadable = true })) == "kept",
+                   Found(new DeckLike(SavedTo, new SlideLike([empty, empty]) { NotesUnreadable = true })));
+        }
+
+        // The user was asked about one slide, and that slide is the one to go when they say so
+        // (DeckReader.StillEmptyOnlySlide): not a slide another program put in its place while they answered, nor the
+        // same slide once something is on it.
+        private static void SlideAskedAboutTests()
+        {
+            ShapeLike empty = new(type: 14, text: false), written = new(type: 14, text: true);
+            SlideLike asked = new([empty, empty]);
+            Report("empty slide: the slide the user was asked about is still the one, when nothing happened meanwhile",
+                   DeckReader.StillEmptyOnlySlide(new DeckLike(SavedTo, asked), asked), "");
+            Report("empty slide: another slide put in its place is not the one, though it shows nothing either",
+                   !DeckReader.StillEmptyOnlySlide(new DeckLike(SavedTo, new SlideLike([empty, empty]) { Number = 257 }), asked), "");
+            // PowerPoint gives a new slide the number of one that was deleted
+            SlideLike gone = new([empty, empty]) { Gone = true };
+            Report("empty slide: nor is a new slide that got the number of the deleted one",
+                   !DeckReader.StillEmptyOnlySlide(new DeckLike(SavedTo, new SlideLike([empty, empty])), gone), "");
+            Report("empty slide: the same slide with something on it meanwhile, or with a second slide beside it, does not go",
+                   !DeckReader.StillEmptyOnlySlide(new DeckLike(SavedTo, new SlideLike([written, empty])), asked) &&
+                   !DeckReader.StillEmptyOnlySlide(new DeckLike(SavedTo, asked, new SlideLike([empty])), asked), "");
         }
 
         // A presentation as EmptyOnlySlide reads it: its path ("" when it was never saved), whether it is
-        // unchanged (-1, as PowerPoint says it; 0: changed) and its slides.
+        // unchanged (-1, as PowerPoint says it; 0: changed), its slides, and its built-in properties.
         internal sealed class DeckLike(string path, params SlideLike[] slides)
         {
             public string Path { get; } = path;
@@ -528,6 +599,54 @@ namespace ComScriptTests
             public int Saved { get; set; } = -1;
 
             public ItemsLike Slides { get; } = new([.. slides]);
+
+            // one with a path was saved, and says so in its properties too
+            public PropertiesLike Properties { get; } = new() { LastSaved = path.Length > 0, LastAuthor = path.Length > 0 ? "the one who saved it" : "" };
+
+            public PropertiesLike BuiltInDocumentProperties => Properties.Unreadable ? throw new InvalidOperationException("the properties cannot be read") : Properties;
+        }
+
+        // The built-in document properties, by their place in PowerPoint's list: 6 the template's name, 7 who saved it
+        // last, 8 the revision, 11 when it was made, 12 when it was last saved - which cannot be read while it never was
+        // (E_FAIL), as PowerPoint's own.
+        internal sealed class PropertiesLike
+        {
+            public string Template { get; set; } = "";
+
+            public string LastAuthor { get; set; } = "";
+
+            public string Revision { get; set; } = "";
+
+            public bool LastSaved { get; set; }
+
+            // what reading the time of the last save fails with while there is none
+            public int LastSaveFailsWith { get; set; } = unchecked((int)0x80004005);
+
+            public bool Unreadable { get; set; }
+
+            public PropertyLike Item(int index)
+            {
+                return new PropertyLike(this, index);
+            }
+        }
+
+        internal sealed class PropertyLike(PropertiesLike of, int index)
+        {
+            public object? Value => index switch
+            {
+                6 => of.Template.Length > 0 ? of.Template : null,
+                7 => of.LastAuthor,
+                8 => of.Revision,
+                11 => new DateTime(2026, 1, 1),
+                12 => of.LastSaved ? new DateTime(2026, 1, 2) : NotSet(of.LastSaveFailsWith),
+                _ => null,
+            };
+
+            private static object? NotSet(int code)
+            {
+                System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(code, new IntPtr(-1));
+                return null;
+            }
         }
 
         internal sealed class SlideLike(ShapeLike[] shapes)
@@ -541,7 +660,18 @@ namespace ComScriptTests
             // the notes page has a page number with text in it
             public bool PageNumber { get; set; }
 
+            // the notes page has a text box on it, beside its placeholders
+            public bool NotesBox { get; set; }
+
             public bool NotesUnreadable { get; set; }
+
+            // the slide was deleted: its number can no longer be read
+            public bool Gone { get; set; }
+
+            // its number, as PowerPoint gives one to each slide
+            public int Number { get; set; } = 256;
+
+            public int SlideID => Gone ? throw new InvalidOperationException("the slide does not exist") : Number;
 
             public ItemsLike Shapes { get; } = new([.. shapes]);
 
@@ -550,23 +680,36 @@ namespace ComScriptTests
             public SlideLike NotesPage => NotesUnreadable
                 ? throw new InvalidOperationException("the notes page cannot be read")
                 : new SlideLike([new ShapeLike(type: 14, text: false) { Placeholder = 1 }, new ShapeLike(type: 14, text: Notes.Length > 0) { Placeholder = 2 },
-                                 new ShapeLike(type: 14, text: PageNumber) { Placeholder = 13 }]);
+                                 new ShapeLike(type: 14, text: PageNumber) { Placeholder = 13 }, .. NotesBox ? [new ShapeLike(type: 17, text: true)] : Array.Empty<ShapeLike>()]);
         }
 
-        // A shape: its type (14: a placeholder), whether it has text, and what kind of placeholder it is (2: body).
+        // A shape: its type (14: a placeholder), whether it has text, what kind of placeholder it is (2: body), and
+        // what the placeholder holds as PowerPoint says it (1: nothing but itself; 19: a table; 13: a picture).
         internal sealed class ShapeLike(int type, bool text)
         {
             public int Type { get; } = type;
 
-            public int HasTextFrame { get; } = -1;
+            // a placeholder with a table or a picture in it has no text frame, nor has an empty one for a picture
+            public bool NoTextFrame { get; set; }
 
-            public ShapeLike TextFrame => this;
+            public int HasTextFrame => NoTextFrame ? 0 : -1;
+
+            public ShapeLike TextFrame => NoTextFrame ? throw new InvalidOperationException("the shape has no text frame") : this;
 
             public int HasText { get; } = text ? -1 : 0;
 
             public int Placeholder { get; set; } = 1;
 
-            public ShapeLike PlaceholderFormat => new(Placeholder, text: false);
+            public int Contained { get; set; } = 1;
+
+            public PlaceholderLike PlaceholderFormat => new(Placeholder, Contained);
+        }
+
+        internal sealed class PlaceholderLike(int type, int containedType)
+        {
+            public int Type { get; } = type;
+
+            public int ContainedType { get; } = containedType;
         }
 
         // A collection as PowerPoint's: Count and Item(n) from 1.

@@ -375,6 +375,18 @@ function continueButton() {
         again ? `disabled=${again.children[0].disabled}` : "(no 続ける)");
   p.host({ type: "busy", value: false });
   check("and can be pressed once that has ended", again.children[0].disabled === false, `disabled=${again.children[0].disabled}`);
+  // pressed, and the request ended before it took the stopped one up (an error on its way): the add-in says that it
+  // can still be carried on
+  again.children[0].listeners.click();
+  p.log("CONTINUE_REQUEST");
+  p.host({ type: "busy", value: true });
+  p.log("AI_ERROR", "x");
+  p.host({ type: "busy", value: false });
+  const taken = !log.children.some(e => e.className === "continue-row");
+  p.host({ type: "continue", value: true });
+  const back = log.children[log.children.length - 1];
+  check("pressed and not carried on after all: it shows again, last, and can be pressed",
+        taken && back.className === "continue-row" && back.children[0].disabled === false, "taken=" + taken + " / " + classes());
   p.host({ type: "continue", value: false });
   check("another request (or 新しい会話) takes it away", !log.children.some(e => e.className === "continue-row"),
         log.children.map(e => e.className).join(" | "));

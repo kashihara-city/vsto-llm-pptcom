@@ -120,6 +120,7 @@
   "EMPTY_SLIDE_KEEP": "保留",
   "EMPTY_SLIDE_DELETED": "已刪除空白投影片",
   "EMPTY_SLIDE_KEPT": "已保留空白投影片",
+  "EMPTY_SLIDE_CHANGED": "投影片已有變更，因此未刪除",
   "CONVERSATION_COMPACTED": "輸入（{0}）超過內容長度上限（{1}），已摘要進度並省略較舊的推理、指令碼、資料內文與圖形清單",
   "RUN_SAVED": "記錄：{0}",
   "RUN_SAVE_FAILED": "無法儲存記錄：{0}",

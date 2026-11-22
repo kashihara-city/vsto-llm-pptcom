@@ -120,6 +120,7 @@
   "EMPTY_SLIDE_KEEP": "Keep",
   "EMPTY_SLIDE_DELETED": "Deleted the empty slide",
   "EMPTY_SLIDE_KEPT": "Kept the empty slide",
+  "EMPTY_SLIDE_CHANGED": "The slide was changed meanwhile, so it was not deleted",
   "CONVERSATION_COMPACTED": "The input ({0}) passed the context limit ({1}): summarized the progress and left out older reasoning, scripts, document texts and shape lists",
   "RUN_SAVED": "Record: {0}",
   "RUN_SAVE_FAILED": "Could not save the record: {0}",

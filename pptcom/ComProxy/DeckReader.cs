@@ -238,16 +238,18 @@ namespace Pptcom.ComProxy
             return ((int)Math.Round((double)v, MidpointRounding.AwayFromZero)).ToString(CultureInfo.InvariantCulture);
         }
 
-        // The one slide of a presentation when it shows nothing: only empty placeholders (or no shape at all), no notes,
-        // no background of its own, no comments. Such is the empty title slide a presentation made in PowerPoint's own
-        // window starts with (one made through COM starts with none), which a request takes away before the model
-        // works. Null for any other deck, and when something cannot be read.
-        // `untouched`: nobody can have done anything to it - the presentation was never saved and is unchanged since
-        // PowerPoint made it (Presentation.Saved, which PowerPoint keeps true until the first change of any kind).
-        // Only then may the slide go without a word. Looking at the slide alone does not tell: such a slide was
-        // removed from a saved presentation, and from an unsaved one whose user had written on the notes page, moved
-        // an empty placeholder or chosen another layout. When it is not untouched, the user is the one to say whether
-        // it goes. `placeholders`: how many empty placeholders the slide has.
+        // The one slide of a presentation when it shows nothing: only empty placeholders (or no shape at all), nothing on
+        // its notes page, no background of its own, no comments. Such is the empty title slide a presentation made in
+        // PowerPoint's own window starts with (one made through COM starts with none), which a request takes away
+        // before the model works. Null for any other deck, and when something cannot be read.
+        // `untouched`: nobody can have done anything to it. PowerPoint made the presentation from nothing - it has no
+        // path, and nobody ever saved it in any form (NeverSaved: one made from a template, or opened as an untitled
+        // copy of a file, has no path either, and holds what that file held) - and it is unchanged since
+        // (Presentation.Saved, which PowerPoint keeps true until the first change of any kind). Only then may the slide
+        // go without a word. Looking at the slide alone does not tell: such a slide was removed from a saved
+        // presentation, from an unsaved one whose user had written on the notes page, moved an empty placeholder or
+        // chosen another layout, and from one that a template had filled. When it is not untouched, the user is the one
+        // to say whether it goes. `placeholders`: how many empty placeholders the slide has.
         public static object? EmptyOnlySlide(object presentation, out bool untouched, out int placeholders)
         {
             int count = 0;
@@ -260,7 +262,6 @@ namespace Pptcom.ComProxy
                     return null;
                 }
 
-                asMade = ((string?)pres.Path ?? "").Length == 0 && (int)pres.Saved != 0;
                 dynamic slide = pres.Slides.Item(1);
                 if ((int)slide.FollowMasterBackground == 0 || (int)slide.Comments.Count > 0 || HasNotes(slide))
                 {
@@ -271,13 +272,15 @@ namespace Pptcom.ComProxy
                 count = (int)shapes.Count;
                 for (int i = 1; i <= count; i++)
                 {
-                    dynamic shape = shapes.Item(i);
-                    if ((int)shape.Type != MsoPlaceholder || ((int)shape.HasTextFrame != 0 && (int)shape.TextFrame.HasText != 0))
+                    if (!(bool)IsEmptyPlaceholder(shapes.Item(i)))
                     {
                         return null;
                     }
                 }
 
+                // what cannot be read here does not say "never saved": the user is then asked
+                object deck = pres;
+                asMade = ((string?)pres.Path ?? "").Length == 0 && (int)pres.Saved != 0 && Guard.Try(() => NeverSaved(deck), fallback: false);
                 return slide;
             }, fallback: null);
             placeholders = found is null ? 0 : count;
@@ -285,10 +288,31 @@ namespace Pptcom.ComProxy
             return found;
         }
 
-        private const int MsoPlaceholder = 14, PpPlaceholderBody = 2;
+        // Whether `slide`, which EmptyOnlySlide found a while ago, is still the deck's one slide and still shows nothing.
+        // The user was asked about that slide, and the deck can have changed while they answered: the slides are held
+        // against the user's hand, not against another program. A slide put in its place is another slide, whatever it
+        // shows (it has another SlideID, or the one asked about can no longer be read).
+        public static bool StillEmptyOnlySlide(object presentation, object slide)
+        {
+            return EmptyOnlySlide(presentation, out _, out _) is object now &&
+                   Guard.Try(() => (int)((dynamic)now).SlideID == (int)((dynamic)slide).SlideID, fallback: false);
+        }
 
-        // Whether the slide's notes have text: the notes page's body placeholder (its other placeholders are the
-        // slide's picture, the page number and the like).
+        private const int MsoPlaceholder = 14, MsoAutoShape = 1, PpPlaceholderBody = 2;
+
+        // Whether the shape is a placeholder that holds nothing. PowerPoint says what a placeholder contains
+        // (PlaceholderFormat.ContainedType): an AutoShape while it is empty; a table, a picture, a chart and the like
+        // once one was put in it - and then it has no text frame, so that "no text" alone would take it for empty. An
+        // empty placeholder for a picture has no text frame either.
+        private static bool IsEmptyPlaceholder(dynamic shape)
+        {
+            return (int)shape.Type == MsoPlaceholder && (int)shape.PlaceholderFormat.ContainedType == MsoAutoShape &&
+                   ((int)shape.HasTextFrame == 0 || (int)shape.TextFrame.HasText == 0);
+        }
+
+        // Whether the slide's notes page holds something: text in its body placeholder, or a shape that is not one of
+        // the page's placeholders (a text box put there). Its other placeholders are the slide's picture, the page
+        // number and the like.
         private static bool HasNotes(dynamic slide)
         {
             dynamic shapes = slide.NotesPage.Shapes;
@@ -296,14 +320,50 @@ namespace Pptcom.ComProxy
             for (int i = 1; i <= count; i++)
             {
                 dynamic shape = shapes.Item(i);
-                if ((int)shape.Type == MsoPlaceholder && (int)shape.PlaceholderFormat.Type == PpPlaceholderBody &&
-                    (int)shape.HasTextFrame != 0 && (int)shape.TextFrame.HasText != 0)
+                if ((int)shape.Type != MsoPlaceholder ||
+                    ((int)shape.PlaceholderFormat.Type == PpPlaceholderBody && (int)shape.HasTextFrame != 0 && (int)shape.TextFrame.HasText != 0))
                 {
                     return true;
                 }
             }
 
             return false;
+        }
+
+        // The built-in document properties by their place in the list (the same in every language of Office).
+        private const int PropertyTemplate = 6, PropertyLastAuthor = 7, PropertyRevisionNumber = 8, PropertyCreationDate = 11, PropertyLastSaveTime = 12;
+
+        // What reading a date that was never set fails with (E_FAIL).
+        private const int NoValue = unchecked((int)0x80004005);
+
+        // Whether nobody ever saved the presentation, in any form. One that PowerPoint made from nothing has no time of
+        // a last save, and names no template, no last author and no revision; one made from a template, or opened as
+        // an untitled copy of a file, brings those of the file. A time that was never set cannot be read, unlike one
+        // that was. The time the presentation was made is always there, and is read first: a PowerPoint that answers
+        // nothing at all must not be taken for one that says "never".
+        private static bool NeverSaved(object presentation)
+        {
+            object properties = ((dynamic)presentation).BuiltInDocumentProperties;
+            if (TextOf(properties, PropertyCreationDate).Length == 0 || TextOf(properties, PropertyTemplate).Length > 0 ||
+                TextOf(properties, PropertyLastAuthor).Length > 0 || TextOf(properties, PropertyRevisionNumber).Length > 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                return TextOf(properties, PropertyLastSaveTime).Length == 0;
+            }
+            catch (System.Runtime.InteropServices.COMException ex) when (ex.HResult == NoValue)
+            {
+                return true;
+            }
+        }
+
+        private static string TextOf(object properties, int index)
+        {
+            object? value = ((dynamic)properties).Item(index).Value;
+            return Convert.ToString(value, CultureInfo.InvariantCulture) ?? "";
         }
 
         // The shape list that goes with a slide rendering - what a VBA `For Each shp In

@@ -120,6 +120,7 @@
   "EMPTY_SLIDE_KEEP": "残す",
   "EMPTY_SLIDE_DELETED": "空のスライドを削除しました",
   "EMPTY_SLIDE_KEPT": "空のスライドを残しました",
+  "EMPTY_SLIDE_CHANGED": "スライドが変更されたため、削除しませんでした",
   "CONVERSATION_COMPACTED": "入力（{0}）がコンテキスト上限（{1}）を超えたので、経過を要約し、古い推論・スクリプト・資料の本文・図形の一覧を省きました",
   "RUN_SAVED": "記録: {0}",
   "RUN_SAVE_FAILED": "記録の保存に失敗しました: {0}",
