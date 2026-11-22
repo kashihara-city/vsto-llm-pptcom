@@ -474,8 +474,9 @@ namespace ComScriptTests
         }
 
         // The empty title slide a presentation made in PowerPoint's window starts with is taken away at a request's
-        // start - only from a presentation that is new and has nothing of the user's (DeckReader.UntouchedStarterSlide).
-        // A presentation that was saved, notes, a background of the slide's own and comments are the user's.
+        // start - only from a presentation that is new and unchanged since PowerPoint made it
+        // (DeckReader.UntouchedStarterSlide). A presentation that was saved is the user's, and so is one changed in any
+        // way; notes, a background of the slide's own and comments are looked at as well.
         private static void StarterSlideTests()
         {
             static string Found(DeckLike deck)
@@ -490,6 +491,11 @@ namespace ComScriptTests
             Report("starter slide: text in a placeholder, another kind of shape, a second slide: kept",
                    Found(new DeckLike("", new SlideLike([written, empty]))) == "kept" && Found(new DeckLike("", new SlideLike([empty, picture]))) == "kept" &&
                    Found(new DeckLike("", new SlideLike([empty]), new SlideLike([empty]))) == "kept", "");
+            // whatever the user did - a placeholder moved, a shape on the notes page, another layout - PowerPoint counts
+            // the presentation as changed, though the slide may show nothing of it
+            Report("starter slide: a presentation changed since it was made keeps its slide, also when the slide shows nothing of the change",
+                   Found(new DeckLike("", new SlideLike([empty, empty])) { Saved = 0 }) == "kept" && Found(new DeckLike("", new SlideLike([])) { Saved = 0 }) == "kept",
+                   Found(new DeckLike("", new SlideLike([empty, empty])) { Saved = 0 }) + " / " + Found(new DeckLike("", new SlideLike([])) { Saved = 0 }));
             Report("starter slide: a presentation that was saved keeps its slide, whatever is on it",
                    Found(new DeckLike("the folder it was saved to", new SlideLike([empty, empty]))) == "kept",
                    Found(new DeckLike("the folder it was saved to", new SlideLike([empty, empty]))));
@@ -504,10 +510,13 @@ namespace ComScriptTests
                    Found(new DeckLike("", new SlideLike([empty, empty]) { NotesUnreadable = true })) == "kept", "");
         }
 
-        // A presentation as UntouchedStarterSlide reads it: its path ("" when it was never saved) and its slides.
+        // A presentation as UntouchedStarterSlide reads it: its path ("" when it was never saved), whether it is
+        // unchanged (-1, as PowerPoint says it; 0: changed) and its slides.
         internal sealed class DeckLike(string path, params SlideLike[] slides)
         {
             public string Path { get; } = path;
+
+            public int Saved { get; set; } = -1;
 
             public ItemsLike Slides { get; } = new([.. slides]);
         }

@@ -1,7 +1,7 @@
 // How the task pane takes the images of an attached PDF (pptcom/UI/web/pdfdoc.js): at most 60 are kept, and none is
 // made into a PNG once the document has that many - a page's images were all made first, and those over the number
 // thrown away; an image that comes twice counts once; one whose long side is over 4000 pixels is taken smaller, its
-// pixels averaged, without anything of its own size being made on the way.
+// pixels averaged - each by how much of it shows - without anything of its own size being made on the way.
 // pdfdoc.js runs as it is but for its first lines: it is a module that imports PDF.js, so its import is replaced by
 // a stand-in for PDF.js (a document of pages with images painted on them), and the browser's canvas by one that
 // counts. No packages.
@@ -125,6 +125,17 @@ const bitmaps = (pageNumber, count, width = 200, height = 200) =>
         Array.from(rgbaSame).join() + " / " + Array.from(bits).join());
   check("one bit a pixel, halved: white and black average to gray", Array.from(bitsHalf).join() === "255,255,255,255,128,128,128,255", Array.from(bitsHalf).join());
   check("a kind of raw pixels that is none of the three gives nothing", pixels({ width: 1, height: 1, kind: 9, data: new Uint8Array(4) }, 1, 1) === null, "");
+
+  // RGBA made smaller: a transparent pixel's color is not mixed into its neighbour's - red beside nothing stays red,
+  // half as much of it shows; two colors that both show are averaged as before; nothing but transparent stays so
+  const edge = pixels({ width: 2, height: 1, kind: 3, data: new Uint8Array([255, 0, 0, 255, 0, 0, 0, 0]) }, 1, 1);
+  const both = pixels({ width: 2, height: 1, kind: 3, data: new Uint8Array([10, 20, 30, 255, 30, 40, 50, 255]) }, 1, 1);
+  const faint = pixels({ width: 2, height: 1, kind: 3, data: new Uint8Array([200, 0, 0, 51, 0, 100, 0, 153]) }, 1, 1);
+  const none = pixels({ width: 2, height: 1, kind: 3, data: new Uint8Array([9, 9, 9, 0, 7, 7, 7, 0]) }, 1, 1);
+  check("RGBA made smaller: a pixel's color counts by how much of it shows, so a transparent neighbour does not darken an edge",
+        Array.from(edge).join() === "255,0,0,128" && Array.from(both).join() === "20,30,40,255" && Array.from(faint).join() === "50,75,0,102" &&
+        Array.from(none).join() === "0,0,0,0",
+        [edge, both, faint, none].map(p => Array.from(p).join()).join(" / "));
 
   console.log();
   console.log(failed === 0 ? `ALL PASSED (${passed})` : `${failed} FAILED, ${passed} passed`);

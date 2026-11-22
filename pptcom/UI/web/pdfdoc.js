@@ -156,8 +156,9 @@ async function toPng(img) {
 }
 
 // An image's raw pixels as RGBA, w x h: its own size, or smaller - each pixel is then the average of the pixels of
-// the image it stands for, so that nothing as large as the image is made on the way. Null for a kind of raw data
-// that is none of PDF.js's three.
+// the image it stands for, so that nothing as large as the image is made on the way. A pixel's color counts by how
+// much of it shows (its alpha): a transparent pixel has a color too, black as a rule, and averaged in as it is, it
+// darkened the edge of what is next to it. Null for a kind of raw data that is none of PDF.js's three.
 function pixels(img, w, h) {
   const src = img.data, sw = img.width, sh = img.height, kind = img.kind;
   if (kind !== 1 && kind !== 2 && kind !== 3) return null;
@@ -167,14 +168,15 @@ function pixels(img, w, h) {
     const y0 = Math.floor(y * sh / h), y1 = Math.max(y0 + 1, Math.floor((y + 1) * sh / h));
     for (let x = 0; x < w; x++) {
       const x0 = Math.floor(x * sw / w), x1 = Math.max(x0 + 1, Math.floor((x + 1) * sw / w));
-      let r = 0, g = 0, b = 0, a = 0;
+      let r = 0, g = 0, b = 0, a = 0;   // the colors' sums, each weighed by its pixel's alpha, and the alphas' sum
       for (let sy = y0; sy < y1; sy++) for (let sx = x0; sx < x1; sx++) {
-        if (kind === 3) { const k = (sy * sw + sx) * 4; r += src[k]; g += src[k + 1]; b += src[k + 2]; a += src[k + 3]; }
-        else if (kind === 2) { const k = (sy * sw + sx) * 3; r += src[k]; g += src[k + 1]; b += src[k + 2]; a += 255; }
-        else { const v = (src[sy * rowBytes + (sx >> 3)] >> (7 - (sx & 7))) & 1 ? 255 : 0; r += v; g += v; b += v; a += 255; }
+        if (kind === 3) { const k = (sy * sw + sx) * 4, shows = src[k + 3]; r += src[k] * shows; g += src[k + 1] * shows; b += src[k + 2] * shows; a += shows; }
+        else if (kind === 2) { const k = (sy * sw + sx) * 3; r += src[k] * 255; g += src[k + 1] * 255; b += src[k + 2] * 255; a += 255; }
+        else { const v = (src[sy * rowBytes + (sx >> 3)] >> (7 - (sx & 7))) & 1 ? 255 : 0; r += v * 255; g += v * 255; b += v * 255; a += 255; }
       }
       const n = (y1 - y0) * (x1 - x0), k = (y * w + x) * 4;
-      out[k] = r / n; out[k + 1] = g / n; out[k + 2] = b / n; out[k + 3] = a / n;
+      if (a > 0) { out[k] = r / a; out[k + 1] = g / a; out[k + 2] = b / a; }
+      out[k + 3] = a / n;
     }
   }
   return out;

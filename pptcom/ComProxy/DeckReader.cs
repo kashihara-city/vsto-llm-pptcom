@@ -240,10 +240,13 @@ namespace Pptcom.ComProxy
 
         // The one slide of a presentation that was made in PowerPoint's own window and not touched since: the empty
         // title slide such a presentation starts with (one made through COM starts with none), which a request takes
-        // away before the model works. Null for any other deck - and whenever the slide or the file may hold something
-        // of the user's that its shapes do not show: a presentation that was ever saved is the user's document, and
-        // none of its slides is removed; notes, a background of the slide's own and comments are work too (a saved
-        // presentation's only slide, its title still empty, was removed with its notes and its background). What
+        // away before the model works. Null for any other deck - and whenever the user may have done anything to it:
+        // a presentation that was ever saved is the user's document, and none of its slides is removed; and one that
+        // was not must be unchanged since PowerPoint made it (Presentation.Saved, which PowerPoint keeps true until
+        // the first change of any kind). Looking at the slide alone did not tell: its only slide was removed from a
+        // saved presentation with its notes and its background, and from an unsaved one whose user had written on the
+        // notes page, moved an empty placeholder or chosen another layout. What the slide shows is looked at all the
+        // same (text, notes, a background of its own, comments), as a program can say that nothing changed. What
         // cannot be read counts as the user's. `placeholders`: how many empty placeholders the slide has.
         public static object? UntouchedStarterSlide(object presentation, out int placeholders)
         {
@@ -251,7 +254,7 @@ namespace Pptcom.ComProxy
             object? found = Guard.Try<object?>(() =>
             {
                 dynamic pres = presentation;
-                if ((int)pres.Slides.Count != 1 || ((string?)pres.Path ?? "").Length > 0)
+                if ((int)pres.Slides.Count != 1 || ((string?)pres.Path ?? "").Length > 0 || (int)pres.Saved == 0)
                 {
                     return null;
                 }
